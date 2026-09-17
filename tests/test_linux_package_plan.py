@@ -30,23 +30,19 @@ def run_package(*args: str, env: dict[str, str] | None = None) -> subprocess.Com
     )
 
 
-def test_artifact_plan_has_canonical_versioned_and_stable_names() -> None:
+def test_artifact_plan_has_only_versioned_names() -> None:
     result = run_package("--print-plan", "1.57.0")
 
     assert result.returncode == 0, result.stderr
     plan = dict(line.split("=", 1) for line in result.stdout.splitlines())
     assert plan == {
         "deb_versioned": "datapyn_1.57.0_amd64.deb",
-        "deb_stable": "datapyn_amd64.deb",
         "rpm_versioned": "datapyn-1.57.0-1.x86_64.rpm",
-        "rpm_stable": "datapyn-x86_64.rpm",
         "pacman_versioned": "datapyn-1.57.0-1-x86_64.pkg.tar.zst",
-        "pacman_stable": "datapyn-x86_64.pkg.tar.zst",
         "appimage_versioned": "DataPyn-1.57.0-x86_64.AppImage",
-        "appimage_stable": "DataPyn-x86_64.AppImage",
         "tar_versioned": "DataPyn-1.57.0-linux-x86_64.tar.gz",
-        "tar_stable": "DataPyn-linux-x86_64.tar.gz",
     }
+    assert not any(key.endswith("_stable") for key in plan)
 
 
 def test_shared_stage_contains_payload_and_desktop_integration(tmp_path: Path) -> None:
@@ -136,6 +132,76 @@ def test_bundled_host_runtime_library_blocks_packaging(tmp_path: Path, library: 
     )
     for filename in (*VERSIONED_ARTIFACTS, *RELEASE_METADATA):
         assert not (output_dir / filename).exists(), filename
+
+
+UNVERSIONED_ALIASES = (
+    "datapyn_amd64.deb",
+    "datapyn-x86_64.rpm",
+    "datapyn-x86_64.pkg.tar.zst",
+    "DataPyn-x86_64.AppImage",
+    "DataPyn-linux-x86_64.tar.gz",
+)
+C7_RELEASE_ASSETS = (
+    *VERSIONED_ARTIFACTS,
+    *RELEASE_METADATA,
+)
+
+
+def test_full_package_run_writes_versioned_names_only(tmp_path: Path) -> None:
+    dist_dir = tmp_path / "dist" / "DataPyn"
+    dist_dir.mkdir(parents=True)
+    executable = dist_dir / "DataPyn"
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o755)
+    output_dir = tmp_path / "output"
+    stage_dir = tmp_path / "pkg"
+    appdir = tmp_path / "AppDir"
+    wrapper = tmp_path / "stubbed_package.sh"
+    wrapper.write_text(
+        "#!/usr/bin/env bash\n"
+        f"source {shlex.quote(str(PACKAGE_SCRIPT))}\n"
+        "check_toolchain() { return 0; }\n"
+        "check_appimage_toolchain() { return 0; }\n"
+        "build_appimage() {\n"
+        '  mkdir -p "$OUTPUT_DIR"\n'
+        '  printf "appimage-fixture\\n" > "$OUTPUT_DIR/$APPIMAGE_VERSIONED"\n'
+        '  chmod +x "$OUTPUT_DIR/$APPIMAGE_VERSIONED"\n'
+        "}\n"
+        "build_fpm_package() {\n"
+        '  local family="$1"\n'
+        '  local output_path="$4"\n'
+        '  mkdir -p "$OUTPUT_DIR"\n'
+        '  printf "%s-fixture\\n" "$family" > "$output_path"\n'
+        "}\n"
+        "validate_package() { return 0; }\n"
+        'main "$@"\n',
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+
+    result = subprocess.run(
+        ["bash", str(wrapper), "1.57.0"],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "DATAPYN_PACKAGE_DIST_DIR": str(dist_dir),
+            "DATAPYN_PACKAGE_OUTPUT_DIR": str(output_dir),
+            "DATAPYN_PACKAGE_STAGE_DIR": str(stage_dir),
+            "DATAPYN_PACKAGE_APPDIR": str(appdir),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    created_index = result.stdout.splitlines().index("Created:")
+    created = tuple(result.stdout.splitlines()[created_index + 1 :])
+    assert created == C7_RELEASE_ASSETS
+    present = {path.name for path in output_dir.iterdir() if path.is_file()}
+    assert present == set(C7_RELEASE_ASSETS)
+    for alias in UNVERSIONED_ALIASES:
+        assert alias not in present
 
 
 @pytest.mark.parametrize(
@@ -353,17 +419,10 @@ def test_native_package_metadata_and_aliases(tmp_path: Path) -> None:
         "DataPyn-1.57.0-x86_64.AppImage",
         "DataPyn-1.57.0-linux-x86_64.tar.gz",
     )
-    aliases = (
-        "datapyn_amd64.deb",
-        "datapyn-x86_64.rpm",
-        "datapyn-x86_64.pkg.tar.zst",
-        "DataPyn-x86_64.AppImage",
-        "DataPyn-linux-x86_64.tar.gz",
-    )
-    for filename in (*versioned, *aliases):
+    for filename in versioned:
         assert (output_dir / filename).is_file(), filename
-    for source, alias in zip(versioned, aliases, strict=True):
-        assert (output_dir / source).read_bytes() == (output_dir / alias).read_bytes()
+    for alias in UNVERSIONED_ALIASES:
+        assert not (output_dir / alias).exists(), alias
 
     deb_metadata = subprocess.run(
         ["dpkg-deb", "--field", str(output_dir / versioned[0])],

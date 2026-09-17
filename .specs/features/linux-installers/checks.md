@@ -41,31 +41,40 @@ Proof: `timeout 30 ./DataPyn-<version>-x86_64.AppImage >smoke.log 2>&1; test $? 
 
 **C7** - `package.sh --print-release-assets 1.57.0` prints exactly 7 lines, in order: `datapyn_1.57.0_amd64.deb`, `datapyn-1.57.0-1.x86_64.rpm`, `datapyn-1.57.0-1-x86_64.pkg.tar.zst`, `DataPyn-1.57.0-x86_64.AppImage`, `DataPyn-1.57.0-linux-x86_64.tar.gz`, `DataPyn-linux-artifacts.json`, `SHA256SUMS` (LINUX-02, AC 6)
 Proof: `uv run pytest tests/test_linux_release_manifest.py -k "release_asset_list_contains_versioned_metadata_set"`
+Closed.
 
 **C8** - A full `package.sh 1.57.0` run, with only the external packagers stubbed (`check_toolchain`, `check_appimage_toolchain`, `build_appimage`, `build_fpm_package`, `validate_package` write or accept a fixture file), exits `0`, leaves exactly the 7 C7 filenames in the output directory - none of `datapyn_amd64.deb`, `datapyn-x86_64.rpm`, `datapyn-x86_64.pkg.tar.zst`, `DataPyn-x86_64.AppImage`, `DataPyn-linux-x86_64.tar.gz` - and prints a `Created:` listing of exactly those 7 names (LINUX-02, AC 7)
 Proof: `uv run pytest tests/test_linux_package_plan.py -k "full_package_run_writes_versioned_names_only"`
+Closed.
 
 **C9** - `package.sh --appimage-only 1.57.0` with the builder stubbed exits `0`, leaves `DataPyn-1.57.0-x86_64.AppImage` and no `DataPyn-x86_64.AppImage`, and its `Created:` listing is exactly `DataPyn-1.57.0-x86_64.AppImage` (LINUX-02, AC 8)
 Proof: `uv run pytest tests/test_linux_appimage.py -k "appimage_only_writes_versioned_name_only"`
+Closed.
 
 **C10** - `package.sh --print-plan 1.57.0` prints exactly the 5 keys `deb_versioned`, `rpm_versioned`, `pacman_versioned`, `appimage_versioned`, `tar_versioned` with their versioned values, and no key ending in `_stable` (LINUX-02, AC 9)
 Proof: `uv run pytest tests/test_linux_package_plan.py -k "artifact_plan_has_only_versioned_names"`
+Closed.
 
 **C11** - `package.sh --print-appimage-metadata 1.57.0` prints exactly 12 keys - the 13 it prints today without `appimage_stable_alias` - each with today's value (LINUX-02, AC 10)
 Proof: `uv run pytest tests/test_linux_appimage.py -k "appimage_metadata_declares_portable_x86_64_fuse3_contract"`
+Closed.
 
 **C12** - With the 5 versioned fixture files and generated metadata present and no unversioned alias in the directory, `package.sh --validate-release 1.57.0 v1.57.0` exits `0` (LINUX-02, AC 11)
 Proof: `uv run pytest tests/test_linux_release_manifest.py -k "manifest_and_checksums_describe_complete_fixture"`
+Closed.
 
 **C13** - The generated `DataPyn-linux-artifacts.json` has `schema_version` `1` and exactly 5 artifacts, each with exactly the 9 keys `id`, `format`, `distro_family`, `display_name`, `filename`, `download_url`, `sha256`, `requires`, `install_mode`; `SHA256SUMS` has exactly 5 lines, one per versioned filename (LINUX-02, AC 12)
 Proof: `uv run pytest tests/test_linux_release_manifest.py -k "manifest_and_checksums_describe_complete_fixture"`
+Closed.
 
 **C14** - `.github/workflows/release.yml` and `.github/workflows/release-linux.yml` each contain `bash scripts/linux/package.sh --print-release-assets` feeding `steps.release_assets.outputs.files`, and neither contains any of the 5 unversioned Linux filenames (LINUX-02, AC 13)
 Proof: `uv run pytest tests/test_linux_release_manifest.py -k "workflows_share_versioned_assets_and_dry_run_never_publishes"`
+Closed.
 
 **C15** - The Linux filenames documented in `README.md` (with `VERSION` substituted) equal the 5 manifest filenames, and every `apt install`, `dnf install`, `zypper install`, `pacman -U`, `chmod +x`, AppImage launch, `--appimage-extract-and-run` and `tar -xzf` line in its installation section names a versioned filename (LINUX-02, AC 14)
 Proof: `uv run pytest tests/test_linux_documentation.py -k "documented_linux_filenames_exist_in_generated_manifest"`
 Proof: `uv run pytest tests/test_linux_documentation.py -k "readme_install_commands_use_versioned_names"`
+Closed.
 
 ### S3 - Windows releases publish one setup executable · 3 files · 70 KB · ~18k
 
