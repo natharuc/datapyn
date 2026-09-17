@@ -179,3 +179,7 @@ Intended split, with the arithmetic, written before any code:
 - C1 builds locally with PyInstaller on the Arch host; the check asserts only the file set, which does not depend on the host's glibc
 - **Approved:** 2026-09-16 by the user, checks C1-C22 as written, profile `standard`; `Test policy` stays in this file only (not written to repo guidelines). C5 push of `fix/linux-app` and the `release-linux.yml` dry-run dispatch are authorized, to be run by the Release role after the build; C6 is the user's host run; C22 runs after the first release
 - **Next phase:** BUILD
+
+- **Boundary:** C1-C4 closed at `1855005a2965127153f3d01521a53821d4804f0a`; C7-C15 closed at `6b0d2ad43970613e070df283bca71c088af72f54`; C16-C18 closed at `09d94bacd5908a63970c8aefbaeb663441fd0eb5`; C19-C21 closed at `71f7db894edb6f67fa910e063939c4c690f5c54a`. C5, C6, C22 remain pending external actions.
+- **Settled mid-build:** none
+- **Abandoned:** none

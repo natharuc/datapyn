@@ -10,9 +10,9 @@
 ## Handoff
 
 **Feature**: linux-installers
-**Where**: PLAN approved; CHECKS approved by the user as written (C1-C22, profile `standard`, Test policy kept in `checks.md` only); no code yet
+**Where**: BUILD complete for C1-C4 and C7-C21 at `71f7db894edb6f67fa910e063939c4c690f5c54a`. C5, C6, C22 pending external actions.
 **In progress**: none
-**Next step**: BUILD - one builder, S1 to S4 in order, per `.specs/features/linux-installers/checks.md` `## Handoff`; closes C1-C4 and C7-C21
-**Blockers**: none for BUILD. Pending external actions: C5 - the user authorized push of `fix/linux-app` and a `release-linux.yml` dry-run dispatch, done by the Release role after the build; C6 - the user's host run on Arch/Mesa 26.2.2 with the C5 AppImage; C22 - after the first release built from this change
+**Next step**: VERIFY over `ee07590..HEAD` with every check. Release role: push `fix/linux-app` and dispatch `release-linux.yml` dry-run (C5). User: Arch/Mesa 26 host smoke (C6). After first release: C22 download-URL proof.
+**Blockers**: none for VERIFY of C1-C4 and C7-C21. Pending: C5 - Release-role push + `release-linux.yml` dry-run; C6 - user host run on Arch/Mesa 26.2.2 with the C5 AppImage; C22 - after the first release built from this change
 **Uncommitted**: none
 **Branch**: fix/linux-app
