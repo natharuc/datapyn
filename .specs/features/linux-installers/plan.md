@@ -134,10 +134,10 @@ recorded in `Assumptions`: the host smoke (criterion 5) and the `datapyn.page` u
 
 | ID | Slice | Criteria | Status |
 | --- | --- | --- | --- |
-| LINUX-01 | S1 | 1, 2, 3, 4, 5 | Pending |
-| LINUX-02 | S2 | 6, 7, 8, 9, 10, 11, 12, 13, 14 | Pending |
-| WIN-01 | S3 | 15, 16, 17 | Pending |
-| MAC-01 | S4 | 18, 19, 20 | Pending |
+| LINUX-01 | S1 | 1, 2, 3, 4, 5 | In checks |
+| LINUX-02 | S2 | 6, 7, 8, 9, 10, 11, 12, 13, 14 | In checks |
+| WIN-01 | S3 | 15, 16, 17 | In checks |
+| MAC-01 | S4 | 18, 19, 20 | In checks |
 
 ## Observable
 
