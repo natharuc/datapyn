@@ -441,6 +441,5 @@ jobs:
           tag_name: ${{ needs.release.outputs.tag }}
           files: |
             DataPyn-${{ needs.release.outputs.version }}-macos-arm64.dmg
-            DataPyn-macos-arm64.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

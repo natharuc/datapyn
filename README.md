@@ -117,7 +117,7 @@ Instaladores oficiais: [datapyn.page/downloads.html](https://datapyn.page/downlo
 | Linux x86_64 — Arch/Manjaro | `Arch/Manjaro (.pkg.tar.zst)` | `datapyn-VERSION-1-x86_64.pkg.tar.zst` — `sudo pacman -U ./datapyn-VERSION-1-x86_64.pkg.tar.zst` |
 | Linux x86_64 — portátil | `Universal Linux (AppImage, FUSE3)` | `DataPyn-VERSION-x86_64.AppImage` |
 | Linux x86_64 — fallback | `Other Linux (.tar.gz)` | `DataPyn-VERSION-linux-x86_64.tar.gz` |
-| macOS Apple Silicon | `DataPyn-macos-arm64.dmg` | Unsigned — no Gatekeeper use **Open** no menu de contexto ou `xattr -cr /Applications/DataPyn.app` |
+| macOS Apple Silicon | `DataPyn-VERSION-macos-arm64.dmg` | Unsigned — no Gatekeeper use **Open** no menu de contexto ou `xattr -cr /Applications/DataPyn.app` |
 
 Nos nomes versionados, `VERSION` é substituído pela versão da release (por exemplo, `1.57.0`). A
 primeira arquitetura Linux publicada é **x86_64** (chamada **amd64** no nome do pacote Debian);

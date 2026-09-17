@@ -40,6 +40,6 @@ Linux (amd64, built on Ubuntu 22.04):
 - `SHA256SUMS`
 
 macOS (Apple Silicon, unsigned):
-- `DataPyn-macos-arm64.dmg` / `DataPyn-{version}-macos-arm64.dmg`
+- `DataPyn-{version}-macos-arm64.dmg`
 
 The desktop app auto-update downloads the Windows ZIP and applies it on exit.

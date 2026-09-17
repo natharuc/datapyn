@@ -94,12 +94,15 @@ Closed.
 
 **C19** - `package_dmg.sh 1.57.0`, run from a copy of the script in a temporary tree with `dist/DataPyn.app` and a stub `hdiutil` that writes its last argument, exits `0` and leaves `DataPyn-1.57.0-macos-arm64.dmg` and no `DataPyn-macos-arm64.dmg` in that tree's root (MAC-01, AC 18)
 Proof: `uv run pytest tests/test_release_assets.py -k "macos_dmg_package_writes_versioned_name_only"`
+Closed.
 
 **C20** - In `.github/workflows/release.yml` (parsed as YAML), job `build-macos-release`'s `softprops/action-gh-release` `files` list is exactly `DataPyn-${{ needs.release.outputs.version }}-macos-arm64.dmg` (MAC-01, AC 19)
 Proof: `uv run pytest tests/test_release_assets.py -k "macos_release_uploads_versioned_dmg_only"`
+Closed.
 
 **C21** - `README.md` names `DataPyn-VERSION-macos-arm64.dmg`, `installer/README.md` names `DataPyn-{version}-macos-arm64.dmg`, and neither file contains `DataPyn-macos-arm64.dmg` (MAC-01, AC 20)
 Proof: `uv run pytest tests/test_release_assets.py -k "docs_name_versioned_dmg_only"`
+Closed.
 
 ### Post-release - the download URL signature (plan `Surface`)
 

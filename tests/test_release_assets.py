@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
 
 
@@ -214,3 +216,61 @@ def test_installer_readme_lists_versioned_assets_only() -> None:
         "DataPyn-linux-x86_64.tar.gz",
     ):
         assert alias not in artifacts_section
+
+
+def test_macos_dmg_package_writes_versioned_name_only(tmp_path: Path) -> None:
+    tree = tmp_path / "tree"
+    script_dir = tree / "scripts" / "macos"
+    script_dir.mkdir(parents=True)
+    script = script_dir / "package_dmg.sh"
+    script.write_text(
+        (ROOT / "scripts/macos/package_dmg.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    app = tree / "dist" / "DataPyn.app"
+    app.mkdir(parents=True)
+    (app / "Contents").mkdir()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    hdiutil = fake_bin / "hdiutil"
+    hdiutil.write_text(
+        "#!/usr/bin/env bash\nprintf 'stub-dmg\\n' > \"${!#}\"\n",
+        encoding="utf-8",
+    )
+    hdiutil.chmod(0o755)
+
+    result = subprocess.run(
+        ["bash", str(script), "1.57.0"],
+        cwd=tree,
+        env={**os.environ, "PATH": f"{fake_bin}:{os.environ.get('PATH', os.defpath)}"},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (tree / "DataPyn-1.57.0-macos-arm64.dmg").is_file()
+    assert not (tree / "DataPyn-macos-arm64.dmg").exists()
+
+
+def test_macos_release_uploads_versioned_dmg_only() -> None:
+    workflow = load_workflow_yaml(RELEASE_WORKFLOW)
+    job = workflow["jobs"]["build-macos-release"]
+    release_step = next(
+        step
+        for step in job["steps"]
+        if str(step.get("uses", "")).startswith("softprops/action-gh-release")
+    )
+    assert _files_list(release_step["with"]["files"]) == [
+        "DataPyn-${{ needs.release.outputs.version }}-macos-arm64.dmg",
+    ]
+
+
+def test_docs_name_versioned_dmg_only() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    installer = INSTALLER_README.read_text(encoding="utf-8")
+    assert "DataPyn-VERSION-macos-arm64.dmg" in readme
+    assert "DataPyn-{version}-macos-arm64.dmg" in installer
+    assert "DataPyn-macos-arm64.dmg" not in readme
+    assert "DataPyn-macos-arm64.dmg" not in installer
