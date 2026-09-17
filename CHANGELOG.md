@@ -2,6 +2,77 @@
 
 <!-- version list -->
 
+## v1.60.2 (2026-09-17)
+
+### Bug Fixes
+
+- **installer**: Drop bundled libstdc++ from linux payload
+  ([`1855005`](https://github.com/natharuc/datapyn/commit/1855005a2965127153f3d01521a53821d4804f0a))
+
+- **installer**: Publish a single unversioned windows setup
+  ([`09d94ba`](https://github.com/natharuc/datapyn/commit/09d94bacd5908a63970c8aefbaeb663441fd0eb5))
+
+- **installer**: Publish linux assets under versioned names only
+  ([`6b0d2ad`](https://github.com/natharuc/datapyn/commit/6b0d2ad43970613e070df283bca71c088af72f54))
+
+- **installer**: Publish macos dmg under a versioned name only
+  ([`71f7db8`](https://github.com/natharuc/datapyn/commit/71f7db894edb6f67fa910e063939c4c690f5c54a))
+
+- **linux**: Use the host C++ runtime and publish versioned assets only
+  ([`ccff008`](https://github.com/natharuc/datapyn/commit/ccff008f891dcfb2455a7642ce792e45d4c15f10))
+
+- **linux-installers**: Clean rejected release outputs
+  ([`c9e9031`](https://github.com/natharuc/datapyn/commit/c9e903190f57763b23d2e3c774144bac362569a7))
+
+- **packaging**: Remove stale release aliases
+  ([`80db0c1`](https://github.com/natharuc/datapyn/commit/80db0c1a922e221dbd272651954d2b12296a6cc6))
+
+### Documentation
+
+- **spec**: Record linux installer boundary handoff
+  ([`1392301`](https://github.com/natharuc/datapyn/commit/1392301f40a2cc1e483dbda6207a40b9c7839ee8))
+
+- **spec**: Record linux installer verification findings
+  ([`1dbc5fb`](https://github.com/natharuc/datapyn/commit/1dbc5fb626095d29f2d1151c6ba2a109924c03c1))
+
+- **spec**: Record linux installers verification
+  ([`e7b358c`](https://github.com/natharuc/datapyn/commit/e7b358cb9959fad6a9a67dadd1487a8c96334199))
+
+- **spec**: Record packaging fix handoff
+  ([`0031638`](https://github.com/natharuc/datapyn/commit/00316385bddf36faf05ee3ee9ef8d15db99e5a62))
+
+- **specs**: Add linux installer checks and apply plan review
+  ([`76e83c4`](https://github.com/natharuc/datapyn/commit/76e83c49fbd9fddf241abab8d93f2a0106fb7320))
+
+- **specs**: Plan linux installer runtime and versioned-only assets
+  ([`b6b4b11`](https://github.com/natharuc/datapyn/commit/b6b4b11d85f2c47312294742f0f2762ed72f3189))
+
+- **specs**: Record linux installer checks approval
+  ([`ee07590`](https://github.com/natharuc/datapyn/commit/ee075902c56e36e2c34e4c09e0fe1add9be268d9))
+
+- **specs**: Record linux installer fix handoff
+  ([`7f14b02`](https://github.com/natharuc/datapyn/commit/7f14b0245c13d21b28a1a6987bdd5fc149bbb8cc))
+
+- **specs**: Record linux installers re-verification findings
+  ([`85d83a9`](https://github.com/natharuc/datapyn/commit/85d83a9f49d59fc40ef12a48bd9ab3a84066664d))
+
+- **specs**: Record linux installers verification findings
+  ([`f78ed79`](https://github.com/natharuc/datapyn/commit/f78ed7975a2392d2425de58dbb1a01310cbc0504))
+
+- **specs**: Record linux-installers build handoff
+  ([`5082e8a`](https://github.com/natharuc/datapyn/commit/5082e8ab266f4d85c44660869e143c569ce00b7b))
+
+### Heuristic
+
+- Merge pull request #162 from natharuc/fix/linux-app
+  ([`ccff008`](https://github.com/natharuc/datapyn/commit/ccff008f891dcfb2455a7642ce792e45d4c15f10))
+
+### Testing
+
+- **linux-installers**: Cover package version boundaries
+  ([`92ec965`](https://github.com/natharuc/datapyn/commit/92ec9655ffb13c53ae01aa839d4a0790f352a227))
+
+
 ## v1.60.1 (2026-09-09)
 
 ### Bug Fixes
