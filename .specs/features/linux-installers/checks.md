@@ -80,12 +80,15 @@ Closed.
 
 **C16** - In `.github/workflows/release.yml` (parsed as YAML), job `build-windows-release`'s `softprops/action-gh-release` `files` list is exactly `DataPyn-${{ needs.release.outputs.version }}-windows.zip` and `DataPyn-Setup.exe`, and no step of that job contains `DataPyn-Setup-` (WIN-01, AC 15)
 Proof: `uv run pytest tests/test_release_assets.py -k "windows_release_uploads_single_setup"`
+Closed.
 
 **C17** - `fetch_latest_release`, with `urlopen` patched to return assets `DataPyn-1.61.0-windows.zip` and `DataPyn-Setup.exe`, returns `setup_asset.name == "DataPyn-Setup.exe"` (WIN-01, AC 16)
 Proof: `uv run pytest tests/test_windows_installer.py -k "fetch_latest_release_picks_unversioned_setup"`
+Closed.
 
 **C18** - `installer/README.md` "Release artifacts" names `DataPyn-Setup.exe`, contains no `DataPyn-Setup-{version}.exe`, and names the Linux artifacts only as the 5 versioned names plus `DataPyn-linux-artifacts.json` and `SHA256SUMS` (WIN-01, AC 17)
 Proof: `uv run pytest tests/test_release_assets.py -k "installer_readme_lists_versioned_assets_only"`
+Closed.
 
 ### S4 - macOS releases publish one versioned DMG · 4 files · 30 KB · ~8k
 

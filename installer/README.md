@@ -29,11 +29,15 @@ CI publishes (same GitHub Release):
 Windows:
 - `DataPyn-{version}-windows.zip` — PyInstaller folder
 - `DataPyn-Setup.exe` — version-agnostic bootstrap (always fetches latest)
-- `DataPyn-Setup-{version}.exe` — pinned to that release
 
 Linux (amd64, built on Ubuntu 22.04):
-- `datapyn_amd64.deb` / `datapyn_{version}_amd64.deb`
-- `DataPyn-linux-x86_64.tar.gz` / `DataPyn-{version}-linux-x86_64.tar.gz`
+- `datapyn_{version}_amd64.deb`
+- `datapyn-{version}-1.x86_64.rpm`
+- `datapyn-{version}-1-x86_64.pkg.tar.zst`
+- `DataPyn-{version}-x86_64.AppImage`
+- `DataPyn-{version}-linux-x86_64.tar.gz`
+- `DataPyn-linux-artifacts.json`
+- `SHA256SUMS`
 
 macOS (Apple Silicon, unsigned):
 - `DataPyn-macos-arm64.dmg` / `DataPyn-{version}-macos-arm64.dmg`
