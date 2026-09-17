@@ -971,11 +971,11 @@ main() {
       echo "error: dist/DataPyn not found. Run PyInstaller first." >&2
       return 1
     fi
+    mkdir -p "$OUTPUT_DIR"
+    cleanup_outputs
     refuse_bundled_host_runtime
 
     trap cleanup_on_error EXIT
-    mkdir -p "$OUTPUT_DIR"
-    cleanup_outputs
     check_appimage_toolchain
     stage_payload
     build_appimage
@@ -1015,11 +1015,11 @@ main() {
     echo "error: dist/DataPyn not found. Run PyInstaller first." >&2
     return 1
   fi
+  mkdir -p "$OUTPUT_DIR"
+  cleanup_outputs
   refuse_bundled_host_runtime
 
   trap cleanup_on_error EXIT
-  mkdir -p "$OUTPUT_DIR"
-  cleanup_outputs
   check_toolchain
   check_appimage_toolchain
   stage_payload

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -19,6 +20,10 @@ LINUX_VERSIONED = (
     "DataPyn-{version}-linux-x86_64.tar.gz",
 )
 LINUX_METADATA = ("DataPyn-linux-artifacts.json", "SHA256SUMS")
+WINDOWS_RELEASE_ARTIFACTS = (
+    "DataPyn-{version}-windows.zip",
+    "DataPyn-Setup.exe",
+)
 
 
 def _strip_comments(text: str) -> str:
@@ -202,20 +207,13 @@ def test_installer_readme_lists_versioned_assets_only() -> None:
     if next_heading != -1:
         artifacts_section = artifacts_section[:next_heading]
 
-    assert "`DataPyn-Setup.exe`" in artifacts_section
-    assert "DataPyn-Setup-{version}.exe" not in artifacts_section
-    for filename in LINUX_VERSIONED:
-        assert f"`{filename}`" in artifacts_section
-    for filename in LINUX_METADATA:
-        assert f"`{filename}`" in artifacts_section
-    for alias in (
-        "datapyn_amd64.deb",
-        "datapyn-x86_64.rpm",
-        "datapyn-x86_64.pkg.tar.zst",
-        "DataPyn-x86_64.AppImage",
-        "DataPyn-linux-x86_64.tar.gz",
-    ):
-        assert alias not in artifacts_section
+    windows_section, linux_and_macos = artifacts_section.split("Linux (amd64, built on Ubuntu 22.04):")
+    linux_section, _ = linux_and_macos.split("macOS (Apple Silicon, unsigned):")
+    assert set(re.findall(r"`([^`]+)`", windows_section)) == set(WINDOWS_RELEASE_ARTIFACTS)
+    assert set(re.findall(r"`([^`]+)`", linux_section)) == {
+        *LINUX_VERSIONED,
+        *LINUX_METADATA,
+    }
 
 
 def test_macos_dmg_package_writes_versioned_name_only(tmp_path: Path) -> None:

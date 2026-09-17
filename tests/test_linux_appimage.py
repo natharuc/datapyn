@@ -41,6 +41,10 @@ def test_bundled_host_runtime_library_blocks_appimage(tmp_path: Path, library: s
     executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     executable.chmod(0o755)
     output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    (output_dir / "DataPyn-1.57.0-x86_64.AppImage").write_text(
+        "stale artifact", encoding="utf-8"
+    )
 
     result = run_package(
         "--appimage-only",

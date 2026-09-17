@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.test_release_assets import load_workflow_yaml
+
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_SCRIPT = ROOT / "scripts/linux/package.sh"
@@ -286,19 +288,32 @@ def test_release_metadata_isolated_by_output_directory(tmp_path: Path) -> None:
 
 
 def test_workflows_share_versioned_assets_and_dry_run_never_publishes() -> None:
-    main = RELEASE_WORKFLOW.read_text(encoding="utf-8")
-    dry_run = DRY_RUN_WORKFLOW.read_text(encoding="utf-8")
+    main_text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    dry_run_text = DRY_RUN_WORKFLOW.read_text(encoding="utf-8")
+    main_job = load_workflow_yaml(RELEASE_WORKFLOW)["jobs"]["build-linux-release"]
+    dry_run_job = load_workflow_yaml(DRY_RUN_WORKFLOW)["jobs"]["build-linux-deb"]
+    release_assets_output = "${{ steps.release_assets.outputs.files }}"
 
-    assert "bash scripts/linux/package.sh --print-release-assets" in main
-    assert "bash scripts/linux/package.sh --print-release-assets" in dry_run
-    assert main.count("steps.release_assets.outputs.files") >= 2
-    assert dry_run.count("steps.release_assets.outputs.files") >= 2
-    assert "id: release_assets" in main
-    assert "id: release_assets" in dry_run
-    assert "softprops/action-gh-release" in main
-    assert "softprops/action-gh-release" not in dry_run
-    assert "--validate-release" in main
-    assert "--validate-release" in dry_run
+    for job in (main_job, dry_run_job):
+        release_assets_step = next(
+            step for step in job["steps"] if step.get("id") == "release_assets"
+        )
+        assert "bash scripts/linux/package.sh --print-release-assets" in release_assets_step["run"]
+        assert "echo 'files<<EOF'" in release_assets_step["run"]
+        assert '>> "$GITHUB_OUTPUT"' in release_assets_step["run"]
+
+    assert [
+        step["with"]["files"]
+        for step in main_job["steps"]
+        if str(step.get("uses", "")).startswith("softprops/action-gh-release")
+    ] == [release_assets_output]
+    assert [
+        step["with"]["path"]
+        for step in dry_run_job["steps"]
+        if str(step.get("uses", "")).startswith("actions/upload-artifact")
+    ] == [release_assets_output]
+    assert "--validate-release" in main_text
+    assert "--validate-release" in dry_run_text
     for alias in UNVERSIONED_ALIASES:
-        assert alias not in main
-        assert alias not in dry_run
+        assert alias not in main_text
+        assert alias not in dry_run_text

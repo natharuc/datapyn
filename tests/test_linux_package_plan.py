@@ -114,6 +114,9 @@ def test_bundled_host_runtime_library_blocks_packaging(tmp_path: Path, library: 
     executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     executable.chmod(0o755)
     output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    for filename in (*VERSIONED_ARTIFACTS, *RELEASE_METADATA):
+        (output_dir / filename).write_text("stale artifact", encoding="utf-8")
 
     result = run_package(
         "1.57.0",
