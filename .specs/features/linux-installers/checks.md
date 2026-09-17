@@ -126,7 +126,7 @@ Proof: `for n in <10 published names>; do test "$(curl -sL -o /dev/null -w '%{ht
 | unversioned exception (1) | `DataPyn-Setup.exe` C16 C17 | - |
 | documentation places (5) | `README.md` Linux C15 · `README.md` macOS C21 · `installer/README.md` Windows C18 · `installer/README.md` Linux C18 · `installer/README.md` macOS C21 | - |
 | `GET /releases/download/<tag>/<name>` statuses (2) | `200` C22 · `404` C22 | - |
-| Landing doors (3) | door 1 runtime from host C1 C2 C3 · door 2 Linux/Windows names C7 C16 · door 3 macOS name C19 C20 | - |
+| Landing doors (4) | door 1 runtime from host C1 C2 C3 · door 2 Linux/Windows names C7 C16 · door 3 macOS name C19 C20 · door 4 stale alias cleanup C8 C9 C19 | - |
 
 - Claims naming a status code, route or response shape: C22 - its proof crosses the real GitHub download boundary
 - Claims naming an exit code or exact stderr: C2, C3, C4, C5, C6, C8, C9, C12, C19 - each proof runs the real script entry point, not a sourced helper

@@ -94,6 +94,23 @@ def test_missing_bundle_fails_with_existing_message_and_no_outputs(tmp_path: Pat
     assert not output_dir.exists()
 
 
+@pytest.mark.parametrize(
+    ("args", "expected_error"),
+    (
+        ((), "error: version required (e.g. 1.57.0)"),
+        (("invalid/version",), "error: invalid release version: invalid/version"),
+    ),
+    ids=("missing-version", "invalid-version"),
+)
+def test_full_package_rejects_missing_and_invalid_versions(
+    args: tuple[str, ...], expected_error: str
+) -> None:
+    result = run_package(*args)
+
+    assert result.returncode == 1
+    assert result.stderr.strip() == expected_error
+
+
 VERSIONED_ARTIFACTS = (
     "datapyn_1.57.0_amd64.deb",
     "datapyn-1.57.0-1.x86_64.rpm",

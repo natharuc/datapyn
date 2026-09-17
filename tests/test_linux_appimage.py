@@ -68,6 +68,23 @@ def test_bundled_host_runtime_library_blocks_appimage(tmp_path: Path, library: s
     assert not (output_dir / "DataPyn-1.57.0-x86_64.AppImage").exists()
 
 
+@pytest.mark.parametrize(
+    ("args", "expected_error"),
+    (
+        ((), "error: version required (e.g. 1.57.0)"),
+        (("invalid/version",), "error: invalid release version: invalid/version"),
+    ),
+    ids=("missing-version", "invalid-version"),
+)
+def test_appimage_only_rejects_missing_and_invalid_versions(
+    args: tuple[str, ...], expected_error: str
+) -> None:
+    result = run_package("--appimage-only", *args)
+
+    assert result.returncode == 1
+    assert result.stderr.strip() == expected_error
+
+
 def test_host_runtime_gate_allows_other_libraries(tmp_path: Path) -> None:
     dist_dir = tmp_path / "dist" / "DataPyn"
     internal = dist_dir / "_internal"
