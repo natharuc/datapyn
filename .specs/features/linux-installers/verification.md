@@ -2,101 +2,98 @@
 
 **Verdict**: FAIL
 **Profile**: standard
-**Diff range**: 87e28b7..7f14b02 (feature HEAD before this report commit)
-**Round**: 2 - full, as explicitly requested; no check verdict carried forward
-**Verifier**: independent verifier (author != verifier)
-**Checks proven**: 15/22; 3 failing, 1 unproven, 3 not run
+**Diff range**: 87e28b7..0031638 (feature HEAD before this report commit)
+**Round**: 3 - full, as requested; no result carried from the prior FAIL
+**Verifier**: independent fresh verifier (author != verifier)
+**Checks proven**: 19/22; 0 failed local proofs, 3 not run
 
-The plan, checks, prior FAIL report, feature diff, current code, workflows, documentation and named tests were read independently at 7f14b02. No binding UI design is identified in the plan. The ui binding-source comparison and interactive flow walk do not apply to this standard infrastructure feature.
+The plan, all 22 checks, the prior FAIL, the 87e28b7..0031638 diff, code, workflows, docs, and test assertions were reviewed independently at 0031638. No binding UI design is identified; the ui-only source comparison and human interaction walk do not apply to this standard infrastructure feature. Each named local pytest test appeared in the 84 passed, 4 skipped run. None of the four skipped integration tests is a named proof for C1-C4 or C7-C21.
 
 ## Checks
 
-The 18 named pytest selectors for C2-C4 and C7-C21, including parameter cases, ran together at feature HEAD: 20 passed. Two existing policy-evidence tests also ran: 22 passed, 57 deselected overall. C1 was built separately. A green named test is distinguished below from a claim that its assertion does not settle.
+P = the single HEAD invocation of the six test files recorded in Gate. Names below appeared individually as PASSED in its verbose output, including all parameter cases. C1 used a separate fresh PyInstaller build.
 
 | Check | Claim | Proof run | Evidence | Result |
 | --- | --- | --- | --- | --- |
-| C1 | Linux PyInstaller bundle contains neither runtime family | PyInstaller --clean in detached scratch, exit 0; find count 0 | scripts/datapyn.spec:194 filters both filename patterns from binaries and datas; dist/DataPyn had zero matching names | PASS |
-| C2 | Full packaging rejects both runtimes, exact stderr, removes seven versioned outputs | test_bundled_host_runtime_library_blocks_packaging, both cases passed | tests/test_linux_package_plan.py:131 asserts exit 1, :134 exact stderr, :137 absence after stale outputs were seeded at :118 | PASS |
-| C3 | AppImage-only rejects both runtimes, exact stderr, removes stale AppImage | test_bundled_host_runtime_library_blocks_appimage, both cases passed | tests/test_linux_appimage.py:60 asserts exit 1, :63 exact stderr, :65 absence after stale AppImage at :45 | PASS |
-| C4 | Other shared libraries pass the runtime gate | test_host_runtime_gate_allows_other_libraries passed | tests/test_linux_appimage.py:92 asserts the later tool error; :94 excludes the runtime gate error | PASS |
-| C5 | Ubuntu 22.04 FUSE3 CI smoke succeeds | **Not run**: no workflow job result; network unavailable here | .specs/features/linux-installers/checks.md:34 names the external workflow step | NOT RUN |
-| C6 | User's Arch/Mesa host AppImage runs for 30 seconds without named errors | **Not run**: user host result has not been supplied | .specs/features/linux-installers/checks.md:37 names the host command and output checks | NOT RUN |
-| C7 | Printed Linux release list is seven ordered names | test_release_asset_list_contains_versioned_metadata_set passed | tests/test_linux_release_manifest.py:92 asserts the exact ordered tuple defined at :23-:38 | PASS |
-| C8 | Full build output contains exactly seven names and no aliases | test_full_package_run_writes_versioned_names_only passed; independent stale-alias rerun exited 0 but left five aliases, 12 files total | tests/test_linux_package_plan.py:203 and :205 assert exact listing and set only from an initially empty output directory; scripts/linux/package.sh:704 removes only versioned names | FAIL |
-| C9 | AppImage-only output contains the versioned name and no alias | test_appimage_only_writes_versioned_name_only passed; independent stale-alias rerun exited 0 and left DataPyn-x86_64.AppImage | tests/test_linux_appimage.py:137-:139 assert the clean fixture; scripts/linux/package.sh:975 invokes cleanup that does not remove aliases | FAIL |
-| C10 | Print-plan contains exactly five versioned keys and values | test_artifact_plan_has_only_versioned_names passed | tests/test_linux_package_plan.py:38 asserts the exact mapping; :45 excludes _stable | PASS |
-| C11 | AppImage metadata retains 12 exact values and no alias key | test_appimage_metadata_declares_portable_x86_64_fuse3_contract passed | tests/test_linux_appimage.py:147 asserts the exact mapping; :161 count 12; :162 excludes alias | PASS |
-| C12 | Five versioned fixtures validate without an alias | test_manifest_and_checksums_describe_complete_fixture passed | tests/test_linux_release_manifest.py:131 invokes --validate-release; :132 asserts exit 0 | PASS |
-| C13 | Schema 1, five exact entry shapes and five checksum lines | Same fixture test passed | tests/test_linux_release_manifest.py:108 asserts schema, :113-:116 count and keys, :119-:128 checksum filenames and hashes | PASS |
-| C14 | Both workflow upload lists derive only from printed assets | test_workflows_share_versioned_assets_and_dry_run_never_publishes passed; extra upload-field fault was killed | tests/test_linux_release_manifest.py:301-:303 only find substrings in the release_assets step; :305-:314 pin upload fields to its output. An added echo inside that step can enter the output without breaking these assertions | UNPROVEN |
-| C15 | README Linux filename set and each install command use versioned names | Both documentation selectors passed | tests/test_linux_documentation.py:77 asserts set equality; :115 and :124 assert versioned install and launch lines | PASS |
-| C16 | Windows upload list is exactly ZIP and unversioned setup | test_windows_release_uploads_single_setup passed | tests/test_release_assets.py:195 asserts the parsed exact list; :200 excludes creation of a versioned setup in job steps | PASS |
-| C17 | Windows updater selects unversioned setup | test_fetch_latest_release_picks_unversioned_setup passed | tests/test_windows_installer.py:85 asserts release.setup_asset.name == "DataPyn-Setup.exe" | PASS |
-| C18 | Installer release section has exact Windows and Linux names | test_installer_readme_lists_versioned_assets_only passed; extra-name fault was killed | tests/test_release_assets.py:212 and :213 compare the extracted section's backticked names with exact sets | PASS |
-| C19 | macOS script leaves versioned DMG and no alias | test_macos_dmg_package_writes_versioned_name_only passed; independent rerun seeded with a stale alias exited 0 and retained it | tests/test_release_assets.py:250-:252 assert the clean fixture; scripts/macos/package_dmg.sh:17 removes only the versioned DMG | FAIL |
-| C20 | macOS upload list has exactly one versioned DMG | test_macos_release_uploads_versioned_dmg_only passed | tests/test_release_assets.py:263 asserts the parsed exact list | PASS |
-| C21 | Both docs name the versioned DMG and omit alias | test_docs_name_versioned_dmg_only passed | tests/test_release_assets.py:271-:274 assert both versioned names and exclude the alias | PASS |
-| C22 | First post-change release returns ten 200s and seven 404s | **Not run**: no post-change release or network access here | .specs/features/linux-installers/checks.md:109 defines the live URL proof; no responses exist | NOT RUN |
+| C1 | Linux bundle excludes both runtime families | PyInstaller --clean --noconfirm in fresh temp dist/work, exit 0; the check's find count was 0 | scripts/datapyn.spec:194 filters both patterns; :196-197 filters binaries and datas; .specs/features/linux-installers/checks.md:19 gives the zero-count assertion | PASS |
+| C2 | Full packaging rejects both runtime families, exact stderr, removes seven versioned outputs | P: test_bundled_host_runtime_library_blocks_packaging, four cases passed | tests/test_linux_package_plan.py:109 names canonical and wildcard suffix cases; :134-140 asserts exit 1, exact path message, and seven absent files | PASS |
+| C3 | AppImage-only rejects both runtime families, exact stderr, removes stale versioned AppImage | P: test_bundled_host_runtime_library_blocks_appimage, four cases passed | tests/test_linux_appimage.py:36 names four cases; :63-68 asserts exit 1, exact path message, and absence | PASS |
+| C4 | Other shared libraries pass the runtime gate | P: test_host_runtime_gate_allows_other_libraries passed | tests/test_linux_appimage.py:75-76 seeds libssl and libz; :95-97 asserts the later tool error and absence of gate error | PASS |
+| C5 | Ubuntu 22.04 FUSE3 CI smoke succeeds | NOT RUN: no branch workflow result or network access here | no result; .specs/features/linux-installers/checks.md:34-35 defines the CI proof | NOT RUN |
+| C6 | User's Arch/Mesa AppImage remains alive for 30 seconds without two named errors | NOT RUN: the user's host launch result has not been supplied | no result; .specs/features/linux-installers/checks.md:37-38 defines the host proof | NOT RUN |
+| C7 | Linux release list has seven exact ordered names | P: test_release_asset_list_contains_versioned_metadata_set passed | tests/test_linux_release_manifest.py:23-38 defines seven values; :92 asserts exact tuple equality | PASS |
+| C8 | Full successful packaging leaves and lists exactly seven versioned names, even after stale aliases | P: test_full_package_run_writes_versioned_names_only passed | tests/test_linux_package_plan.py:164-165 seeds all five aliases; :206-213 asserts exit 0, exact Created tuple and output set | PASS |
+| C9 | AppImage-only successful packaging leaves only the versioned AppImage name | P: test_appimage_only_writes_versioned_name_only passed | tests/test_linux_appimage.py:108 seeds stale alias; :139-144 asserts exit 0, exact Created tuple, versioned file, absent alias | PASS |
+| C10 | Print-plan has exactly five versioned keys and values | P: test_artifact_plan_has_only_versioned_names passed | tests/test_linux_package_plan.py:38-45 asserts the exact mapping and excludes stable keys | PASS |
+| C11 | AppImage metadata has twelve exact values and no alias key | P: test_appimage_metadata_declares_portable_x86_64_fuse3_contract passed | tests/test_linux_appimage.py:152-167 asserts exact mapping, count 12 and absent alias key | PASS |
+| C12 | Five versioned fixtures without aliases validate | P: test_manifest_and_checksums_describe_complete_fixture passed | tests/test_linux_release_manifest.py:71-75 seeds only five versioned files; :131-132 asserts validation exit 0 | PASS |
+| C13 | Manifest schema, five exact nine-key entries, and five checksum lines | P: same fixture test passed | tests/test_linux_release_manifest.py:108 asserts schema 1; :113-116 asserts five entries and keys; :119-128 asserts five filenames and digests | PASS |
+| C14 | Both Linux workflow uploads derive exclusively from the printed seven-name list and contain no alias literal | P: test_workflows_share_versioned_assets_and_dry_run_never_publishes passed | tests/test_linux_release_manifest.py:304-317 pins each entire generator recipe; :319-332 pins upload fields and excludes five literals | PASS |
+| C15 | README Linux names match the manifest and all listed install commands use versioned names | P: test_documented_linux_filenames_exist_in_generated_manifest and test_readme_install_commands_use_versioned_names passed | tests/test_linux_documentation.py:77 asserts exact name set; :111-115 and :117-124 assert command and launch lines | PASS |
+| C16 | Windows upload list is exactly ZIP plus unversioned setup and creates no versioned setup | P: test_windows_release_uploads_single_setup passed | tests/test_release_assets.py:195-200 asserts parsed list equality and excludes versioned setup in all job steps | PASS |
+| C17 | Windows updater chooses unversioned setup asset | P: test_fetch_latest_release_picks_unversioned_setup passed | tests/test_windows_installer.py:54-68 supplies the two assets; :81-85 asserts selected setup name | PASS |
+| C18 | Installer release section names exact Windows and Linux sets | P: test_installer_readme_lists_versioned_assets_only passed | tests/test_release_assets.py:210-216 parses the section and asserts both exact sets | PASS |
+| C19 | macOS successful packaging removes stale alias and writes versioned DMG | P: test_macos_dmg_package_writes_versioned_name_only passed | tests/test_release_assets.py:232 seeds stale alias; :251-253 asserts exit 0, versioned DMG and absent alias | PASS |
+| C20 | macOS upload list is exactly one versioned DMG | P: test_macos_release_uploads_versioned_dmg_only passed | tests/test_release_assets.py:287-289 asserts exact parsed list | PASS |
+| C21 | Both docs name versioned DMG and omit alias | P: test_docs_name_versioned_dmg_only passed | tests/test_release_assets.py:295-298 asserts both versioned spellings and both alias absences | PASS |
+| C22 | First post-change release returns ten 200s and seven 404s | NOT RUN: no post-change release or network access here | no responses; .specs/features/linux-installers/checks.md:109-110 defines 17 live requests | NOT RUN |
 
 ## Coverage
 
-Recomputed from the plan's Landing, Surface and criteria, the current code and the named assertions. .specs/features/linux-installers/plan.md:75 explicitly allows stale local aliases, while criteria 7, 8 and 18 state unconditional absence; those rows remain open pending a single agreed interpretation.
+Recomputed from plan.md Landing, Surface and criteria; current code and workflows; and the assertions above. The checks.md Coverage table still says three Landing doors at :129, while the plan now has four at plan.md:201-204. Door 4 is substantively covered by C8, C9 and C19, but the join's declared size needs updating. The later plan decision at :76 explicitly overrides the stale-alias assumption at :75 for successful builds.
 
 | Set (size) | Recomputed from | Member -> proof | Unproven |
 | --- | --- | --- | --- |
-| Runtime name families (2) | plan.md:89-:91; scripts/linux/package.sh:529-:530 | libstdc++.so* C1-C3; libgcc_s.so* C1-C3 | C2/C3 exercise only .so.6 and .so.1; other suffixes have no asserted case |
-| Runtime gate entry points (2) | scripts/linux/package.sh:960, :1003 | full C2; AppImage-only C3 | - |
-| Runtime gate outcomes (2) | scripts/linux/package.sh:523 | reject C2/C3; unrelated library C4 | - |
-| Runtime hosts (2) | plan.md:92-:93 | Ubuntu floor C5; Arch/Mesa C6 | both not run |
-| Removed Linux aliases (5) | plan.md:201; scripts/linux/package.sh:704 | all five absent from C7 upload list; clean output C8; AppImage C9 | all five can remain locally on rerun, conflicting with C8/C9's unconditional absence |
-| Linux release assets (7) | scripts/linux/release_metadata.py:114 | all seven in order C7 | - |
-| Package output forms (5) | scripts/linux/package.sh:215, :226, :392, :960, :1003 | asset list C7; full C8; AppImage C9; plan C10; metadata C11 | stale-alias cases of C8/C9 |
-| Metadata files (2) | scripts/linux/release_metadata.py:117-:120 | manifest and checksum C13 | - |
-| Linux workflow consumers (2) | .github/workflows/release.yml:372-:394; .github/workflows/release-linux.yml:158-:171 | both upload fields C14 | step-body exclusivity not asserted by C14 |
-| Platform uploads (3) | plan.md:201-:202 | Linux C7/C14; Windows C16; macOS C20 | Linux step-body exclusivity C14 |
-| Documentation placements (5) | plan.md:160-:164 | README Linux C15/macOS C21; installer Windows/Linux C18/macOS C21 | - |
-| Release URL outcomes (17 names) | plan.md:194 | ten 200s and seven 404s C22 | all 17 live responses not run |
-| Metadata validation branches (2) | scripts/linux/release_metadata.py:160-:163 | missing file: test_missing_artifact_blocks_metadata_generation passed | empty file has no named assertion |
-| macOS input branches (2) | scripts/macos/package_dmg.sh:10-:14 | app present C19 | missing app has no named assertion; stale alias outcome fails C19 |
-| Landing doors (3) | plan.md:200-:202 | host runtime C1-C4; naming C7/C16; macOS C19/C20 | C5/C6, local alias absence and C14 remain open |
+| Host runtime filename families (2) | plan.md:90-92; scripts/linux/package.sh:530-544 | libstdc++.so* and libgcc_s.so*: C1, C2, C3, each canonical and alternate suffix | - |
+| Runtime gate entry points and outcomes (2 each) | scripts/linux/package.sh:968-984, :1011-1028 | full C2; AppImage C3; reject C2/C3; unrelated libraries C4 | - |
+| Host runtime floors (2) | plan.md:93-94 | Ubuntu 22.04 C5; Arch/Mesa C6 | C5 and C6 not run |
+| Removed Linux aliases (5) | plan.md:103-104; scripts/linux/package.sh:19-25 | all five seeded and absent C8; AppImage alias also C9 | - |
+| Linux release names (7) and output modes (5) | plan.md:102-108; scripts/linux/release_metadata.py:114-121 | seven ordered C7; full C8; AppImage C9; plan C10; metadata C11 | - |
+| Metadata entry keys (9), entries (5), checksum lines (5) | plan.md:108; scripts/linux/release_metadata.py:65-107 | all three exact sets C13; validation C12 | - |
+| Linux workflow consumers (2) | .github/workflows/release.yml:372-394; .github/workflows/release-linux.yml:158-171 | complete generator and upload paths in both C14 | - |
+| Platform release upload lists (3) | plan.md:202-203; current workflows | Linux C7/C14; Windows C16; macOS C20 | - |
+| Documentation placements (5) | plan.md:161-164 | README Linux C15/macOS C21; installer Windows/Linux C18/macOS C21 | - |
+| Metadata validation branches (2) | scripts/linux/release_metadata.py:158-164 | missing and empty artifact: test_missing_artifact_blocks_metadata_generation[False/True], both passed | - |
+| Print entry modes (3 times accepted/missing/invalid) | scripts/linux/package.sh:216-258, :996-1000; checks.md:145 | accepted C7/C10/C11; missing and invalid: test_print_commands_reject_missing_and_invalid_versions, all three cases passed | - |
+| Full and AppImage argument modes (2 times accepted/missing/invalid) | scripts/linux/package.sh:968-975, :1011-1017; checks.md:145 | accepted C8/C9; missing bundle and tool failures also tested | missing and invalid version for both modes lack test assertions |
+| macOS app input branches (2) | scripts/macos/package_dmg.sh:10-17 | present C19; missing test_macos_dmg_package_rejects_missing_app passed | - |
+| Release URL outcomes (10 published, 7 removed) | plan.md:193-195 | 200 and 404 sets C22 | all 17 live responses not run |
+| Landing doors (4) | plan.md:201-204 | host runtime C1-C4; public naming C7/C16; macOS naming C19/C20; stale alias cleanup C8/C9/C19 | door 1's host evidence C5/C6 pending |
 
 ## Test policy rows
 
 | Row | Files it classifies | Required proof | Expectation met |
 | --- | --- | --- | --- |
-| Decides, reached across a boundary | scripts/linux/package.sh runtime gate | both entries, both wildcard families and unrelated input | no - C2/C3 use only canonical suffixes; wildcard coverage is not asserted |
-| Decides, reached across a boundary | scripts/linux/release_metadata.py artifact validation | accepted, missing and empty files at the command boundary | no - C12 and missing-file test passed; empty-file rejection has no named assertion (scripts/linux/release_metadata.py:162) |
-| Entry point that decides nothing | scripts/linux/package.sh main, print-plan, print-metadata | accepted and rejected inputs/error paths | no - C8-C11 cover accepted paths; missing/invalid version for print entry points is not asserted |
-| Entry point that decides nothing | scripts/macos/package_dmg.sh | app present and missing-app error | no - C19 covers present only; missing-app path at scripts/macos/package_dmg.sh:11 is untested |
-| Declarative upload lists | both Linux workflows, Windows and macOS release jobs | exact parsed lists and exclusive Linux asset-list derivation | no - C16/C20 are exact; C14 does not constrain extra lines inside the generating step |
-| Instrumentation, pass-throughs | release_asset_filenames | consumer proof | yes - C7 pins seven ordered names |
+| Decides, reached across a boundary | Linux runtime gate | both entry points, both wildcard families, accepted unrelated libraries at the script boundary | yes: C2-C4, including four suffix cases per rejecting entry |
+| Decides, reached across a boundary | release_metadata.py artifact validation | accepted, missing and empty artifacts | yes: C12 and both test_missing_artifact_blocks_metadata_generation cases |
+| Entry point that decides nothing | package.sh print-release-assets, print-plan, print-appimage-metadata | accepted, missing and invalid version at the command boundary | yes: C7/C10/C11 and test_print_commands_reject_missing_and_invalid_versions |
+| Entry point that decides nothing | package.sh full and --appimage-only modes | accepted, each rejected input and error path at the command boundary | no: C8/C9 cover accepted, C2-C4 cover runtime and tool errors, but missing and invalid versions at scripts/linux/package.sh:968-975 and :1011-1017 have no asserted test |
+| Entry point that decides nothing | macOS package_dmg.sh | present app and missing-app error at script boundary | yes: C19 and test_macos_dmg_package_rejects_missing_app |
+| Declarative upload lists | both Linux workflows, Windows and macOS release jobs | exact parsed lists and exclusive Linux generator recipe | yes: C14, C16, C20 |
+| Instrumentation, pass-throughs | release_asset_filenames | consumer proof | yes: C7 |
 
 ## Swept existing
 
-scripts/linux/package.sh:704 now runs before runtime refusal at :976 and :1020, so C2/C3 remove stale versioned outputs as required. It deliberately does not remove legacy aliases, matching the approved stale-output assumption at plan.md:75. scripts/macos/package_dmg.sh:17 still rewrites only the versioned DMG. Authorization, concurrency, data lifecycle and state transitions remain the approved n/a policies in checks.md:165-:170. The missing-bundle analogue at tests/test_linux_package_plan.py:81 ran and passed.
+The full and AppImage branches call cleanup_outputs before refusing a runtime file (scripts/linux/package.sh:983-984, :1027-1028), and cleanup_outputs removes the seven versioned outputs and five known aliases (:711-723). The macOS script removes the known alias before writing (:17). The missing-bundle analogue at tests/test_linux_package_plan.py:81-94 passed. Authorization, concurrency, data lifecycle and state transitions remain the approved n/a policies at checks.md:166-170. No user-facing interaction walk applies.
 
 ## Faults injected
 
-All five faults were applied one at a time in detached scratch worktree /tmp/datapyn-verify-7f14b02-round2 at 7f14b02, never in the real tree. Each tracked file was restored before the next fault; the scratch worktree was removed and the real tree's porcelain matched its initial empty baseline. Initial scratch pytest attempts without the headless Qt environment were inconclusive; the rows below are the repeated runs with that environment set.
+Baseline real-tree git status --porcelain was empty. All five behavior faults were applied one at a time in detached scratch worktree /tmp/datapyn-verify-linux-0031638 at 0031638, with each tracked file restored before the next. The scratch worktree was removed; real-tree porcelain matched its empty baseline.
 
-| Mutation | Location | Covering proof result | Killed |
+| Mutation | Location | Narrow covering proof result | Killed |
 | --- | --- | --- | --- |
-| Disable Linux PyInstaller filter | scripts/datapyn.spec:191 | rebuilt bundle contained both _internal/libstdc++.so.6 and _internal/libgcc_s.so.1; C1 zero-count assertion failed | yes |
-| Move full-build cleanup after runtime refusal | scripts/linux/package.sh:1018 | C2: 2 failed | yes |
-| Move AppImage-only cleanup after runtime refusal | scripts/linux/package.sh:974 | C3: 2 failed | yes |
-| Add stray-linux.tar.gz to Linux release upload field | .github/workflows/release.yml:394 | C14: 1 failed | yes |
-| Add sixth Linux filename to installer release section | installer/README.md:38 | C18: 1 failed | yes |
+| Disable Linux PyInstaller filter | scripts/datapyn.spec:191 | fresh mutant bundle contained libstdc++.so.6 and libgcc_s.so.1; C1 zero-count assertion exited 1 | yes |
+| Miss recursive libgcc_s.so* names | scripts/linux/package.sh:537 | C2 libgcc_s.so.1 and .fixture cases failed on exact stderr (2 failed) | yes |
+| Omit all known alias names from cleanup_outputs | scripts/linux/package.sh:720 | C8 failed exact output-set assertion with five extra aliases | yes |
+| Insert an extra name inside Linux release_assets generator | .github/workflows/release.yml:378 | C14 failed exact generator-recipe assertion | yes |
+| Stop deleting stale macOS alias | scripts/macos/package_dmg.sh:17 | C19 failed absent-alias assertion | yes |
 
 ## Ranked findings
 
-1. **C8/C9/C19, plan-check conflict and counterexamples:** plan.md:75 approves ignoring stale local aliases, yet plan.md:102-:103, :127 and the checks demand none remain. Direct successful reruns left all five Linux aliases or the macOS alias. Resolve whether the approved stale-output exception limits those criteria; align the checks and proof fixtures with that decision, or make packaging remove aliases.
-2. **C14, proof gap:** tests/test_linux_release_manifest.py:301-:303 assert substrings in the asset-list step. They do not exclude an extra echo between the printed-list command and the heredoc terminator, so the plan's “only from --print-release-assets” promise is not proven. Assert the complete step recipe or its produced list.
-3. **C2/C3, wildcard coverage:** tests/test_linux_package_plan.py:107 and tests/test_linux_appimage.py:34 only seed the canonical .so.6/.so.1 suffixes. The approved libstdc++.so* / libgcc_s.so* promise has no proof for other suffixes.
-4. **Test policy gaps:** scripts/linux/release_metadata.py:162 empty-artifact rejection, invalid/missing versions on print entry points, and scripts/macos/package_dmg.sh:11 missing-app rejection lack the asserted branch proofs required by checks.md:141-:155.
-5. **C5/C6/C22, external proofs pending:** run the authorized CI smoke, the user's Arch/Mesa smoke, and the 17 URL requests after the corresponding artifact or release exists. None is a PASS here.
+1. C5, C6 and C22 remain NOT RUN. Obtain the authorized CI FUSE3 workflow result, the user's Arch/Mesa 30-second launch result, and the 17 live URL responses after the first release. No local assertion substitutes for these proofs.
+2. The approved entry-point Test policy at checks.md:145 is unmet for full and AppImage packaging: tests assert no missing/invalid version outcome for scripts/linux/package.sh:968-975 and :1011-1017. Add boundary assertions for both rejected inputs in both modes; keep the existing accepted/error-path proofs.
+3. The Coverage join says three Landing doors (checks.md:129), but plan.md:204 added a fourth. Map door 4 to the already passing C8, C9 and C19 proofs in that join so the approved artifact reflects its authority.
 
 ## Gate
 
-env -u QT_QPA_PLATFORMTHEME QT_QPA_PLATFORM=offscreen QTWEBENGINE_DISABLE_SANDBOX=1 QTWEBENGINE_CHROMIUM_FLAGS=--no-sandbox UV_CACHE_DIR=/tmp/datapyn-verifier-uv uv run --no-sync pytest -vv <six test files> -k <18 named selectors plus two policy selectors>: 22 passed, 57 deselected, exit 0. The separate PyInstaller build and zero-count assertion exited 0. git diff --check 87e28b7..7f14b02 exited 0.
-
-python3 ~/.claude/skills/tlc-spec-lean/scripts/validate_verification.py --root <worktree> linux-installers: exit 1 because this honest FAIL verdict cannot pass the completion gate; no PASS is claimed.
+At 0031638, the HEAD six-file pytest run: 84 passed, 4 skipped, exit 0. The fresh --clean --noconfirm PyInstaller build to a temp dist/work directory: exit 0, runtime-family file count 0. git diff --check 87e28b7..0031638: exit 0. The five mutant proofs failed as intended. validate_verification.py --root <worktree> linux-installers: exit 1 is expected for this honest FAIL verdict; the feature cannot pass the completion gate while C5, C6 and C22 are not run and the Test policy row is unmet.
