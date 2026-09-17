@@ -536,11 +536,28 @@ check_toolchain() {
   require_command python3 "Linux release metadata"
 }
 
+refuse_bundled_host_runtime() {
+  local match=""
+  local relative
+
+  while IFS= read -r -d '' path; do
+    match="$path"
+    break
+  done < <(find "$DIST_DIR" \( -name 'libstdc++.so*' -o -name 'libgcc_s.so*' \) -print0)
+
+  if [[ -n "$match" ]]; then
+    relative="${match#"$DIST_DIR"/}"
+    echo "error: dist/DataPyn must not bundle host runtime library: $relative" >&2
+    return 1
+  fi
+}
+
 stage_payload() {
   if [[ ! -d "$DIST_DIR" ]]; then
     echo "error: dist/DataPyn not found. Run PyInstaller first." >&2
     return 1
   fi
+  refuse_bundled_host_runtime
 
   rm -rf "$STAGE_DIR"
   mkdir -p \
@@ -985,8 +1002,8 @@ main() {
     trap cleanup_on_error EXIT
     mkdir -p "$OUTPUT_DIR"
     cleanup_outputs
-    check_appimage_toolchain
     stage_payload
+    check_appimage_toolchain
     build_appimage
     copy_stable_alias "$APPIMAGE_VERSIONED" "$APPIMAGE_STABLE"
     trap - EXIT
@@ -1029,9 +1046,9 @@ main() {
   trap cleanup_on_error EXIT
   mkdir -p "$OUTPUT_DIR"
   cleanup_outputs
+  stage_payload
   check_toolchain
   check_appimage_toolchain
-  stage_payload
 
   build_appimage
 

@@ -31,6 +31,65 @@ def run_package(*args: str, env: dict[str, str] | None = None) -> subprocess.Com
     )
 
 
+@pytest.mark.parametrize("library", ("libstdc++.so.6", "libgcc_s.so.1"))
+def test_bundled_host_runtime_library_blocks_appimage(tmp_path: Path, library: str) -> None:
+    dist_dir = tmp_path / "dist" / "DataPyn"
+    internal = dist_dir / "_internal"
+    internal.mkdir(parents=True)
+    (internal / library).write_bytes(b"dummy-host-runtime")
+    executable = dist_dir / "DataPyn"
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o755)
+    output_dir = tmp_path / "output"
+
+    result = run_package(
+        "--appimage-only",
+        "1.57.0",
+        env={
+            "DATAPYN_PACKAGE_DIST_DIR": str(dist_dir),
+            "DATAPYN_PACKAGE_OUTPUT_DIR": str(output_dir),
+            "DATAPYN_PACKAGE_STAGE_DIR": str(tmp_path / "pkg"),
+            "DATAPYN_PACKAGE_APPDIR": str(tmp_path / "AppDir"),
+        },
+    )
+
+    assert result.returncode == 1
+    assert (
+        result.stderr.strip()
+        == f"error: dist/DataPyn must not bundle host runtime library: _internal/{library}"
+    )
+    assert not (output_dir / "DataPyn-1.57.0-x86_64.AppImage").exists()
+
+
+def test_host_runtime_gate_allows_other_libraries(tmp_path: Path) -> None:
+    dist_dir = tmp_path / "dist" / "DataPyn"
+    internal = dist_dir / "_internal"
+    internal.mkdir(parents=True)
+    (internal / "libssl.so.3").write_bytes(b"dummy-ssl")
+    (internal / "libz.so.1").write_bytes(b"dummy-z")
+    executable = dist_dir / "DataPyn"
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o755)
+    output_dir = tmp_path / "output"
+    missing_tool = tmp_path / "missing-appimagetool"
+
+    result = run_package(
+        "--appimage-only",
+        "1.57.0",
+        env={
+            "DATAPYN_PACKAGE_DIST_DIR": str(dist_dir),
+            "DATAPYN_PACKAGE_OUTPUT_DIR": str(output_dir),
+            "DATAPYN_PACKAGE_STAGE_DIR": str(tmp_path / "pkg"),
+            "DATAPYN_PACKAGE_APPDIR": str(tmp_path / "AppDir"),
+            "DATAPYN_APPIMAGE_TOOL": str(missing_tool),
+        },
+    )
+
+    assert result.returncode == 1
+    assert "pinned AppImage builder is unavailable" in result.stderr
+    assert "must not bundle host runtime library" not in result.stderr
+
+
 def test_appimage_metadata_declares_portable_x86_64_fuse3_contract() -> None:
     result = run_package("--print-appimage-metadata", "1.57.0")
 

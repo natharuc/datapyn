@@ -17,15 +17,19 @@ beside it, written from this file, never from the implementation.
 
 **C1** - A Linux PyInstaller build of `scripts/datapyn.spec` yields a `dist/DataPyn` with 0 files named `libstdc++.so*` and 0 named `libgcc_s.so*` (LINUX-01, AC 1)
 Proof: `uv run pyinstaller scripts/datapyn.spec --clean && test "$(find dist/DataPyn \( -name 'libstdc++.so*' -o -name 'libgcc_s.so*' \) | wc -l)" -eq 0`
+Closed.
 
 **C2** - `package.sh 1.57.0` over a fixture `dist/DataPyn` holding `_internal/libstdc++.so.6` (and, second case, `_internal/libgcc_s.so.1`) exits `1`, stderr is exactly `error: dist/DataPyn must not bundle host runtime library: _internal/<name>`, and the output directory holds none of the 5 versioned artifacts, `DataPyn-linux-artifacts.json` or `SHA256SUMS` (LINUX-01, AC 2)
 Proof: `uv run pytest tests/test_linux_package_plan.py -k "bundled_host_runtime_library_blocks_packaging"`
+Closed.
 
 **C3** - `package.sh --appimage-only 1.57.0` over the same two fixtures exits `1` with the same exact stderr line and leaves no `DataPyn-1.57.0-x86_64.AppImage` in the output directory (LINUX-01, AC 3)
 Proof: `uv run pytest tests/test_linux_appimage.py -k "bundled_host_runtime_library_blocks_appimage"`
+Closed.
 
 **C4** - A fixture `dist/DataPyn` holding `_internal/libssl.so.3` and `_internal/libz.so.1` passes the runtime-library gate: `package.sh --appimage-only 1.57.0` with `DATAPYN_APPIMAGE_TOOL` pointing at a missing file fails on `pinned AppImage builder is unavailable` and its stderr does not contain `must not bundle host runtime library` (LINUX-01, AC 2)
 Proof: `uv run pytest tests/test_linux_appimage.py -k "host_runtime_gate_allows_other_libraries"`
+Closed.
 
 **C5** - The AppImage built from this branch passes the FUSE3 smoke in the `ubuntu:22.04` container: `scripts/linux/run_fuse3_smoke_container.sh <version>` exits `0` (LINUX-01, AC 4)
 Proof: `gh workflow run release-linux.yml --ref fix/linux-app -f dry_run=true` then the job step `Verify | Run AppImage FUSE3 smoke tests` (`bash scripts/linux/run_fuse3_smoke_container.sh "$DATAPYN_APPIMAGE_VERSION"`) concludes `success`

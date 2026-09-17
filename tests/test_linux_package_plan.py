@@ -98,6 +98,46 @@ def test_missing_bundle_fails_with_existing_message_and_no_outputs(tmp_path: Pat
     assert not output_dir.exists()
 
 
+VERSIONED_ARTIFACTS = (
+    "datapyn_1.57.0_amd64.deb",
+    "datapyn-1.57.0-1.x86_64.rpm",
+    "datapyn-1.57.0-1-x86_64.pkg.tar.zst",
+    "DataPyn-1.57.0-x86_64.AppImage",
+    "DataPyn-1.57.0-linux-x86_64.tar.gz",
+)
+RELEASE_METADATA = ("DataPyn-linux-artifacts.json", "SHA256SUMS")
+
+
+@pytest.mark.parametrize("library", ("libstdc++.so.6", "libgcc_s.so.1"))
+def test_bundled_host_runtime_library_blocks_packaging(tmp_path: Path, library: str) -> None:
+    dist_dir = tmp_path / "dist" / "DataPyn"
+    internal = dist_dir / "_internal"
+    internal.mkdir(parents=True)
+    (internal / library).write_bytes(b"dummy-host-runtime")
+    executable = dist_dir / "DataPyn"
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o755)
+    output_dir = tmp_path / "output"
+
+    result = run_package(
+        "1.57.0",
+        env={
+            "DATAPYN_PACKAGE_DIST_DIR": str(dist_dir),
+            "DATAPYN_PACKAGE_OUTPUT_DIR": str(output_dir),
+            "DATAPYN_PACKAGE_STAGE_DIR": str(tmp_path / "pkg"),
+            "DATAPYN_PACKAGE_APPDIR": str(tmp_path / "AppDir"),
+        },
+    )
+
+    assert result.returncode == 1
+    assert (
+        result.stderr.strip()
+        == f"error: dist/DataPyn must not bundle host runtime library: _internal/{library}"
+    )
+    for filename in (*VERSIONED_ARTIFACTS, *RELEASE_METADATA):
+        assert not (output_dir / filename).exists(), filename
+
+
 @pytest.mark.parametrize(
     ("family", "required", "recommended"),
     (
