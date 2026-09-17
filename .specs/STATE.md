@@ -10,9 +10,9 @@
 ## Handoff
 
 **Feature**: linux-installers
-**Where**: BUILD complete for C1-C4 and C7-C21 at `71f7db894edb6f67fa910e063939c4c690f5c54a`. C5, C6, C22 pending external actions.
+**Where**: BUILD fix round complete for C2/C3/C14/C18 at `c9e903190f57763b23d2e3c774144bac362569a7`; the named proofs and six-file packaging suite passed (75 passed, 4 skipped). C5, C6, C22 pending external actions.
 **In progress**: none
-**Next step**: VERIFY over `ee07590..HEAD` with every check. Release role: push `fix/linux-app` and dispatch `release-linux.yml` dry-run (C5). User: Arch/Mesa 26 host smoke (C6). After first release: C22 download-URL proof.
+**Next step**: Independent VERIFY over `ee07590..HEAD` with every check; re-evaluate C2/C3/C14/C18 and retain the external C5/C6/C22 status. Release role: push `fix/linux-app` and dispatch `release-linux.yml` dry-run (C5). User: Arch/Mesa 26 host smoke (C6). After first release: C22 download-URL proof.
 **Blockers**: none for VERIFY of C1-C4 and C7-C21. Pending: C5 - Release-role push + `release-linux.yml` dry-run; C6 - user host run on Arch/Mesa 26.2.2 with the C5 AppImage; C22 - after the first release built from this change
 **Uncommitted**: none
 **Branch**: fix/linux-app

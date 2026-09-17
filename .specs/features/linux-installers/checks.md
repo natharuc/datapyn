@@ -178,8 +178,8 @@ Intended split, with the arithmetic, written before any code:
 - A builder cannot close C5, C6 or C22 alone: C5 needs the user's go-ahead to push `fix/linux-app` and dispatch `release-linux.yml` (a Release-role action); C6 is run by the user on the Arch/Mesa 26 host with the C5 artifact; C22 runs after the first release built from this change. The builder closes C1-C4 and C7-C21 and reports these three as pending those actions
 - C1 builds locally with PyInstaller on the Arch host; the check asserts only the file set, which does not depend on the host's glibc
 - **Approved:** 2026-09-16 by the user, checks C1-C22 as written, profile `standard`; `Test policy` stays in this file only (not written to repo guidelines). C5 push of `fix/linux-app` and the `release-linux.yml` dry-run dispatch are authorized, to be run by the Release role after the build; C6 is the user's host run; C22 runs after the first release
-- **Next phase:** BUILD
+- **Next phase:** VERIFY
 
-- **Boundary:** C1-C4 closed at `1855005a2965127153f3d01521a53821d4804f0a`; C7-C15 closed at `6b0d2ad43970613e070df283bca71c088af72f54`; C16-C18 closed at `09d94bacd5908a63970c8aefbaeb663441fd0eb5`; C19-C21 closed at `71f7db894edb6f67fa910e063939c4c690f5c54a`. C5, C6, C22 remain pending external actions.
+- **Boundary:** C1-C4 closed at `1855005a2965127153f3d01521a53821d4804f0a`; C7-C15 closed at `6b0d2ad43970613e070df283bca71c088af72f54`; C16-C18 closed at `09d94bacd5908a63970c8aefbaeb663441fd0eb5`; C19-C21 closed at `71f7db894edb6f67fa910e063939c4c690f5c54a`. The C2/C3 stale-output behavior and C14/C18 exact-set proof gaps are fixed at `c9e903190f57763b23d2e3c774144bac362569a7`; their named proofs and the six-file packaging suite passed (75 passed, 4 skipped). C5, C6, C22 remain pending external actions.
 - **Settled mid-build:** none
 - **Abandoned:** none
