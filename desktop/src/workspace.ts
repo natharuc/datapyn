@@ -1,4 +1,6 @@
 import { errorText, isRuntimeEvent, type ExecutionFinished, type Language, type ResultRef, type RuntimeEvent, type RuntimeInfo, type RuntimeTransport, type Variable,type RichOutput } from "./runtime";
+import type { NativeDocumentRecord, NativeWorkspaceState } from "./nativeDrafts";
+import { flushEditorViewStates,restoreEditorViewState, subscribeEditorViewStates } from "./editorRegistry";
 
 export type BlockStatus = "idle" | "queued" | "running" | "cancelling" | "succeeded" | "failed" | "cancelled";
 export interface Block {
@@ -142,8 +144,24 @@ export function applyRuntimeEvent(session: SessionDocument, event: RuntimeEvent)
 }
 
 type Completion = { resolve: (value: ExecutionFinished) => void; reject: (error: unknown) => void; sessionId: string; blockId: string };
-export interface WorkspaceStorage { getItem(key: string): string | null; setItem(key: string, value: string): void }
+export interface WorkspaceStorage { getItem(key: string): string | null; setItem(key: string, value: string): void;removeItem?(key:string):void }
 const STORAGE_KEY = "datapyn.desktop.documents.v1";
+const STORAGE_INDEX_KEY = "datapyn.desktop.documents.v2";
+const storageDocumentKey=(id:string)=>`${STORAGE_INDEX_KEY}.${id}`;
+export interface WorkspaceControllerOptions {nativePersistence?:boolean}
+
+function portableChanged(next:SessionDocument,previous:SessionDocument):boolean {
+  if(next===previous)return false;
+  if(next.extras!==previous.extras||next.savedConnectionId!==previous.savedConnectionId||next.database!==previous.database||next.schema!==previous.schema||next.blocks.length!==previous.blocks.length)return true;
+  if(next.blocks===previous.blocks)return false;
+  return next.blocks.some((block,index)=>{
+    const before=previous.blocks[index];if(block===before)return false;
+    return !before||block.id!==before.id||block.code!==before.code||block.block_name!==before.block_name||block.language!==before.language||block.is_active!==before.is_active||block.height!==before.height||block.collapsed!==before.collapsed||block.connection_id!==before.connection_id||block.database_name!==before.database_name||block.schema!==before.schema||block.sql_parameters!==before.sql_parameters||block.sql_parameters_enabled!==before.sql_parameters_enabled||block.cell_type!==before.cell_type||block.block_key!==before.block_key;
+  });
+}
+function headerChanged(next:SessionDocument,previous:SessionDocument):boolean {
+  return next.id!==previous.id||next.title!==previous.title||next.filePath!==previous.filePath||next.modified!==previous.modified||next.focusedBlockId!==previous.focusedBlockId||next.maximizedBlockId!==previous.maximizedBlockId;
+}
 
 export class WorkspaceController {
   private state: WorkspaceState;
@@ -158,55 +176,128 @@ export class WorkspaceController {
   private readonly cancelRequests = new Set<string>();
   private readonly periodicTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private sharedDelimiter = "{{name}}";
+  private readonly nativeRecords=new Map<string,NativeDocumentRecord>();
+  private readonly nativeSources=new Map<string,SessionDocument>();
+  private readonly editorViews=new Map<string,Record<string,unknown>>();
+  private readonly dirtyBrowserDocuments=new Set<string>();
+  private readonly removedBrowserDocuments=new Set<string>();
+  private readonly blockOwners=new Map<string,string>();
+  private browserMigrationRead=false;
+  private editingLocked=false;
+  setEditingLocked(locked:boolean){this.editingLocked=locked;}
+  isEditingLocked(){return this.editingLocked;}
+  private unsubscribeEditorViews?:()=>void;
   setSharedDelimiter(delimiter: string) { this.sharedDelimiter = delimiter; }
   onQueueFinished?: (session: SessionDocument, success: boolean) => void;
-  nativeSnapshot(): {documents:Array<{title:string;filePath?:string;modified:boolean;sessionId:string;document:Record<string,unknown>}>;activeIndex:number} {
-    return {documents:this.state.sessions.map(s=>({title:s.title,filePath:s.filePath,modified:s.modified,sessionId:s.id,document:encodeDocument(s)})),activeIndex:this.state.sessions.findIndex(s=>s.id === this.state.activeId)};
+  nativeSnapshot():NativeWorkspaceState {
+    flushEditorViewStates();
+    return {documents:this.state.sessions.map(session=>{
+      const cached=this.nativeRecords.get(session.id),source=this.nativeSources.get(session.id),views=this.editorViews.get(session.id);
+      if(cached&&source&&!portableChanged(session,source)&&!headerChanged(session,source)&&cached.editorViewState===views){this.nativeSources.set(session.id,session);return cached;}
+      const document=cached&&source&&!portableChanged(session,source)?cached.document:encodeDocument(session);
+      const ids=session.blocks.map(block=>block.id),blockIds=cached?.blockIds?.length===ids.length&&cached.blockIds.every((id,index)=>id===ids[index])?cached.blockIds:ids;
+      const record:NativeDocumentRecord={...cached,title:session.title,filePath:session.filePath,modified:session.modified,sessionId:session.id,document,blockIds,focusedBlockId:session.focusedBlockId,maximizedBlockId:session.maximizedBlockId,editorViewState:views};
+      this.nativeRecords.set(session.id,record);this.nativeSources.set(session.id,session);return record;
+    }),activeIndex:Math.max(0,this.state.sessions.findIndex(session=>session.id===this.state.activeId))};
   }
-  restoreSnapshot(snapshot: {documents?:Array<{title:string;filePath?:string;modified?:boolean;sessionId?:string;document:Record<string,unknown>}>;activeIndex?:number}) {
+  restoreSnapshot(snapshot: {documents?:NativeDocumentRecord[];activeIndex?:number}) {
     if(this.state.sessions.some(s=>s.busy))throw new Error("Aguarde ou cancele as execuções antes de trocar de workspace.");
     for(const timer of this.periodicTimers.values())clearTimeout(timer);this.periodicTimers.clear();
     this.runtimeGeneration++;this.runtimeSessions.clear();this.creatingSessions.clear();this.cancelRequests.clear();
-    const sessions=(snapshot.documents ?? []).map(entry=>{const s=decodeDocument(entry.document,entry.title,true);s.title=entry.title;s.filePath=entry.filePath;s.modified=entry.modified === true;if(entry.sessionId && /^[A-Za-z0-9_-]{1,128}$/.test(entry.sessionId))s.id=entry.sessionId;return s;});
+    this.nativeRecords.clear();this.nativeSources.clear();this.editorViews.clear();
+    const seenBlocks=new Set<string>(),seenSessions=new Set<string>();
+    const sessions=(snapshot.documents ?? []).map(entry=>{
+      const title=typeof entry.title==="string"?entry.title:"Análise";
+      const s=decodeDocument(entry.document,title,true);s.title=title;s.filePath=typeof entry.filePath==="string"?entry.filePath:undefined;s.modified=entry.modified===true;
+      if(entry.sessionId&&/^[A-Za-z0-9_-]{1,128}$/.test(entry.sessionId))s.id=entry.sessionId;
+      if(seenSessions.has(s.id))s.id=newId();seenSessions.add(s.id);
+      s.blocks=s.blocks.map((block,index)=>{const savedId=entry.blockIds?.[index];if(typeof savedId==="string"&&/^[A-Za-z0-9_-]{1,128}$/.test(savedId)&&!seenBlocks.has(savedId))block={...block,id:savedId};seenBlocks.add(block.id);return block;});
+      if(entry.focusedBlockId&&s.blocks.some(block=>block.id===entry.focusedBlockId))s.focusedBlockId=entry.focusedBlockId;
+      if(entry.maximizedBlockId&&s.blocks.some(block=>block.id===entry.maximizedBlockId))s.maximizedBlockId=entry.maximizedBlockId;
+      if(entry.editorViewState&&typeof entry.editorViewState==="object"){
+        const views:Record<string,unknown>={};for(const block of s.blocks){const saved=entry.editorViewState[block.id];if(saved&&restoreEditorViewState(block.id,saved))views[block.id]=saved;}
+        if(Object.keys(views).length)this.editorViews.set(s.id,views);
+      }
+      this.nativeRecords.set(s.id,{...entry,title:s.title,filePath:s.filePath,sessionId:s.id,editorViewState:this.editorViews.get(s.id)});this.nativeSources.set(s.id,s);return s;
+    });
     if(!sessions.length)sessions.push(newSession());
-    const seen=new Set<string>();sessions.forEach(s=>{if(seen.has(s.id))s.id=newId();seen.add(s.id);});
-    this.setState({...this.state,sessions,activeId:sessions[snapshot.activeIndex ?? 0]?.id ?? sessions[0].id});
+    this.setState({...this.state,sessions,activeId:sessions[snapshot.activeIndex ?? 0]?.id ?? sessions[0].id},true);
   }
 
-  constructor(private readonly transport: RuntimeTransport, private readonly storage?: WorkspaceStorage) {
-    let sessions: SessionDocument[] = [];
-    try {
-      const saved = JSON.parse(storage?.getItem(STORAGE_KEY) ?? "null");
-      if (Array.isArray(saved?.sessions)) sessions = saved.sessions.map((entry: Record<string, unknown>) => {
-        const session = decodeDocument(entry.document, String(entry.title ?? "Análise"), true);
-        session.title = String(entry.title ?? session.title);
-        session.filePath = typeof entry.filePath === "string" ? entry.filePath : undefined;
-        session.modified = entry.modified === true;
-        return session;
-      });
-    } catch { /* An unreadable local draft must not stop startup. */ }
-    if (!sessions.length) sessions = [newSession()];
+  constructor(private readonly transport: RuntimeTransport, private readonly storage?: WorkspaceStorage,private readonly options:WorkspaceControllerOptions={}) {
+    const sessions=[newSession()];
     this.state = { sessions, activeId: sessions[0].id, runtimeStatus: "connecting", message: "Iniciando runtime Python…" };
+    this.state.sessions.forEach(session=>{this.dirtyBrowserDocuments.add(session.id);session.blocks.forEach(block=>this.blockOwners.set(block.id,session.id));});
+    if(!options.nativePersistence){const snapshot=this.readBrowserSnapshot();if(snapshot?.documents){try{this.restoreSnapshot(snapshot);}catch{/* Preserve the unreadable source without blocking preview startup. */}}}
+    this.unsubscribeEditorViews=subscribeEditorViewStates((blockId,view)=>{
+      const sessionId=this.blockOwners.get(blockId);if(!sessionId)return;
+      const before=this.editorViews.get(sessionId)??{};
+      this.editorViews.set(sessionId,{...before,[blockId]:view});this.dirtyBrowserDocuments.add(sessionId);
+      this.state={...this.state,documentRevision:(this.state.documentRevision??0)+1};this.listeners.forEach(listener=>listener());
+      if(!this.options.nativePersistence&&this.storage){clearTimeout(this.persistTimer);this.persistTimer=setTimeout(()=>this.persist(),500);}
+    });
   }
+
+  private readBrowserSnapshot():({sessions?:Array<Record<string,unknown>>}&Partial<NativeWorkspaceState>)|undefined {
+    try{
+      const index=JSON.parse(this.storage?.getItem(STORAGE_INDEX_KEY)??"null");
+      if(index?.version===2&&Array.isArray(index.order)){
+        const documents=index.order.map((id:unknown)=>typeof id==="string"?JSON.parse(this.storage?.getItem(storageDocumentKey(id))??"null"):null).filter((record:NativeDocumentRecord|null)=>record?.document);
+        return{documents,activeIndex:Math.max(0,documents.findIndex((record:NativeDocumentRecord)=>record.sessionId===index.activeId))};
+      }
+      const old=JSON.parse(this.storage?.getItem(STORAGE_KEY)??"null");
+      if(Array.isArray(old?.sessions))return{documents:old.sessions,activeIndex:old.activeIndex??0,sessions:old.sessions};
+    }catch{/* Preserve an unreadable legacy recovery file and allow startup. */}
+  }
+  /** Read browser recovery only when the native profile has no authoritative state. */
+  restoreBrowserDraftMigration():boolean {
+    if(this.browserMigrationRead)return false;this.browserMigrationRead=true;
+    const saved=this.readBrowserSnapshot();if(!saved?.documents?.length)return false;
+    this.restoreSnapshot({documents:saved.documents,activeIndex:saved.activeIndex});return true;
+  }
+  dispose(){this.unsubscribeEditorViews?.();this.unsubscribeEditorViews=undefined;if(this.persistTimer)clearTimeout(this.persistTimer);for(const timer of this.periodicTimers.values())clearTimeout(timer);this.periodicTimers.clear();}
 
   getSnapshot = () => this.state;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
-  private setState(next: WorkspaceState) {
+  private setState(next: WorkspaceState,restore=false) {
+    const previousById=new Map(this.state.sessions.map(session=>[session.id,session]));
     const changed = next.sessions.length !== this.state.sessions.length || next.activeId !== this.state.activeId || next.sessions.some((s,i)=>{
       const before=this.state.sessions[i];if(!before)return true;
-      if(s.id !== before.id || s.title !== before.title || s.filePath !== before.filePath || s.modified !== before.modified || s.extras !== before.extras || s.savedConnectionId !== before.savedConnectionId || s.database !== before.database || s.schema !== before.schema || s.focusedBlockId !== before.focusedBlockId || s.blocks.length !== before.blocks.length)return true;
-      return s.blocks.some((b,index)=>{const old=before.blocks[index];return !old || b.id !== old.id || b.code !== old.code || b.block_name !== old.block_name || b.language !== old.language || b.is_active !== old.is_active || b.height !== old.height || b.collapsed !== old.collapsed || b.connection_id !== old.connection_id || b.database_name !== old.database_name || b.schema !== old.schema || b.sql_parameters !== old.sql_parameters || b.sql_parameters_enabled !== old.sql_parameters_enabled;});
+      if(s===before)return false;
+      return headerChanged(s,before)||portableChanged(s,before);
     });
+    if(this.editingLocked && changed && !restore)return;
     next={...next,documentRevision:(this.state.documentRevision ?? 0)+(changed?1:0)};
     this.state = next;
+    if(changed){
+      for(const session of next.sessions){
+        const before=previousById.get(session.id);previousById.delete(session.id);
+        if(!before||headerChanged(session,before)||portableChanged(session,before))this.dirtyBrowserDocuments.add(session.id);
+        if(before?.blocks!==session.blocks){
+          before?.blocks.forEach(block=>this.blockOwners.delete(block.id));
+          session.blocks.forEach(block=>this.blockOwners.set(block.id,session.id));
+        }
+      }
+      previousById.forEach(session=>{
+        session.blocks.forEach(block=>this.blockOwners.delete(block.id));this.removedBrowserDocuments.add(session.id);this.dirtyBrowserDocuments.delete(session.id);
+        this.nativeRecords.delete(session.id);this.nativeSources.delete(session.id);this.editorViews.delete(session.id);
+      });
+    }
     this.listeners.forEach((listener) => listener());
-    if (this.storage && changed) {
+    if (this.storage && changed&&!this.options.nativePersistence) {
       clearTimeout(this.persistTimer);
       this.persistTimer = setTimeout(() => this.persist(), 500);
     }
   }
   persist() {
-    try { this.storage?.setItem(STORAGE_KEY, JSON.stringify({ sessions: this.state.sessions.map((session) => ({ title: session.title, filePath: session.filePath, modified: session.modified, document: encodeDocument(session) })) })); }
+    if(this.options.nativePersistence||!this.storage)return;
+    if(this.persistTimer){clearTimeout(this.persistTimer);this.persistTimer=undefined;}
+    try {
+      const snapshot=this.nativeSnapshot();
+      for(const record of snapshot.documents){if(!this.dirtyBrowserDocuments.has(record.sessionId!))continue;this.storage.setItem(storageDocumentKey(record.sessionId!),JSON.stringify(record));this.dirtyBrowserDocuments.delete(record.sessionId!);}
+      this.storage.setItem(STORAGE_INDEX_KEY,JSON.stringify({version:2,order:snapshot.documents.map(record=>record.sessionId),activeId:this.state.activeId}));
+      for(const id of this.removedBrowserDocuments){this.storage.removeItem?.(storageDocumentKey(id));this.removedBrowserDocuments.delete(id);}
+    }
     catch {
       // Reporting quota failure must not schedule another failing disk write.
       this.state = { ...this.state, message: "Não foi possível salvar o rascunho local. Salve sua análise como .dpw." };
@@ -407,7 +498,7 @@ export class WorkspaceController {
   async runToFile(sessionId:string,blockId:string,exportOptions:{path:string;format:"csv"|"parquet";options?:Record<string,unknown>},selection?:string) {
     const block=this.session(sessionId)?.blocks.find(b=>b.id === blockId);
     if(!block || block.language !== "sql")throw new Error("O download direto requer um bloco SQL.");
-    await this.runQueue(sessionId,[{...block,code:selection ?? block.code,export:exportOptions}]);
+    return this.runQueue(sessionId,[{...block,code:selection ?? block.code,export:exportOptions}]);
   }
   private async runQueue(sessionId: string, queue: Block[]) {
     const session = this.session(sessionId);
@@ -419,11 +510,13 @@ export class WorkspaceController {
     this.patchSession(sessionId, (session) => ({ ...session, busy: true, executionStartedAt: Date.now(), notice: undefined,
       blocks: session.blocks.map((block) => runnable.some((item) => item.id === block.id) ? { ...block, status: "queued", error: undefined } : block) }));
     let succeeded = true;
+    let completed:ExecutionFinished|undefined;
     try {
       await this.ensureSession(sessionId);
       for (const block of runnable) {
         if (this.cancelRequests.has(sessionId)) {succeeded=false;break;}
         const result = await this.runOne(sessionId, block);
+        completed = result;
         if (result.status !== "succeeded") { succeeded = false; this.message(result.status === "failed" ? "Fila interrompida após erro." : "Execução cancelada."); break; }
       }
     } catch (error) { succeeded = false; this.message(errorText(error)); throw error; }
@@ -434,6 +527,7 @@ export class WorkspaceController {
       this.schedulePeriodic(sessionId);
       const current = this.session(sessionId);if(current) this.onQueueFinished?.(current,succeeded);
     }
+    return completed;
   }
   private async runOne(sessionId: string, block: Block): Promise<ExecutionFinished> {
     const executionId = newId();

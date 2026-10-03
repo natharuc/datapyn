@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from collections import OrderedDict
 import hashlib
 import json
 import os
@@ -14,13 +15,15 @@ import time
 import uuid
 
 from .data_tools import atomic_destination
+from .session_store import SessionStore
 
 METHODS = frozenset({"workspace.profiles.list", "workspace.profiles.create", "workspace.profiles.rename",
                      "workspace.profiles.clone", "workspace.profiles.delete", "workspace.profiles.restore",
-                     "workspace.profiles.select", "workspace.profiles.state", "workspace.profiles.save"})
+                     "workspace.profiles.select", "workspace.profiles.state", "workspace.profiles.save", "workspace.profiles.patch"})
 LOCK = threading.RLock()
+STORES = OrderedDict()
 MAX_STATE_BYTES = 16 * 1024 * 1024
-CONFIG_FILES = ("connections.json", "notifications.json", "snapshot_settings.json")
+CONFIG_FILES = ("connections.json", "notifications.json", "snapshot_settings.json", "configuration_defaults.json")
 
 
 def base_path():
@@ -87,6 +90,25 @@ def _name(value, registry, excluding=None):
     return name
 
 
+def _store(directory):
+    key = str(Path(directory).resolve())
+    if key not in STORES:
+        STORES[key] = SessionStore(directory)
+    STORES.move_to_end(key)
+    while len(STORES) > 8:
+        _, previous = STORES.popitem(last=False)
+        previous.close()
+    return STORES[key]
+
+
+def close_stores():
+    """The supervisor calls this on clean shutdown; SQLite also recovers crashes."""
+    with LOCK:
+        for store in STORES.values():
+            store.close()
+        STORES.clear()
+
+
 def list_profiles(params=None):
     with LOCK:
         registry = _registry()
@@ -116,9 +138,8 @@ def state(params=None):
     with LOCK:
         registry = _registry()
         profile = _profile(registry, (params or {}).get("profile_id"))
-        path = profile_path(profile["id"]) / "workspace_state.json"
-        document = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
-        return {"active_id": registry["active_id"], "profile": _public(profile), "state": document}
+        store = _store(profile_path(profile["id"]))
+        return {"active_id": registry["active_id"], "profile": _public(profile), **store.snapshot()}
 
 
 def _validate_state(value):
@@ -145,9 +166,14 @@ def save(params):
         registry = _registry()
         profile = _profile(registry, params.get("profile_id"))
         document = _validate_state(params.get("state"))
-        document["saved_at"] = time.time()
-        _write(profile_path(profile["id"]) / "workspace_state.json", document)
-        return {"profile_id": profile["id"], "saved_at": document["saved_at"]}
+        return {"profile_id": profile["id"], **_store(profile_path(profile["id"])).save(document)}
+
+
+def patch(params):
+    with LOCK:
+        registry = _registry()
+        profile = _profile(registry, params.get("profile_id"))
+        return {"profile_id": profile["id"], **_store(profile_path(profile["id"])).patch(params)}
 
 
 def select(params):
@@ -155,9 +181,16 @@ def select(params):
     with LOCK:
         registry = _registry()
         profile = _profile(registry, params.get("profile_id"))
+        # Read before changing the registry. A damaged target must not replace
+        # the active profile with an apparently empty workspace.
+        result = state({"profile_id": profile["id"]})
+        previous = STORES.get(str(profile_path(registry["active_id"])))
+        if previous:
+            previous.checkpoint()
         registry["active_id"] = profile["id"]
         _write(base_path() / "workspace_profiles.json", registry)
-        return state({"profile_id": profile["id"]})
+        result["active_id"] = profile["id"]
+        return result
 
 
 def archive(params, restore=False):
@@ -229,6 +262,29 @@ def _clone_snapshots(source, target):
             _write(target_root / session.name / "current.json", {"generation": generation})
 
 
+def _clone_configuration(source, target):
+    """Copy the sanitized explicit-import compatibility store, never legacy dirs."""
+    original = source / ".pyqt-configuration"
+    if not original.is_dir() or original.is_symlink():
+        return
+    files, total = [], 0
+    for file in original.iterdir():
+        if file.is_symlink() or not file.is_file() or file.resolve().parent != original.resolve():
+            continue
+        if file.suffix.lower() not in {".ini", ".json"} or file.name.casefold() in {"notificationsecrets.ini", "workspaces.ini"}:
+            continue
+        size = file.stat().st_size
+        total += size
+        if size > 8 * 1024 * 1024 or total > 32 * 1024 * 1024 or len(files) >= 128:
+            raise ValueError("Imported configuration exceeds clone limits (128 files, 8 MiB each, 32 MiB total)")
+        files.append(file)
+    destination = target / ".pyqt-configuration"
+    destination.mkdir(parents=True, exist_ok=True)
+    for file in files:
+        with atomic_destination(destination / file.name) as temporary:
+            shutil.copy2(file, temporary)
+
+
 def clone(params):
     with LOCK:
         registry = _registry()
@@ -262,10 +318,23 @@ def clone(params):
                 continue
             file = source / name
             if file.is_file() and not file.is_symlink():
-                _write(target / name, json.loads(file.read_text(encoding="utf-8")))
+                if name == "configuration_defaults.json":
+                    # These private defaults contain no catalog IDs to remap.
+                    # Preserve canonical bytes, including LF on Windows.
+                    if file.stat().st_size > MAX_STATE_BYTES:
+                        raise ValueError("Workspace data exceeds 16 MiB")
+                    content = file.read_bytes()
+                    if len(content) > MAX_STATE_BYTES:
+                        raise ValueError("Workspace data exceeds 16 MiB")
+                    json.dumps(json.loads(content.decode("utf-8")), allow_nan=False)
+                    with atomic_destination(target / name) as temporary:
+                        temporary.write_bytes(content)
+                else:
+                    _write(target / name, json.loads(file.read_text(encoding="utf-8")))
         document = state({"profile_id": original["id"]})["state"]
         if document is not None:
-            _write(target / "workspace_state.json", _remap(document, connection_ids, group_ids))
+            _store(target).save(_remap(document, connection_ids, group_ids))
+        _clone_configuration(source, target)
         pynia = source / "pynia"
         if pynia.is_dir() and not pynia.is_symlink():
             for file in pynia.glob("*.json"):
@@ -290,7 +359,7 @@ def dispatch(method, params):
     handlers = {"workspace.profiles.list": list_profiles, "workspace.profiles.create": create,
                 "workspace.profiles.rename": rename, "workspace.profiles.clone": clone,
                 "workspace.profiles.select": select, "workspace.profiles.state": state,
-                "workspace.profiles.save": save}
+                "workspace.profiles.save": save, "workspace.profiles.patch": patch}
     if method in handlers:
         return handlers[method](params)
     if method == "workspace.profiles.delete":

@@ -85,11 +85,14 @@ uv run pytest -c runtime_tests/pytest.ini runtime_tests -q
 uv run python scripts/tauri/check_legacy.py
 uv run python scripts/tauri/smoke_runtime.py
 uv run python scripts/tauri/smoke_parity.py
+uv run python scripts/tauri/smoke_persistence.py
 node scripts/tauri/check.mjs
 npm --prefix desktop run desktop:build -- --no-bundle
 ```
 
-O build desktop recompila o sidecar e executa os dois smokes com estado temporário. O segundo smoke passa pelo catálogo SQLite, SQL → Python, Explorer/autocomplete, parâmetros, resumo/seleções, cinco formatos de exportação, Excel import, gráficos PNG/JPEG/HTML/JSON, rich outputs, snapshot/restart, precisão de Decimal em streaming, drivers importados e uma tabela de um milhão de linhas com paginação e filtro/sort. Ele verifica a ausência de Qt no kernel e emite tempos locais; esses tempos não substituem benchmark em produção. Não instala pacotes nem autentica agentes/serviços externos.
+O build desktop recompila o sidecar e executa três smokes com estado temporário. O segundo smoke passa pelo catálogo SQLite, SQL → Python, Explorer/autocomplete, parâmetros, resumo/seleções, cinco formatos de exportação, Excel import, gráficos PNG/JPEG/HTML/JSON, rich outputs, snapshot/restart, precisão de Decimal em streaming, drivers importados e uma tabela de um milhão de linhas com paginação e filtro/sort. O terceiro verifica configurações legadas, migração de sessões, patches incrementais e restauração de 121 análises após encerramento abrupto. Eles verificam a ausência de Qt no kernel e emitem tempos locais; esses tempos não substituem benchmark em produção. Não instalam pacotes nem autenticam agentes/serviços externos.
+
+Os contratos e limites estão em [configurações PyQt6/Tauri](TAURI_CONFIGURATION_COMPATIBILITY.md) e [persistência das sessões](TAURI_SESSION_PERSISTENCE.md). O JSON público conserva o formato legado; o armazenamento privado usa SQLite e restaura o estado ao abrir o aplicativo.
 
 `check_legacy.py` usa as exclusões da suíte CI do PyQt e instala, antes da coleta, QSettings INI em diretório temporário e um keyring em memória. O construtor Qt `QSettings(organization, application)` usa o formato nativo mesmo após `setDefaultFormat`, por isso o runner também adapta esse overload. Nenhuma configuração ou credencial do desktop deve servir como fixture de teste.
 
@@ -123,18 +126,19 @@ A referência funcional foi confrontada com 114 comportamentos e os atalhos comp
 Em Windows, em 3 de outubro de 2026, foram verificados:
 
 - 1.700 testes da suíte CI do legado, com QSettings INI temporário e keyring em memória.
-- 213 testes do runtime sem Qt, incluindo processos reais, cancelamento, streaming, snapshots, precisão e recuperação do serviço de linguagem.
-- 115 testes em 22 arquivos do frontend, incluindo foco/documentos destacados, patch da grade, clipboard, formatos, conexões, editor, documentos e atalhos.
+- 291 testes do runtime e compatibilidade, incluindo processos reais, cancelamento, streaming, snapshots, precisão, configurações reais do PyQt6 e recuperação incremental. O runtime permanece sem Qt; os testes de compatibilidade usam o codec legado isoladamente.
+- 138 testes em 23 arquivos do frontend, incluindo foco/documentos destacados, patch da grade, clipboard, formatos, conexões, editor, documentos, atalhos, defaults importados e persistência incremental.
 - Cargo fmt/check e seis testes Rust do transporte, encerramento, whitelist, updater e origens dos pop-outs.
 - TypeScript/Vite e npm ci com patch versionado da grade; npm audit sem vulnerabilidades na rodada local.
 - SQL → DataFrame → Python, duas sessões e cancelamento com limpeza dos subprocessos, tanto no source como no sidecar congelado.
 - O smoke avançado também percorre catálogo SQLite, Explorer, SQL/Jedi/Ruff, parâmetros, seleções, imports/exports, gráficos/rich outputs, snapshots, precisão Decimal e paginação de um milhão de linhas. Não utiliza autenticação externa nem instala pacotes.
+- O smoke de persistência congelado restaurou 121 análises após kill/restart e transferiu oito arquivos de configuração. Uma edição enviou 95.471 bytes em vez de 11.445.150 bytes do estado completo (99,17% menos dados); foco/cursor não regravaram código. No build final, o save incremental levou 62,43 ms e a restauração com boot do broker onefile levou 5.119,30 ms. A rodada congelada anterior teve save incremental de 6,95 ms; essa variação local impede tratar uma execução como benchmark comparativo.
 
 A grade mantém os resultados no kernel, caches limitados e páginas visíveis. As medições locais do smoke são observações de uma execução, não uma comparação de performance com o PyQt. O tempo `kernel_start_ms` do congelado inclui a inicialização do supervisor/primeiro kernel e a extração do bundle onefile; esse custo continua sendo uma frente de otimização da distribuição.
 
 Monaco e Plotly ficam em chunks locais separados carregados sob demanda. O Vite ainda informa chunks grandes nessas bibliotecas. A grade limita transferência/renderização, mas uma consulta SQL convencional materializa seu resultado no kernel; para downloads grandes, CSV/Parquet usam streaming direto sem DataFrame intermediário.
 
-Na última rodada do smoke congelado, o supervisor/primeiro kernel iniciou em 5.611,84 ms; autocomplete Python levou 715,35 ms no primeiro pedido e 8,91 ms com o processo reutilizado. Filtro e ordenação de um milhão de linhas levaram 6,29 ms no primeiro pedido e mediana de 0,42 ms nas páginas em cache. A página transferida tinha 100 linhas. São tempos de RPC locais; não medem pintura da grade ou banco remoto.
+Na última rodada do smoke congelado, o supervisor/primeiro kernel iniciou em 11.359,77 ms; autocomplete Python levou 735,03 ms no primeiro pedido e 9,61 ms com o processo reutilizado. Filtro e ordenação de um milhão de linhas levaram 6,57 ms no primeiro pedido e mediana de 0,44 ms nas páginas em cache. A página transferida tinha 100 linhas. São tempos de RPC locais; não medem pintura da grade ou banco remoto. Startup do bundle onefile continua sendo um custo a otimizar.
 
 O executável de validação fica em `desktop/src-tauri/target/release/datapyn-desktop.exe`, com `datapyn-runtime.exe` ao lado. Os dois arquivos devem permanecer juntos. O build não é uma release oficial e não substitui o instalador PyQt.
 

@@ -21,7 +21,7 @@ import "monaco-editor/editor/contrib/dropOrPasteInto/browser/copyPasteContributi
 import EditorWorker from "monaco-editor/editor/editor.worker.js?worker";
 import { runtime, type Language } from "./runtime";
 import {translate as t,useLocale} from "./i18n";
-import { models, contexts, completionGates, contextVersions, diagnosticRefreshers, editorPreferences, pendingInsertions, consumePendingFocus, markEditorFocused, wasEditorFocused, insertInEditor, type EditorPreferences } from "./editorRegistry";
+import { models, contexts, completionGates, contextVersions, diagnosticRefreshers, editorPreferences, pendingInsertions, consumePendingFocus, markEditorFocused, wasEditorFocused, insertInEditor, takeRestoredEditorViewState,captureEditorViewState,type EditorPreferences } from "./editorRegistry";
 export { selectedCode, focusEditor, editorAction, getRegisteredEditor, formatEditor, forceAutocomplete, transformEditorSelection, insertInEditor, replaceEditorCode, disposeModel, setCompletionContext } from "./editorRegistry";
 export type { EditorPreferences } from "./editorRegistry";
 import { LanguageRequestGate, languageParams, mergeCompletions, type LanguageCompletion, type LanguageMarker } from "./editorLanguage";
@@ -108,7 +108,7 @@ export const MonacoBlock = memo(function MonacoBlock({ id, code, language, heigh
     applyTheme(preferences,view);
     let record = models.get(id);
     if (!record) {
-      record = { model: monaco.editor.createModel(code, language, monaco.Uri.parse(`datapyn://blocks/${id}`)), viewState: null };
+      record = { model: monaco.editor.createModel(code, language, monaco.Uri.parse(`datapyn://blocks/${id}`)), viewState: takeRestoredEditorViewState(id) };
       models.set(id, record);
     }
     const editor = monaco.editor.create(host, {
@@ -129,13 +129,16 @@ export const MonacoBlock = memo(function MonacoBlock({ id, code, language, heigh
     const changed = editor.onDidChangeModelContent(() => callbacks.current.onChange(record.model.getValue()));
     const focused = editor.onDidFocusEditorText(() => { markEditorFocused(id); callbacks.current.onFocus(); });
     const cursor = editor.onDidChangeCursorPosition(({ position }) => callbacks.current.onCursor?.(position.lineNumber, position.column));
+    let viewTimer:ReturnType<typeof setTimeout>|undefined;
+    const scheduleView=()=>{clearTimeout(viewTimer);viewTimer=setTimeout(()=>captureEditorViewState(id),300);};
+    const selectionView=editor.onDidChangeCursorSelection(scheduleView),scrollView=editor.onDidScrollChange(scheduleView);
     const configuration=editor.onDidChangeConfiguration(event=>{if(!event.hasChanged(monaco.editor.EditorOption.fontSize))return;const current=editor.getOption(monaco.editor.EditorOption.fontSize),size=Math.max(8,Math.min(32,current));if(current!==size){editor.updateOptions({fontSize:size});return;}if(size!==(editorPreferences.get(id)?.fontSize??13))callbacks.current.onFontSizeChange?.(size);});
     if (pendingInsertions.has(id)) queueMicrotask(() => {
       if (record.editor !== editor) return;
       const texts = pendingInsertions.get(id) ?? []; pendingInsertions.delete(id);
       for (const text of texts) insertInEditor(id, text);
     });
-    return () => { changed.dispose(); focused.dispose(); cursor.dispose();configuration.dispose(); completionGates.get(id)?.invalidate(); record.viewState = editor.saveViewState(); record.editor = undefined; record.container = undefined; editor.dispose(); };
+    return () => { clearTimeout(viewTimer);selectionView.dispose();scrollView.dispose();captureEditorViewState(id);changed.dispose(); focused.dispose(); cursor.dispose();configuration.dispose(); completionGates.get(id)?.invalidate(); record.viewState = editor.saveViewState(); record.editor = undefined; record.container = undefined; editor.dispose(); };
     // Creating a new widget for a changed code prop discards undo history.
     // The separate effect below synchronizes external edits into the stable model.
     // eslint-disable-next-line react-hooks/exhaustive-deps

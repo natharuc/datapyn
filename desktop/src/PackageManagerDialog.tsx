@@ -49,7 +49,7 @@ export function PackageManagerDialog({ onClose, onChanged, onError }: { onClose:
 function PackageSourcesDialog({ onClose, onError }: { onClose: () => void; onError: (message: string) => void }) {
   useLocale();
   const [sources, setSources] = useState<PackageSource[]>([]), [busy, setBusy] = useState(false), [error, setError] = useState("");
-  useEffect(() => { let active = true; void runtime.request<PackageSource[]>("packages.sources").then((result) => { if (active) setSources(result); }, (failure) => { if (active) setError(errorText(failure)); }); return () => { active = false; }; }, []);
+  useEffect(() => { let active = true; void runtime.request<{sources:PackageSource[]}>("packages.sources").then((result) => { if (active) setSources(result.sources); }, (failure) => { if (active) setError(errorText(failure)); }); return () => { active = false; }; }, []);
   function field(index: number, key: keyof PackageSource, value: string) { setSources((previous) => previous.map((source, i) => i === index ? { ...source, [key]: value } : source)); }
   async function saveSources() {
     setBusy(true); setError("");

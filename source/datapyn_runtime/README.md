@@ -23,6 +23,8 @@ Request IDs are integer correlation IDs; session and execution IDs are strings.
 | `connection.test` / `connection.test_cancel` | config or saved ID; optional test ID | isolated connection test / cancellation status |
 | `connection.idle_timeout` | seconds, 0 disables, default 300 | applied globally and to existing sessions |
 | `connections.*` / `groups.*` | CRUD, clone, move, reorder; chosen import/export path | persistent catalog with nested groups, colors and favorites |
+| `configurations.inspect/import/export` | chosen folder; import requires inspection `preview_token`; export accepts frontend `preferences`/`shortcuts`/`defaults` | public PyQt connection JSON, native shortcuts/INI, preserved extensions; converted preferences, CSV/clipboard/Pynia defaults, package sources and transfer warnings |
+| `configurations.defaults.get` | none | current profile defaults for documents and new conversations |
 | `explorer.list` | session/context; optional parent node, refresh | lazy nodes and actual connection context |
 | `explorer.details/query/use_database` | session/context and object name/schema/kind | entity details, dialect-aware query, applied namespace |
 | `language.complete/diagnostics/format` | code, language, one-based line/column, optional session/context/block ID | completion items, markers, formatted code |
@@ -39,7 +41,7 @@ Request IDs are integer correlation IDs; session and execution IDs are strings.
 | `document.read/script_export` | session ID, chosen path, document/options | Python/SQL/notebook document or script |
 | `notifications.settings.get/set` / `notifications.evaluate/send/test` | settings or session context/custom rules | settings, rendered notification, delivery statuses |
 | `snapshot.settings.get/set` / `snapshot.list/save/restore/delete` | settings or session/snapshot ID | opt-in Parquet cache metadata and restored results |
-| `workspace.profiles.*` | list/create/rename/clone/delete/restore/select/state/save | isolated preview profile and persisted frontend state |
+| `workspace.profiles.*` | list/create/rename/clone/delete/restore/select/state/save/patch | isolated profile; incremental transactional private session store |
 | `packages.list/search/install/uninstall/sources` | query/packages/source options | isolated extension environment and streamed events |
 | `pynia.catalog/state/select_agent/prompt/cancel/clear/config/answer_permission` | session, agent/prompt/config/permission | real ACP session/chat state and events |
 | `pynia.attach/authenticate/install/inline/tool_reply` | chosen files, advertised auth method, agent, prompt/tool result | attachments, auth/install status, AI completion, correlated tool reply |
@@ -155,3 +157,5 @@ code.
 Independent tests: `python -m pytest -c runtime_tests/pytest.ini runtime_tests -q`.
 They launch the actual NDJSON process with pipes and do not load the legacy Qt
 `tests/conftest.py`.
+
+Private session drafts use per-profile SQLite, separate document payload/header/metadata rows, guarded WAL or DELETE journals, and durable synchronous settings. The original workspace_state.json migrates once and remains preserved. Public .dpw/script/notebook formats remain unchanged; restore never executes saved code. See [private session persistence](../../docs/TAURI_SESSION_PERSISTENCE.md) for patch DTOs, recovery rules and measured source smoke.

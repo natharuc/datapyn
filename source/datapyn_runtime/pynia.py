@@ -24,12 +24,17 @@ from src.services.pynia.acp.turn_context import format_acp_prompt_parts
 from .process_group import own_process_group
 from .pynia_mcp import McpBridge
 from .workspace import read_document, write_document
+from .configuration_defaults import load_defaults, normalize_pynia
 
 
 class Conversation:
     def __init__(self, session_id, state=None):
         self.state = TabChatState.from_dict(session_id, state)
         self.state.config_snapshot = (state or {}).get("config_snapshot") or {}
+        empty = not (self.state.messages or self.state.acp_session_id or self.state.config_snapshot)
+        self.fresh_conversation = empty and (not self.state.agent_id or (state or {}).get("fresh_conversation") is True)
+        self.defaults_applied = bool((state or {}).get("defaults_applied", False))
+        self.configuration_defaults = {}
         self.client = None
         self.group = None
         self.operation = threading.RLock()
@@ -64,7 +69,7 @@ class PyniaService:
         # Session IDs are protocol identifiers, but never filesystem paths.
         return self.root / (uuid.uuid5(uuid.NAMESPACE_URL, session_id).hex + ".json")
 
-    def _conversation(self, session_id, data=None):
+    def _conversation(self, session_id, data=None, defaults=None):
         if not isinstance(session_id, str) or not session_id or len(session_id) > 128:
             raise ValueError("session_id must be a nonempty string of at most 128 characters")
         with self.lock:
@@ -73,13 +78,20 @@ class PyniaService:
                 saved = data
                 if saved is None and path.is_file():
                     saved = read_document(str(path))["document"]
-                self.conversations[session_id] = Conversation(session_id, saved)
+                conversation = Conversation(session_id, saved)
+                if conversation.fresh_conversation:
+                    conversation.configuration_defaults = normalize_pynia(defaults if defaults is not None else load_defaults(self.root.parent).get("pynia", {}))
+                    identifier = conversation.configuration_defaults.get("default_agent_id")
+                    if not conversation.state.agent_id and identifier and get_agent(identifier) is not None:
+                        conversation.state.agent_id = identifier
+                self.conversations[session_id] = conversation
             return self.conversations[session_id]
 
     def state(self, conversation):
         with conversation.lock:
             state = conversation.state
             return {**state.to_dict(), "busy": state.busy, "selectors": composer_selectors(state.config_snapshot, loading=state.config_loading),
+                    "fresh_conversation": conversation.fresh_conversation, "defaults_applied": conversation.defaults_applied,
                     "permissions": [{"request_id": identifier, "params": entry[1]} for identifier, entry in conversation.permissions.items()],
                     "error": conversation.error, "auth_methods": conversation.client.auth_methods if conversation.client is not None else []}
 
@@ -90,6 +102,8 @@ class PyniaService:
         with conversation.lock:
             document = conversation.state.to_dict()
             document["config_snapshot"] = conversation.state.config_snapshot
+            document["defaults_applied"] = conversation.defaults_applied
+            document["fresh_conversation"] = conversation.fresh_conversation
         # Keep complete recent turns. A pathological agent cannot grow a local
         # history indefinitely; the existing workspace cap is 16 MiB.
         while len(json.dumps(document, ensure_ascii=False).encode("utf-8")) > 15 * 1024 * 1024 and len(document["messages"]) > 2:
@@ -150,6 +164,15 @@ class PyniaService:
             self.acp.handshake(client, version="1.57.0")
             previous = conversation.state.acp_session_id
             preferred = composer_selectors(conversation.state.config_snapshot)
+            fresh_defaults = conversation.fresh_conversation and not previous
+            if fresh_defaults:
+                defaults = conversation.configuration_defaults
+                agent_defaults = defaults.get("agent_prefs", {}).get(conversation.state.agent_id, {})
+                for kind, field in (("model", "model_id"), ("reasoning", "thought_level")):
+                    fallback = defaults.get(field, "") if defaults.get("default_agent_id") == conversation.state.agent_id else ""
+                    desired = agent_defaults.get(field) or fallback
+                    if desired:
+                        preferred.setdefault(kind, {})["current"] = desired
             # Resume only when explicitly supported by the selected agent.
             capabilities = client.agent_capabilities.get("sessionCapabilities") or {}
             if previous and capabilities.get("resume"):
@@ -172,10 +195,13 @@ class PyniaService:
                 desired = preferred.get(kind, {}).get("current")
                 selector = composer_selectors(snapshot).get(kind) or {}
                 values = {item["value"] for item in selector.get("values", [])}
-                if desired and desired in values and desired != selector.get("current"):
+                if desired and desired in values and not selector.get("hidden") and desired != selector.get("current"):
                     normalized = self.acp.set_option(client, session_id, selector["id"], desired, snapshot, kind=kind)
                     snapshot = normalized.raw
                     conversation.state.config_snapshot = snapshot
+            if fresh_defaults:
+                conversation.defaults_applied = True
+                conversation.fresh_conversation = False
             self._persist(conversation)
         except BaseException:
             self._stop_client(conversation)
@@ -387,7 +413,7 @@ class PyniaService:
                 pending[1].update({"result": params.get("result"), "error": params.get("error")})
                 pending[0].set()
             return {"status": "answered"}
-        conversation = self._conversation(params.get("session_id"), params.get("data"))
+        conversation = self._conversation(params.get("session_id"), params.get("data"), params.get("defaults"))
         if method == "pynia.state":
             return self.state(conversation)
         if method == "pynia.inline":
@@ -401,6 +427,8 @@ class PyniaService:
                     raise RuntimeError("Pynia is already working on this tab")
                 if conversation.state.locked and conversation.state.agent_id != agent_id:
                     raise RuntimeError("Clear the conversation before changing its agent")
+                if conversation.fresh_conversation and params.get("defaults") is not None:
+                    conversation.configuration_defaults = normalize_pynia(params["defaults"])
                 if conversation.state.agent_id != agent_id:
                     self._stop_client(conversation)
                     conversation.state.acp_session_id = None
@@ -444,6 +472,9 @@ class PyniaService:
             self._stop_client(conversation)
             with conversation.lock:
                 conversation.state = TabChatState(tab_id=conversation.state.tab_id, agent_id=conversation.state.agent_id)
+                conversation.configuration_defaults = normalize_pynia(params.get("defaults") if params.get("defaults") is not None else load_defaults(self.root.parent).get("pynia", {}))
+                conversation.fresh_conversation = True
+                conversation.defaults_applied = False
                 conversation.permissions.clear()
                 conversation.error = None
             self._persist(conversation)

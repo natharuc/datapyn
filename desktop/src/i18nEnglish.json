@@ -373,5 +373,20 @@
   "Tamanho da grade":"Grid font size",
   "Herdar cor do grupo":"Inherit group color",
   "Herdar cor do grupo pai":"Inherit parent group color",
-  "Área de transferência indisponível nesta janela.":"Clipboard is unavailable in this window."
+  "Área de transferência indisponível nesta janela.":"Clipboard is unavailable in this window.",
+  "Importar e exportar":"Import and export",
+  "Importar pasta de configurações PyQt6":"Import a PyQt6 configuration folder",
+  "Exportar configurações para uma pasta vazia":"Export configurations to an empty folder",
+  "Importe a pasta do workspace do PyQt6 ou exporte os arquivos compatíveis para uma pasta vazia.":"Import a PyQt6 workspace folder or export compatible files to an empty folder.",
+  "O JSON de conexões continua disponível em Gerenciar conexões. Senhas permanecem no cofre do sistema; sessões são restauradas automaticamente ao abrir o aplicativo.":"Connection JSON is also available in Manage connections. Passwords stay in the system vault; sessions restore automatically when the application opens.",
+  "Importar configurações":"Import configurations",
+  "Exportar configurações":"Export configurations",
+  "Finalize as execuções antes de transferir configurações.":"Finish running jobs before transferring configurations.",
+  "Revisar importação":"Review import",
+  "Arquivos de sessões e dados ficam fora da transferência de configurações.":"Session and data files are excluded from configuration transfers.",
+  "A importação aplica estas configurações ao workspace atual.":"Import applies these configurations to the current workspace.",
+  "Confirmar importação":"Confirm import",
+  "Configurações exportadas: {count} arquivos.":"Configurations exported: {count} files.",
+  "Configurações importadas e aplicadas.":"Configurations imported and applied.",
+  "Iniciando runtime Python…":"Starting Python runtime…"
 }

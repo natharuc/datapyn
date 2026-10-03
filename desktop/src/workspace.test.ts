@@ -1,6 +1,49 @@
 import { describe, expect, it, vi } from "vitest";
+import { captureEditorViewState,models,takeRestoredEditorViewState } from "./editorRegistry";
+import { diffNativeWorkspace } from "./nativeDrafts";
 import { WorkspaceController, applyRuntimeEvent, decodeDocument, encodeDocument, newSession } from "./workspace";
 import type { ExecutionFinished, RuntimeEvent, RuntimeTransport } from "./runtime";
+
+describe("incremental workspace recovery",()=>{
+  it("keeps large unaffected document/record references and sends only the edited session",()=>{
+    const controller=new WorkspaceController(new FakeTransport(),undefined,{nativePersistence:true}),first=controller.session()!;
+    const large=controller.createSession();controller.updateBlock(large.id,large.blocks[0].id,{code:"x".repeat(2_000_000)});
+    const before=controller.nativeSnapshot();controller.updateBlock(first.id,first.blocks[0].id,{code:"SELECT changed"});const after=controller.nativeSnapshot();
+    expect(after.documents[1]).toBe(before.documents[1]);expect(after.documents[1].document).toBe(before.documents[1].document);
+    expect(diffNativeWorkspace("p",after,before)!.upserts!.map(record=>record.sessionId)).toEqual([first.id]);controller.dispose();
+  });
+  it("persists focus/view state in private headers while keeping public code payload unchanged",()=>{
+    const controller=new WorkspaceController(new FakeTransport(),undefined,{nativePersistence:true}),session=controller.session()!,second=controller.addBlock(session.id,"python","print(1)");
+    controller.focusBlock(session.id,session.blocks[0].id);const before=controller.nativeSnapshot();controller.focusBlock(session.id,second.id);
+    const view={cursorState:[],viewState:{scrollTop:250,scrollLeft:0},contributionsState:{}};
+    models.set(second.id,{model:{},viewState:null,editor:{saveViewState:()=>view}} as never);captureEditorViewState(second.id);
+    const after=controller.nativeSnapshot();expect(after.documents[0].document).toBe(before.documents[0].document);
+    expect(after.documents[0].editorViewState?.[second.id]).toEqual(view);expect(diffNativeWorkspace("p",after,before)!.upserts![0]).not.toHaveProperty("document");
+    expect(encodeDocument(controller.session()!)).not.toHaveProperty("editorViewState");models.delete(second.id);controller.dispose();
+  });
+  it("restores active tab, stable block IDs, focus and cursor without starting Python or timers",()=>{
+    const first=new WorkspaceController(new FakeTransport(),undefined,{nativePersistence:true}),extra=first.createSession(),block=first.addBlock(extra.id,"python","raise RuntimeError('must not run')");
+    const saved=first.nativeSnapshot(),view={cursorState:[],viewState:{scrollTop:99},contributionsState:{}};
+    saved.documents[1]={...saved.documents[1],editorViewState:{[block.id]:view}};
+    const transport=new FakeTransport(),restored=new WorkspaceController(transport,undefined,{nativePersistence:true});restored.restoreSnapshot(saved);
+    expect(restored.session()!.id).toBe(extra.id);expect(restored.session()!.focusedBlockId).toBe(block.id);expect(restored.session()!.blocks[1].id).toBe(block.id);
+    expect(takeRestoredEditorViewState(block.id)).toEqual(view);expect(transport.requests).toEqual([]);expect(restored.session()!.busy).toBe(false);first.dispose();restored.dispose();
+  });
+  it("does not read/write synchronous browser recovery in native mode and migrates it only once on demand",()=>{
+    const record={title:"Legacy",document:{blocks:[{language:"python",code:"saved=1"}]}};
+    const getItem=vi.fn((key:string)=>key.endsWith("v1")?JSON.stringify({sessions:[record]}):null),setItem=vi.fn();
+    const controller=new WorkspaceController(new FakeTransport(),{getItem,setItem},{nativePersistence:true});controller.persist();expect(getItem).not.toHaveBeenCalled();expect(setItem).not.toHaveBeenCalled();
+    expect(controller.restoreBrowserDraftMigration()).toBe(true);expect(controller.session()!.blocks[0].code).toBe("saved=1");const reads=getItem.mock.calls.length;
+    expect(controller.restoreBrowserDraftMigration()).toBe(false);expect(getItem).toHaveBeenCalledTimes(reads);controller.dispose();
+  });
+  it("browser fallback writes only dirty records and preserves active tab on reload",()=>{
+    const values=new Map<string,string>(),writes:string[]=[],storage={getItem:(key:string)=>values.get(key)??null,setItem:(key:string,value:string)=>{values.set(key,value);writes.push(key);},removeItem:(key:string)=>values.delete(key)};
+    const controller=new WorkspaceController(new FakeTransport(),storage),first=controller.session()!,second=controller.createSession();controller.persist();writes.length=0;
+    controller.updateBlock(first.id,first.blocks[0].id,{code:"SELECT edited"});controller.persist();
+    expect(writes.filter(key=>key!=="datapyn.desktop.documents.v2")).toEqual([`datapyn.desktop.documents.v2.${first.id}`]);
+    const restored=new WorkspaceController(new FakeTransport(),storage);expect(restored.session()!.id).toBe(second.id);expect(restored.session(first.id)!.blocks[0].code).toBe("SELECT edited");controller.dispose();restored.dispose();
+  });
+});
 
 class FakeTransport implements RuntimeTransport {
   requests: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -106,13 +149,23 @@ describe("Eventos isolados por sessão e execução", () => {
 });
 
 describe("Execução e fila", () => {
+  it("protects the captured workspace during asynchronous switch/close while keeping runtime status available",()=>{
+    const controller=new WorkspaceController(new FakeTransport()),session=controller.session()!,block=session.blocks[0];
+    controller.setEditingLocked(true);
+    controller.updateBlock(session.id,block.id,{code:"late edit"});controller.renameSession(session.id,"late title");controller.createSession();
+    expect(controller.getSnapshot().sessions).toHaveLength(1);expect(controller.session()!.blocks[0].code).toBe("");expect(controller.session()!.title).toBe(session.title);
+    controller.message("flush error");expect(controller.getSnapshot().message).toBe("flush error");
+    controller.restoreSnapshot({documents:[{title:"Restored",sessionId:"restored",document:{blocks:[{language:"python",code:"saved",block_name:"",is_active:true}]}}]});
+    expect(controller.session()!.title).toBe("Restored");
+    controller.setEditingLocked(false);controller.updateBlock("restored",controller.session()!.blocks[0].id,{code:"new edit"});expect(controller.session()!.blocks[0].code).toBe("new edit");
+  });
   it("download direto usa a seleção e não persiste o destino como parte do bloco",async()=>{
     const transport=new FakeTransport(),controller=new WorkspaceController(transport),session=controller.session()!,block=session.blocks[0];
     controller.updateBlock(session.id,block.id,{code:"SELECT 1; SELECT 2;",connection_id:"other",sql_parameters:[{name:"id",value:42}]});
     const job=controller.runToFile(session.id,block.id,{path:"C:/temp/export.csv",format:"csv"},"SELECT 2;");
     await vi.waitFor(()=>expect(transport.executions()).toHaveLength(1));
     expect(transport.executions()[0].params).toMatchObject({code:"SELECT 2;",connection_id:"other",export:{path:"C:/temp/export.csv",format:"csv"}});
-    transport.finish(0);await job;
+    transport.finish(0);expect(await job).toMatchObject({status:"succeeded"});
     expect((encodeDocument(controller.session()!).blocks as object[])[0]).not.toHaveProperty("export");
   });
   it("timer executa imediatamente e agenda apenas depois da fila, sem sobreposição",async()=>{

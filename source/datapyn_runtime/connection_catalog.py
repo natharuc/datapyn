@@ -49,6 +49,21 @@ def _text(value, name, *, empty=False):
     return value.strip()
 
 
+def _path(value):
+    if not isinstance(value, str) or not value.strip() or len(value) > 32768:
+        raise ValueError("path must be a nonempty filesystem path")
+    return Path(value).expanduser().resolve()
+
+
+def without_secrets(value):
+    """Keep extension metadata, while never transferring credential fields."""
+    if isinstance(value, dict):
+        return {key: without_secrets(item) for key, item in value.items() if str(key).lower() not in SECRET_KEYS}
+    if isinstance(value, list):
+        return [without_secrets(item) for item in value]
+    return deepcopy(value)
+
+
 class ConnectionCatalog:
     def __init__(self, path=None, credentials=None):
         root = Path(os.environ.get("DATAPYN_WORKSPACE_PATH") or os.environ.get("DATAPYN_RUNTIME_STATE_PATH") or Path.home() / ".datapyn-tauri-preview")
@@ -118,18 +133,21 @@ class ConnectionCatalog:
             self._find("connections", identifier)["last_used"] = _now()
             self._save()
 
-    def save_connection(self, connection, *, password=None, save_password=None):
+    def save_connection(self, connection, *, password=None, save_password=None, case_sensitive=False):
         if not isinstance(connection, dict) or not isinstance(connection.get("config"), dict):
             raise ValueError("connection and config must be objects")
         with self._lock:
             existing = self._find("connections", connection["id"]) if connection.get("id") else None
             identifier = existing["id"] if existing else uuid.uuid4().hex
             name = _text(connection.get("name"), "name")
+            if case_sensitive:
+                name = connection["name"]
             group_id = self._group(connection.get("group_id"))
-            if any(c["id"] != identifier and c["name"].casefold() == name.casefold()
+            if any(c["id"] != identifier and c["name"] == name
                    and c.get("group_id") == group_id for c in self.data["connections"]):
                 raise ValueError("A connection with this name already exists in this group")
-            config = deepcopy(connection["config"])
+            config = deepcopy(existing["config"]) if existing else {}
+            config.update(deepcopy(connection["config"]))
             db_type = str(config.get("db_type", "")).lower()
             if db_type not in DATABASE_TYPES:
                 raise ValueError("Unsupported database type")
@@ -142,14 +160,15 @@ class ConnectionCatalog:
                 secrets["password"] = str(password)
             if db_type == "postgresql":
                 config["schema"] = str(config.get("schema") or "public")
-            item = {
+            item = without_secrets({**(existing or {}), **connection})
+            item.update({
                 "id": identifier, "name": name, "group_id": group_id,
                 "color": str(connection.get("color", "")), "favorite": bool(connection.get("favorite", False)),
-                "order": existing.get("order", 0) if existing else len(self.data["connections"]),
+                "order": connection.get("order", existing.get("order", 0) if existing else len(self.data["connections"])),
                 "config": config, "has_password": bool(existing and existing.get("has_password")),
-                "created_at": existing.get("created_at", _now()) if existing else _now(),
-                "last_used": existing.get("last_used") if existing else None,
-            }
+                "created_at": connection.get("created_at", existing.get("created_at", _now()) if existing else _now()),
+                "last_used": connection.get("last_used", existing.get("last_used") if existing else None),
+            })
             if save_password is True and secrets:
                 self.credentials.set(identifier, secrets)
                 item["has_password"] = True
@@ -165,25 +184,27 @@ class ConnectionCatalog:
             self._save()
             return deepcopy(item)
 
-    def save_group(self, group):
+    def save_group(self, group, *, case_sensitive=False):
         if not isinstance(group, dict):
             raise ValueError("group must be an object")
         with self._lock:
             existing = self._find("groups", group["id"]) if group.get("id") else None
             identifier = existing["id"] if existing else uuid.uuid4().hex
             name = _text(group.get("name"), "group name")
+            if case_sensitive:
+                name = group["name"]
             parent = self._group(group.get("parent_id"))
             ancestor = parent
             while ancestor:
                 if ancestor == identifier:
                     raise ValueError("A group cannot contain itself or one of its ancestors")
                 ancestor = self._find("groups", ancestor).get("parent_id")
-            if any(g["id"] != identifier and g["name"].casefold() == name.casefold()
-                   and g.get("parent_id") == parent for g in self.data["groups"]):
-                raise ValueError("A group with this name already exists in this folder")
-            item = {"id": identifier, "name": name, "parent_id": parent,
+            if any(g["id"] != identifier and g["name"] == name for g in self.data["groups"]):
+                raise ValueError("A group with this name already exists; PyQt6 group names must be globally unique")
+            item = without_secrets({**(existing or {}), **group})
+            item.update({"id": identifier, "name": name, "parent_id": parent,
                     "color": str(group.get("color", "")),
-                    "order": existing.get("order", 0) if existing else len(self.data["groups"])}
+                    "order": group.get("order", existing.get("order", 0) if existing else len(self.data["groups"]))})
             if existing:
                 existing.clear()
                 existing.update(item)
@@ -249,76 +270,155 @@ class ConnectionCatalog:
             elif method == "connections.import":
                 return self.import_file(params.get("path"))
             elif method == "connections.export":
-                path = Path(_text(params.get("path"), "path")).expanduser().resolve()
+                path = _path(params.get("path"))
                 if path == self.path.resolve():
                     raise ValueError("Export cannot overwrite the active connection catalog")
-                document = self.list()
-                for item in document["connections"]:
-                    item["has_password"] = False
-                path.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
-                return {"path": str(path), "connection_count": len(document["connections"]), "passwords_included": False}
+                format_name = params.get("format", "pyqt6")
+                if format_name not in {"pyqt6", "tauri"}:
+                    raise ValueError("Connection export format must be pyqt6 or tauri")
+                document = self.export_document(format_name)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as stream:
+                    temporary = Path(stream.name)
+                    try:
+                        json.dump(document, stream, ensure_ascii=False, indent=2, allow_nan=False)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    except BaseException:
+                        temporary.unlink(missing_ok=True)
+                        raise
+                try:
+                    os.replace(temporary, path)
+                finally:
+                    temporary.unlink(missing_ok=True)
+                return {"path": str(path), "format": format_name, "connection_count": len(self.data["connections"]), "passwords_included": False}
             else:
                 raise ValueError(f"Unknown catalog method: {method}")
             self._save()
             return self.list()
 
+    def export_document(self, format_name="pyqt6"):
+        with self._lock:
+            if format_name == "tauri":
+                result = without_secrets(self.data)
+                for item in result["connections"]:
+                    item["has_password"] = False
+                return result
+            groups = {group["id"]: group for group in self.data["groups"]}
+            names = [group["name"] for group in groups.values()]
+            if len(set(names)) != len(names):
+                raise ValueError("PyQt6 requires globally unique group names; use the Tauri format for these folders")
+            result = without_secrets(self.data.get("legacy_metadata", {}))
+            result["connections"], result["groups"] = {}, {}
+            buckets = result["connections"]
+            for item in sorted(self.data["connections"], key=lambda entry: entry.get("order", 0)):
+                group = groups.get(item.get("group_id"))
+                group_name = group["name"] if group else ""
+                config = without_secrets(item["config"])
+                config.setdefault("host", "")
+                config.setdefault("port", 1433)
+                config.setdefault("database", "")
+                config.setdefault("username", "")
+                config.update(group=group_name, color=item.get("color", ""))
+                for key in ("favorite", "order", "created_at", "last_used"):
+                    config[key] = deepcopy(item.get(key))
+                buckets.setdefault(group_name, {})[item["name"]] = config
+            for group in sorted(groups.values(), key=lambda entry: entry.get("order", 0)):
+                config = without_secrets(group.get("legacy_metadata", {}))
+                parent = groups.get(group.get("parent_id"))
+                config.update(color=group.get("color", ""), parent=parent["name"] if parent else config.get("parent", ""))
+                config["order"] = group.get("order", 0)
+                if "created_at" in group:
+                    config["created_at"] = deepcopy(group["created_at"])
+                result["groups"][group["name"]] = config
+                if group.get("legacy_bucket"):
+                    buckets.setdefault(group["name"], {})
+            if self.data.get("legacy_ungrouped_bucket"):
+                buckets.setdefault("", {})
+            # The legacy dialog detects nesting from the first bucket. Place an
+            # occupied bucket first so it can also import exports with empty groups.
+            result["connections"] = dict(sorted(buckets.items(), key=lambda entry: not bool(entry[1]))) if self.data["connections"] else {}
+            return result
+
     def import_file(self, path):
+        path = _path(path)
+        if path.stat().st_size > 8 * 1024 * 1024:
+            raise ValueError("Connection import exceeds 8 MiB")
+        document = json.loads(path.read_text(encoding="utf-8-sig"))
+        return self.import_document(document, path=str(path))
+
+    def import_document(self, document, *, path=None):
         with self._lock:
             before = deepcopy(self.data)
             self._defer_save = True
             try:
-                result = self._import_file(path)
+                result, credentials_to_remove = self._import_document(document)
             except BaseException:
-                old_ids = {item["id"] for item in before["connections"]}
-                for item in self.data["connections"]:
-                    if item["id"] not in old_ids and item.get("has_password"):
-                        try:
-                            self.credentials.delete(item["id"])
-                        except Exception:
-                            pass
                 self.data = before
                 raise
             finally:
                 self._defer_save = False
                 self._save()
+            for identifier in credentials_to_remove:
+                self.credentials.delete(identifier)
+            result["path"] = path
             return result
 
-    def _import_file(self, path):
-        path = Path(_text(path, "path")).expanduser().resolve()
-        if path.stat().st_size > 8 * 1024 * 1024:
-            raise ValueError("Connection import exceeds 8 MiB")
-        document = json.loads(path.read_text(encoding="utf-8-sig"))
+    def _import_document(self, document):
         if not isinstance(document, dict):
             raise ValueError("Connection import must be a JSON object")
         groups, profiles = [], []
         if isinstance(document.get("connections"), list):
             groups = document.get("groups", [])
             profiles = document["connections"]
+            if not isinstance(groups, list):
+                raise ValueError("Imported groups must be an array")
+            self.data["legacy_metadata"] = without_secrets(document.get("legacy_metadata", self.data.get("legacy_metadata", {})))
+            self.data["legacy_ungrouped_bucket"] = bool(document.get("legacy_ungrouped_bucket", False))
         else:
             source = document.get("connections", document)
             legacy_groups = document.get("groups", {})
-            groups = [{"id": name, "name": name, "parent_id": config.get("parent") or None,
-                       "color": config.get("color", "")} for name, config in legacy_groups.items()]
-            if source and all(isinstance(value, dict) and "db_type" in value for value in source.values()):
+            if not isinstance(source, dict) or not isinstance(legacy_groups, dict):
+                raise ValueError("Legacy connections and groups must be objects")
+            self.data.setdefault("legacy_metadata", {}).update(without_secrets({key: value for key, value in document.items()
+                if key not in {"connections", "groups", "version"}}) if "connections" in document else {})
+            for name, config in legacy_groups.items():
+                if not isinstance(config, dict):
+                    raise ValueError("Group metadata must be an object")
+                groups.append({"id": name, "name": name, "parent_id": config.get("parent") or None,
+                               "color": config.get("color", ""), "order": config.get("order", len(groups)),
+                               **({"created_at": config["created_at"]} if "created_at" in config else {}),
+                               "legacy_metadata": without_secrets(config)})
+            flat = any(isinstance(value, dict) and "db_type" in value for value in source.values())
+            if flat:
                 for name, config in source.items():
+                    if not isinstance(config, dict) or "db_type" not in config:
+                        raise ValueError("Flat imports must contain connection objects")
                     profiles.append({"name": name, "group_id": config.get("group") or None, "config": config,
                                      "color": config.get("color", ""), "favorite": config.get("favorite", False)})
             else:
                 for group, bucket in source.items():
                     if not isinstance(bucket, dict):
-                        continue
+                        raise ValueError("Connection groups must contain objects")
+                    if not group:
+                        self.data["legacy_ungrouped_bucket"] = True
+                    elif not any(item["id"] == group for item in groups):
+                        groups.append({"id": group, "name": group, "legacy_bucket": True})
+                    else:
+                        next(item for item in groups if item["id"] == group)["legacy_bucket"] = True
                     for name, config in bucket.items():
-                        if isinstance(config, dict) and "db_type" in config:
-                            profiles.append({"name": name, "group_id": group or None, "config": config,
-                                             "color": config.get("color", ""), "favorite": config.get("favorite", False)})
+                        if not isinstance(config, dict) or "db_type" not in config:
+                            raise ValueError("Imported connections must include db_type")
+                        profiles.append({"name": name, "group_id": group or config.get("group") or None, "config": config,
+                                         "color": config.get("color", ""), "favorite": config.get("favorite", False)})
             present = {g["id"] for g in groups}
             for profile in profiles:
                 group = profile.get("group_id")
                 if group and group not in present:
                     groups.append({"id": group, "name": group})
                     present.add(group)
-        # Validate into a fresh in-memory catalog before changing the current one.
-        imported = deepcopy(self.data)
+        if any(not isinstance(group, dict) for group in groups) or any(not isinstance(profile, dict) for profile in profiles):
+            raise ValueError("Imported groups and connections must be objects")
         mapping = {}
         pending = list(groups)
         while pending:
@@ -327,36 +427,40 @@ class ConnectionCatalog:
                 parent = group.get("parent_id")
                 if parent and parent not in mapping:
                     continue
-                match = next((g for g in self.data["groups"] if g["name"] == group["name"]
-                              and g.get("parent_id") == mapping.get(parent)), None)
-                saved = match or self.save_group({"name": group["name"], "color": group.get("color", ""), "parent_id": mapping.get(parent)})
+                match = next((g for g in self.data["groups"] if g["name"] == group["name"]), None)
+                incoming = deepcopy(group)
+                incoming.pop("id", None)
+                incoming["parent_id"] = mapping.get(parent)
+                if match:
+                    incoming["id"] = match["id"]
+                saved = self.save_group(incoming, case_sensitive=True)
                 mapping[group.get("id", group["name"])] = saved["id"]
                 pending.remove(group)
                 progressed = True
             if not progressed:
-                self.data = imported
-                self._save()
                 raise ValueError("Imported groups have invalid parents or a cycle")
         count = 0
-        try:
-            for profile in profiles:
-                profile = deepcopy(profile)
-                profile.pop("id", None)
-                profile["group_id"] = mapping.get(profile.get("group_id"))
-                name = str(profile.get("name", ""))
-                names = {c["name"].casefold() for c in self.data["connections"] if c.get("group_id") == profile["group_id"]}
-                suffix = 2
-                while profile["name"].casefold() in names:
-                    profile["name"] = f"{name} ({suffix})"
-                    suffix += 1
-                has_secret = any(profile.get("config", {}).get(key) for key in SECRET_KEYS)
-                self.save_connection(profile, save_password=has_secret)
-                count += 1
-        except BaseException:
-            added = {item["id"] for item in self.data["connections"]} - {item["id"] for item in imported["connections"]}
-            for identifier in added:
-                self.credentials.delete(identifier)
-            self.data = imported
-            self._save()
-            raise
-        return {"catalog": self.list(), "imported_connections": count, "path": str(path)}
+        credentials_to_remove = []
+        for profile in profiles:
+            profile = without_secrets(profile)
+            profile.pop("id", None)
+            original_group = profile.get("group_id")
+            if original_group and original_group not in mapping:
+                raise ValueError("Imported connection references an unknown group")
+            profile["group_id"] = mapping.get(original_group)
+            config = profile.get("config")
+            if not isinstance(config, dict):
+                raise ValueError("Imported connection config must be an object")
+            for key in ("created_at", "last_used", "order"):
+                if key in config and key not in profile:
+                    profile[key] = deepcopy(config[key])
+            match = next((entry for entry in self.data["connections"] if entry["name"] == profile.get("name")
+                          and entry.get("group_id") == profile["group_id"]), None)
+            if match:
+                profile["id"] = match["id"]
+                if match.get("has_password"):
+                    credentials_to_remove.append(match["id"])
+            saved = self.save_connection(profile, case_sensitive=True)
+            self._find("connections", saved["id"])["has_password"] = False
+            count += 1
+        return {"catalog": self.list(), "imported_connections": count, "passwords_imported": False}, credentials_to_remove

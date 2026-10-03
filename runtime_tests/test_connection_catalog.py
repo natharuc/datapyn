@@ -43,6 +43,8 @@ def test_password_never_crosses_catalog_or_export_and_edit_preserves_it(catalog,
     path = tmp_path / "export.json"
     result = catalog.dispatch("connections.export", {"path": str(path)})
     assert not result["passwords_included"] and "secret" not in path.read_text()
+    assert "password" not in json.loads(path.read_text())["connections"][""]["database"]
+    catalog.dispatch("connections.export", {"path": str(path), "format": "tauri"})
     assert not json.loads(path.read_text())["connections"][0]["has_password"]
     catalog.save_connection(edited, save_password=False)
     assert not catalog.config(saved["id"]).get("password")
@@ -64,7 +66,7 @@ def test_duplicate_names_are_group_aware_and_delete_does_not_overwrite(catalog):
     root = catalog.save_connection(profile())
     nested = catalog.save_connection(profile(group_id=group["id"]))
     with pytest.raises(ValueError, match="already exists"):
-        catalog.save_connection(profile("DATABASE"))
+        catalog.save_connection(profile("database"))
     with pytest.raises(ValueError, match="ambiguous"):
         catalog.resolve_ref(None, "database")
     catalog.dispatch("groups.delete", {"group_id": group["id"]})
@@ -87,7 +89,7 @@ def test_move_clone_reorder_and_reload(catalog):
 
 
 @pytest.mark.parametrize("nested", [False, True])
-def test_explicit_legacy_import_preserves_same_name_profiles_and_secrets(catalog, tmp_path, nested):
+def test_explicit_legacy_import_overwrites_exact_ref_without_importing_secrets(catalog, tmp_path, nested):
     config = {"db_type": "postgresql", "host": "localhost", "database": "db", "group": "legacy", "password": "legacy-secret"}
     connections = {"legacy": {"db": config}} if nested else {"db": config}
     legacy = tmp_path / "connections-legacy.json"
@@ -96,10 +98,11 @@ def test_explicit_legacy_import_preserves_same_name_profiles_and_secrets(catalog
     assert result["imported_connections"] == 1
     saved = result["catalog"]["connections"][0]
     assert saved["config"]["schema"] == "public"
-    assert saved["has_password"] and catalog.config(saved["id"])["password"] == "legacy-secret"
+    assert not saved["has_password"] and "password" not in catalog.config(saved["id"])
     assert "legacy-secret" not in catalog.path.read_text()
     catalog.dispatch("connections.import", {"path": str(legacy)})
-    assert {p["name"] for p in catalog.list()["connections"]} == {"db", "db (2)"}
+    assert {p["name"] for p in catalog.list()["connections"]} == {"db"}
+    assert catalog.list()["connections"][0]["id"] == saved["id"]
 
 
 def test_bad_import_rolls_back_without_losing_existing_profiles(catalog, tmp_path):

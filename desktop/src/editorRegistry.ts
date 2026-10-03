@@ -11,6 +11,23 @@ export const contextVersions = new Map<string, number>();
 export const diagnosticRefreshers = new Map<string, () => void>();
 export const editorPreferences = new Map<string, EditorPreferences | undefined>();
 export const pendingInsertions = new Map<string, string[]>();
+const restoredViews=new Map<string,monaco.editor.ICodeEditorViewState>();
+const viewStateListeners=new Set<(blockId:string,state:monaco.editor.ICodeEditorViewState)=>void>();
+export function subscribeEditorViewStates(listener:(blockId:string,state:monaco.editor.ICodeEditorViewState)=>void){viewStateListeners.add(listener);return()=>viewStateListeners.delete(listener);}
+export function restoreEditorViewState(blockId:string,input:unknown):boolean {
+  if(!input||typeof input!=="object")return false;
+  const state=input as Partial<monaco.editor.ICodeEditorViewState>;
+  if(!Array.isArray(state.cursorState)||!state.viewState||typeof state.viewState!=="object"||!state.contributionsState||typeof state.contributionsState!=="object")return false;
+  restoredViews.set(blockId,state as monaco.editor.ICodeEditorViewState);return true;
+}
+export function takeRestoredEditorViewState(blockId:string):monaco.editor.ICodeEditorViewState|null {const state=restoredViews.get(blockId);restoredViews.delete(blockId);return state??null;}
+export function captureEditorViewState(blockId:string):void {
+  const record=models.get(blockId),state=record?.editor?.saveViewState?.()??record?.viewState;if(!record||!state)return;
+  // Small editor metadata only: never serialize the model's code or undo stack.
+  const value=JSON.stringify(state);if(value===JSON.stringify(record.viewState))return;
+  record.viewState=state;viewStateListeners.forEach(listener=>listener(blockId,state));
+}
+export function flushEditorViewStates():void {models.forEach((_record,id)=>captureEditorViewState(id));}
 let pendingFocus: string | undefined;
 let focusedEditor: string | undefined;
 export function markEditorFocused(id: string): void { focusedEditor = id; }
@@ -73,6 +90,7 @@ export function replaceEditorCode(blockId: string, code: string) {
   record.model.pushStackElement(); record.model.pushEditOperations(record.editor?.getSelections() ?? [], [{ range: record.model.getFullModelRange(), text: code }], () => record.editor?.getSelections() ?? null); record.model.pushStackElement();
 }
 export function disposeModel(blockId: string) {
+  restoredViews.delete(blockId);
   models.get(blockId)?.model.dispose(); models.delete(blockId); contexts.delete(blockId); completionGates.get(blockId)?.invalidate(); completionGates.delete(blockId); contextVersions.delete(blockId); diagnosticRefreshers.delete(blockId); editorPreferences.delete(blockId); pendingInsertions.delete(blockId); if (pendingFocus === blockId) pendingFocus = undefined;
   if (focusedEditor === blockId) focusedEditor = undefined;
 }

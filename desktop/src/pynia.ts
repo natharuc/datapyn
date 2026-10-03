@@ -6,16 +6,53 @@ export interface PyniaAttachment { kind: "image" | "file"; name: string; mime: s
 export interface PyniaToolActivity { id: string; title?: string; status?: string; error?: string }
 export interface PyniaMessage { role: string; content: string; attachments?: PyniaAttachment[]; activity?: { thinking?: string; tools?: PyniaToolActivity[] }; [key: string]: unknown }
 export interface PyniaSelector { id: string; label?: string; current: string; hidden?: boolean; loading?: boolean; values: Array<{ value: string; name: string; description?: string }> }
+export interface PyniaAgentPreferences { model_id?: string; thought_level?: string }
+export interface PyniaDefaults extends PyniaAgentPreferences {
+  default_agent_id?: string;
+  agent_prefs?: Record<string, PyniaAgentPreferences>;
+}
 export interface PyniaPermission { request_id: string; params: Record<string, unknown> }
 export interface PyniaState {
   agent_id?: string | null; acp_session_id?: string | null; locked: boolean; busy: boolean; messages: PyniaMessage[];
   selectors?: { model?: PyniaSelector; reasoning?: PyniaSelector }; permissions: PyniaPermission[]; error?: string;
   thinking?: string; tools?: PyniaToolActivity[]; [key: string]: unknown;
+  fresh_conversation?: boolean; defaults_applied?: boolean; config_loading?: boolean;
 }
 export interface AgentInstallation { running: boolean; output: string; error?: string; success?: boolean }
 export interface PyniaSnapshot { agents: PyniaAgent[]; sessions: Record<string, PyniaState>; installations: Record<string, AgentInstallation>; error: string }
 export const emptyPyniaState = (): PyniaState => ({ locked: false, busy: false, messages: [], permissions: [] });
 type EventSubscribe = (callback: (event: ServiceEvent) => void) => Promise<() => void>;
+
+/** A restored agent/configuration is a conversation even before its first message. */
+export function isFreshPyniaConversation(input?: unknown): boolean {
+  if (input == null) return true;
+  if (typeof input !== "object" || Array.isArray(input)) return false;
+  const state = input as Record<string, unknown>;
+  if (state.locked || state.busy || state.acp_session_id || Array.isArray(state.messages) && state.messages.length > 0) return false;
+  if (state.config_snapshot && typeof state.config_snapshot === "object" && Object.keys(state.config_snapshot).length > 0) return false;
+  if (state.fresh_conversation === false) return false;
+  // The broker can select the global default without opening an ACP session.
+  return state.fresh_conversation === true || !state.agent_id;
+}
+
+/** Legacy global model/reasoning preferences belong only to the default agent. */
+export function pyniaAgentPreferences(defaults: PyniaDefaults | undefined, agentId?: string | null): PyniaAgentPreferences {
+  if (!defaults || !agentId) return {};
+  const stored = defaults.agent_prefs?.[agentId], useGlobal = defaults.default_agent_id === agentId;
+  const model = stored?.model_id?.trim() || (useGlobal ? defaults.model_id?.trim() : "");
+  const thought = stored?.thought_level?.trim() || (useGlobal && defaults.thought_level !== "auto" ? defaults.thought_level?.trim() : "");
+  return { ...(model ? { model_id: model } : {}), ...(thought ? { thought_level: thought } : {}) };
+}
+
+/** Presentation only: never invent selector options or replace the live selection. */
+export function advertisedPyniaDefaults(defaults: PyniaDefaults | undefined, state: PyniaState | undefined): { model?: string; reasoning?: string } {
+  if (!state || state.locked || state.messages.length || !(state.fresh_conversation || state.defaults_applied)) return {};
+  const preferences = pyniaAgentPreferences(defaults, state.agent_id);
+  const offered = (selector: PyniaSelector | undefined, value: string | undefined) =>
+    value && selector && !selector.hidden && !selector.loading && selector.values.some((option) => option.value === value) ? value : undefined;
+  const model = offered(state.selectors?.model, preferences.model_id), reasoning = offered(state.selectors?.reasoning, preferences.thought_level);
+  return { ...(model ? { model } : {}), ...(reasoning ? { reasoning } : {}) };
+}
 
 export class PyniaController {
   private state: PyniaSnapshot = { agents: [], sessions: {}, installations: {}, error: "" };
@@ -36,16 +73,19 @@ export class PyniaController {
     try { await this.ensureEvents(); const result = await this.transport.request<{ agents: PyniaAgent[] }>("pynia.catalog"); this.update({ ...this.state, agents: result.agents, error: "" }); }
     catch (error) { this.update({ ...this.state, error: errorText(error) }); }
   }
-  async attach(sessionId: string, data?: unknown) {
+  async attach(sessionId: string, data?: unknown, defaults?: PyniaDefaults) {
     await this.ensureEvents();
     if (this.loaded.has(sessionId)) return;
     this.loaded.add(sessionId);
     const revision = this.revisions.get(sessionId) ?? 0;
-    try { const state = await this.transport.request<PyniaState>("pynia.state", { session_id: sessionId, data }); if ((this.revisions.get(sessionId) ?? 0) === revision) this.patch(sessionId, () => ({ ...emptyPyniaState(), ...state })); }
+    try { const state = await this.transport.request<PyniaState>("pynia.state", { session_id: sessionId, data, ...(defaults && isFreshPyniaConversation(data) ? { defaults } : {}) }); if ((this.revisions.get(sessionId) ?? 0) === revision) this.patch(sessionId, () => ({ ...emptyPyniaState(), ...state })); }
     catch (error) { this.loaded.delete(sessionId); this.patch(sessionId, (state) => ({ ...state, error: errorText(error) })); }
   }
-  async request(method: string, sessionId: string, params: Record<string, unknown> = {}) {
-    try { return await this.transport.request(method, { ...params, session_id: sessionId }); }
+  async request(method: string, sessionId: string, params: Record<string, unknown> = {}, defaults?: PyniaDefaults) {
+    const useDefaults = defaults && (method === "pynia.clear" || method === "pynia.select_agent" && isFreshPyniaConversation(this.state.sessions[sessionId]));
+    // Defaults are passed once at creation/explicit clear. The broker performs
+    // the actual ACP negotiation, including advertised-value checks.
+    try { return await this.transport.request(method, { ...params, session_id: sessionId, ...(useDefaults ? { defaults } : {}) }); }
     catch (error) { this.patch(sessionId, (state) => ({ ...state, error: errorText(error) })); throw error; }
   }
   onEvent(event: ServiceEvent) {

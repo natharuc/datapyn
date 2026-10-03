@@ -17,6 +17,7 @@ from .process_group import own_process_group
 from .workspace import read_document, write_document
 from .background import BackgroundJobs
 from .connection_catalog import ConnectionCatalog
+from .configurations import ConfigurationTransfer
 from .desktop_services import DesktopServices
 from .pynia import PyniaService
 from . import profiles
@@ -621,6 +622,10 @@ class Supervisor:
                     "executions": executions, "packages": packages, "pynia": pynia, "background": background}
         if method.startswith("connections.") or method.startswith("groups."):
             return self.catalog.dispatch(method, params)
+        if method.startswith("configurations."):
+            if method == "configurations.import" and self.dispatch("system.activity", {}, request_id)["busy"]:
+                raise RuntimeErrorResponse("workspace_busy", "Wait for executions, packages, Pynia and background operations before importing settings")
+            return ConfigurationTransfer(self.profile_path, self.catalog, self.desktop_services.packages).dispatch(method, params)
         if method.startswith("workspace.profiles."):
             if method == "workspace.profiles.select":
                 if self._flushes or self.background.active_count or self.desktop_services.busy or self.pynia.installations or any(conversation.state.busy or conversation.state.config_loading or conversation.inline_lock.locked() for conversation in self.pynia.conversations.values()):
@@ -778,3 +783,9 @@ class Supervisor:
         for session in list(self.sessions.values()):
             session.close()
         self.sessions.clear()
+        try:
+            profiles.close_stores()
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("Could not flush the workspace session database during shutdown")
+            raise

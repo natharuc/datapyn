@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-vi.mock("./editorRegistry", () => ({ disposeModel: vi.fn(), focusEditor: vi.fn(), getRegisteredEditor: vi.fn(), insertInEditor: vi.fn(), replaceEditorCode: vi.fn(), selectedCode: vi.fn() }));
+vi.mock("./editorRegistry", async(importOriginal) => ({ ...await importOriginal<typeof import("./editorRegistry")>(), disposeModel: vi.fn(), focusEditor: vi.fn(), getRegisteredEditor: vi.fn(), insertInEditor: vi.fn(), replaceEditorCode: vi.fn(), selectedCode: vi.fn() }));
 import { WorkspaceController } from "./workspace";
 import { handlePyniaTool } from "./pyniaTools";
 import type { RuntimeTransport } from "./runtime";

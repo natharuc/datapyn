@@ -1,9 +1,17 @@
 import {afterEach,describe,expect,it,vi} from "vitest";
-import {consumePendingFocus,disposeModel,focusEditor,forceAutocomplete,insertInEditor,models,pendingInsertions,selectedCode,setCompletionContext,contexts,contextVersions,editorPreferences} from "./editorRegistry";
+import {captureEditorViewState,restoreEditorViewState,subscribeEditorViewStates,takeRestoredEditorViewState,consumePendingFocus,disposeModel,focusEditor,forceAutocomplete,insertInEditor,models,pendingInsertions,selectedCode,setCompletionContext,contexts,contextVersions,editorPreferences} from "./editorRegistry";
 import {registerDocument} from "./documentWindows";
 
 afterEach(()=>{models.clear();pendingInsertions.clear();contexts.clear();contextVersions.clear();editorPreferences.clear();vi.unstubAllGlobals();});
 describe("Editor focus across viewport virtualization",()=>{
+  it("restores private cursor/scroll metadata and emits only changed view states without reading code",()=>{
+    const state={cursorState:[],viewState:{scrollTop:30,scrollLeft:0},contributionsState:{}};
+    expect(restoreEditorViewState("restored",state)).toBe(true);expect(takeRestoredEditorViewState("restored")).toBe(state);expect(takeRestoredEditorViewState("restored")).toBeNull();
+    expect(restoreEditorViewState("invalid",{viewState:{}})).toBe(false);
+    const listener=vi.fn(),unsubscribe=subscribeEditorViewStates(listener);
+    models.set("current",{model:{getValue:()=>{throw new Error("must not read code");}},viewState:null,editor:{saveViewState:()=>({...state})}} as never);
+    captureEditorViewState("current");captureEditorViewState("current");expect(listener).toHaveBeenCalledOnce();expect(listener.mock.calls[0]).toEqual(["current",state]);unsubscribe();
+  });
   it("scrolls to an unmounted block and consumes focus only when that editor mounts",()=>{
     const scroll=vi.fn();vi.stubGlobal("document",{querySelector:vi.fn(()=>({scrollIntoView:scroll}))});vi.stubGlobal("CSS",{escape:(text:string)=>text});
     focusEditor("offscreen");expect(scroll).toHaveBeenCalledWith({block:"nearest"});

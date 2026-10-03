@@ -61,7 +61,7 @@ def main() -> int:
                          "DATAPYN_WORKSPACE_PATH": temporary,
                          "DATAPYN_RUNTIME_DATA_DIR": str(Path(temporary) / "packages"),
                          "DATAPYN_SNAPSHOT_ROOT": str(Path(temporary) / "snapshots")}
-            for script in ("smoke_runtime.py", "smoke_parity.py"):
+            for script in ("smoke_runtime.py", "smoke_parity.py", "smoke_persistence.py"):
                 subprocess.run([sys.executable, str(ROOT / "scripts/tauri" / script), "--executable", str(built)],
                                cwd=ROOT, env=smoke_env, check=True)
     destination = ROOT / "desktop/src-tauri/binaries" / f"datapyn-runtime-{target}{suffix}"

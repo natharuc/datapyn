@@ -155,6 +155,11 @@ fn allowed_method(method: &str) -> bool {
             | "workspace.profiles.select"
             | "workspace.profiles.state"
             | "workspace.profiles.save"
+            | "workspace.profiles.patch"
+            | "configurations.inspect"
+            | "configurations.defaults.get"
+            | "configurations.import"
+            | "configurations.export"
             | "diagnostics.info"
             | "diagnostics.save"
     )
