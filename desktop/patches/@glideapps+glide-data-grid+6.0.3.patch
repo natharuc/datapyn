@@ -1,0 +1,697 @@
+diff --git a/node_modules/@glideapps/glide-data-grid/dist/dts/data-editor/data-editor.d.ts b/node_modules/@glideapps/glide-data-grid/dist/dts/data-editor/data-editor.d.ts
+index 6194a16..f3ea384 100644
+--- a/node_modules/@glideapps/glide-data-grid/dist/dts/data-editor/data-editor.d.ts
++++ b/node_modules/@glideapps/glide-data-grid/dist/dts/data-editor/data-editor.d.ts
+@@ -20,6 +20,8 @@ type EmitEvents = "copy" | "paste" | "delete" | "fill-right" | "fill-down";
+  * @category DataEditor
+  */
+ export interface DataEditorProps extends Props, Pick<DataGridSearchProps, "imageWindowLoader"> {
++    /** Host document for grids in adopted native pop-out panels. */
++    readonly ownerDocument?: Document;
+     /** Emitted whenever the user has requested the deletion of the selection.
+      * @group Editing
+      */
+diff --git a/node_modules/@glideapps/glide-data-grid/dist/esm/cells/drilldown-cell.js b/node_modules/@glideapps/glide-data-grid/dist/esm/cells/drilldown-cell.js
+index 0382a7c..57d1803 100644
+--- a/node_modules/@glideapps/glide-data-grid/dist/esm/cells/drilldown-cell.js
++++ b/node_modules/@glideapps/glide-data-grid/dist/esm/cells/drilldown-cell.js
+@@ -22,7 +22,8 @@ export const drilldownCellRenderer = {
+ };
+ const itemMargin = 4;
+ const drilldownCache = {};
+-function getAndCacheDrilldownBorder(bgCell, border, height, rounding) {
++function getAndCacheDrilldownBorder(bgCell, border, height, rounding, document) {
++    const window = document.defaultView;
+     const dpr = Math.ceil(window.devicePixelRatio);
+     const shadowBlur = 5;
+     const targetHeight = height - shadowBlur * 2;
+@@ -92,7 +93,7 @@ function drawDrilldownCell(args, data) {
+     const bubbleMargin = itemMargin;
+     let renderX = x + theme.cellHorizontalPadding;
+     const rounding = theme.roundingRadius ?? 6;
+-    const tileMap = getAndCacheDrilldownBorder(theme.bgCell, theme.drilldownBorder, h, rounding);
++    const tileMap = getAndCacheDrilldownBorder(theme.bgCell, theme.drilldownBorder, h, rounding, ctx.canvas.ownerDocument);
+     const renderBoxes = [];
+     for (const el of data) {
+         if (renderX > x + w)
+diff --git a/node_modules/@glideapps/glide-data-grid/dist/esm/common/owner-document.js b/node_modules/@glideapps/glide-data-grid/dist/esm/common/owner-document.js
+new file mode 100644
+index 0000000..95c65ea
+--- /dev/null
++++ b/node_modules/@glideapps/glide-data-grid/dist/esm/common/owner-document.js
+@@ -0,0 +1,35 @@
++import * as React from "react";
++
++// An adopted grid belongs to its host document, rather than the module's realm.
++export const OwnerDocumentContext = React.createContext(undefined);
++export function ownerDocumentOf(element, fallback) {
++    return element?.ownerDocument ?? fallback ?? (typeof document === "undefined" ? undefined : document);
++}
++export function ownerWindowOf(ownerDocument) {
++    return ownerDocument?.defaultView ?? (typeof window === "undefined" ? undefined : window);
++}
++export function useOwnerDocument() {
++    return ownerDocumentOf(undefined, React.useContext(OwnerDocumentContext));
++}
++export function useOwnerWindow() {
++    return ownerWindowOf(useOwnerDocument());
++}
++export function isMouseEvent(event) {
++    // instanceof against the importing window rejects real events from popouts.
++    return event !== undefined && typeof event.clientX === "number" && typeof event.clientY === "number" && !("changedTouches" in event);
++}
++export function isGridFocused(scroll, canvas) {
++    const document = ownerDocumentOf(scroll ?? canvas);
++    const active = document?.activeElement;
++    return active != null && (scroll?.contains(active) === true || canvas?.contains(active) === true);
++}
++export function overlayPortal(document) {
++    let portal = document.getElementById("portal");
++    if (portal === null) {
++        portal = document.createElement("div");
++        portal.id = "portal";
++        portal.dataset.gdgPortal = "true";
++        document.body.append(portal);
++    }
++    return portal;
++}
+diff --git a/node_modules/@glideapps/glide-data-grid/dist/esm/common/resize-detector.js b/node_modules/@glideapps/glide-data-grid/dist/esm/common/resize-detector.js
+index e01d627..d397b4d 100644
+--- a/node_modules/@glideapps/glide-data-grid/dist/esm/common/resize-detector.js
++++ b/node_modules/@glideapps/glide-data-grid/dist/esm/common/resize-detector.js
+@@ -13,7 +13,9 @@ export function useResizeDetector(initialSize) {
+                 setSize(cv => (cv.width === width && cv.height === height ? cv : { width, height }));
+             }
+         };
+-        const resizeObserver = new window.ResizeObserver(resizeCallback);
++        const view = ref.current?.ownerDocument.defaultView;
++        if (!view?.ResizeObserver) return;
++        const resizeObserver = new view.ResizeObserver(resizeCallback);
+         if (ref.current) {
+             resizeObserver.observe(ref.current, undefined);
+         }
+diff --git a/node_modules/@glideapps/glide-data-grid/dist/esm/common/utils.js b/node_modules/@glideapps/glide-data-grid/dist/esm/common/utils.js
+index 58ecd3c..f555ac0 100644
+--- a/node_modules/@glideapps/glide-data-grid/dist/esm/common/utils.js
++++ b/node_modules/@glideapps/glide-data-grid/dist/esm/common/utils.js
+@@ -92,12 +92,12 @@ const rtl = new RegExp("^[^" + ltrRange + "]*[" + rtlRange + "]");
+ export function direction(value) {
+     return rtl.test(value) ? "rtl" : "not-rtl";
+ }
+-let scrollbarWidthCache = undefined;
+-export function getScrollBarWidth() {
+-    if (typeof document === "undefined")
++const scrollbarWidthCache = new WeakMap();
++export function getScrollBarWidth(document = typeof globalThis.document === "undefined" ? undefined : globalThis.document) {
++    if (document === undefined)
+         return 0;
+-    if (scrollbarWidthCache !== undefined)
+-        return scrollbarWidthCache;
++    if (scrollbarWidthCache.has(document))
++        return scrollbarWidthCache.get(document);
+     const inner = document.createElement("p");
+     inner.style.width = "100%";
+     inner.style.height = "200px";
+@@ -119,8 +119,8 @@ export function getScrollBarWidth() {
+         w2 = outer.clientWidth;
+     }
+     outer.remove();
+-    scrollbarWidthCache = w1 - w2;
+-    return scrollbarWidthCache;
++    scrollbarWidthCache.set(document, w1 - w2);
++    return w1 - w2;
+ }
+ // Dear future reader,
+ // This dumb hook is to make sure if the inputState changes, that effectively behaves like an instant "setState" call.
+diff --git a/node_modules/@glideapps/glide-data-grid/dist/esm/data-editor/copy-paste.js b/node_modules/@glideapps/glide-data-grid/dist/esm/data-editor/copy-paste.js
+index 08281e1..3f266d3 100644
+--- a/node_modules/@glideapps/glide-data-grid/dist/esm/data-editor/copy-paste.js
++++ b/node_modules/@glideapps/glide-data-grid/dist/esm/data-editor/copy-paste.js
+@@ -1,3 +1,4 @@
++import { ownerDocumentOf } from "../common/owner-document.js";
+ /* eslint-disable sonarjs/no-duplicate-string */
+ import { assertNever } from "../common/support.js";
+ import { GridCellKind, BooleanEmpty, BooleanIndeterminate, } from "../internal/data-grid/data-grid-types.js";
+@@ -184,7 +185,7 @@ export function getCopyBufferContents(cells, columnIndexes) {
+         textHtml,
+     };
+ }
+-export function decodeHTML(html) {
++export function decodeHTML(html, document = ownerDocumentOf()) {
+     const fragment = document.createElement("html");
+     // we dont want to retain the pasted non-breaking spaces
+     fragment.innerHTML = html.replace(/&nbsp;/g, " ");
+diff --git a/node_modules/@glideapps/glide-data-grid/dist/esm/data-editor/data-editor-fns.js b/node_modules/@glideapps/glide-data-grid/dist/esm/data-editor/data-editor-fns.js
+index 611ca45..337ca27 100644
+--- a/node_modules/@glideapps/glide-data-grid/dist/esm/data-editor/data-editor-fns.js
++++ b/node_modules/@glideapps/glide-data-grid/dist/esm/data-editor/data-editor-fns.js
+@@ -1,3 +1,4 @@
++import { ownerWindowOf } from "../common/owner-document.js";
+ import {} from "../internal/data-grid/data-grid-types.js";
+ import { getCopyBufferContents } from "./copy-paste.js";
+ export function expandSelection(newVal, getCellsForSelection, rowMarkerOffset, spanRangeBehavior, abortController) {
+@@ -141,7 +142,8 @@ export function unquote(str) {
+     result.push(current);
+     return result.map(r => r.map(c => ({ rawValue: c, formatted: c, format: "string" })));
+ }
+-export function copyToClipboard(cells, columnIndexes, e) {
++export function copyToClipboard(cells, columnIndexes, e, document) {
++    const window = ownerWindowOf(document ?? e?.target?.ownerDocument);
+     const copyBuffer = getCopyBufferContents(cells, columnIndexes);
+     // eslint-disable-next-line unicorn/consistent-function-scoping
+     const copyWithWriteText = (s) => {
+@@ -151,10 +153,10 @@ export function copyToClipboard(cells, columnIndexes, e) {
+         if (window.navigator.clipboard?.write === undefined)
+             return false;
+         void window.navigator.clipboard.write([
+-            new ClipboardItem({
++            new window.ClipboardItem({
+                 // eslint-disable-next-line sonarjs/no-duplicate-string
+-                "text/plain": new Blob([s], { type: "text/plain" }),
+-                "text/html": new Blob([html], {
++                "text/plain": new window.Blob([s], { type: "text/plain" }),
++                "text/html": new window.Blob([html], {
+                     type: "text/html",
+                 }),
+             }),
+diff --git a/node_modules/@glideapps/glide-data-grid/dist/esm/data-editor/data-editor.js b/node_modules/@glideapps/glide-data-grid/dist/esm/data-editor/data-editor.js
+index ec05aa9..4ab2aee 100644
+--- a/node_modules/@glideapps/glide-data-grid/dist/esm/data-editor/data-editor.js
++++ b/node_modules/@glideapps/glide-data-grid/dist/esm/data-editor/data-editor.js
+@@ -1,3 +1,4 @@
++import { OwnerDocumentContext, useOwnerDocument, ownerWindowOf, isGridFocused } from "../common/owner-document.js";
+ /* eslint-disable sonarjs/no-duplicate-string */
+ import * as React from "react";
+ import { assert, assertNever, maybe } from "../common/support.js";
+@@ -65,6 +66,9 @@ const emptyGridSelection = {
+     current: undefined,
+ };
+ const DataEditorImpl = (p, forwardedRef) => {
++    const document = useOwnerDocument();
++    const window = ownerWindowOf(document);
++    const navigator = window?.navigator;
+     const [gridSelectionInner, setGridSelectionInner] = React.useState(emptyGridSelection);
+     const [overlay, setOverlay] = React.useState();
+     const searchInputRef = React.useRef(null);
+@@ -2195,8 +2199,7 @@ const DataEditorImpl = (p, forwardedRef) => {
+         }
+         const selectedColumns = gridSelection.columns;
+         const selectedRows = gridSelection.rows;
+-        const focused = scrollRef.current?.contains(document.activeElement) === true ||
+-            canvasRef.current?.contains(document.activeElement) === true;
++        const focused = isGridFocused(scrollRef.current, canvasRef.current);
+         let target;
+         if (gridSelection.current !== undefined) {
+             target = [gridSelection.current.range.x, gridSelection.current.range.y];
+@@ -2218,7 +2221,7 @@ const DataEditorImpl = (p, forwardedRef) => {
+                     if (item.types.includes(textHtml)) {
+                         const htmlBlob = await item.getType(textHtml);
+                         const html = await htmlBlob.text();
+-                        const decoded = decodeHTML(html);
++                        const decoded = decodeHTML(html, document);
+                         if (decoded !== undefined) {
+                             data = decoded;
+                             break;
+@@ -2236,7 +2239,7 @@ const DataEditorImpl = (p, forwardedRef) => {
+             else if (e !== undefined && e?.clipboardData !== null) {
+                 if (e.clipboardData.types.includes(textHtml)) {
+                     const html = e.clipboardData.getData(textHtml);
+-                    data = decodeHTML(html);
++                    data = decodeHTML(html, document);
+                 }
+                 if (data === undefined && e.clipboardData.types.includes(textPlain)) {
+                     text = e.clipboardData.getData(textPlain);
+@@ -2312,13 +2315,12 @@ const DataEditorImpl = (p, forwardedRef) => {
+         if (!keybindings.copy)
+             return;
+         const focused = ignoreFocus === true ||
+-            scrollRef.current?.contains(document.activeElement) === true ||
+-            canvasRef.current?.contains(document.activeElement) === true;
++            isGridFocused(scrollRef.current, canvasRef.current);
+         const selectedColumns = gridSelection.columns;
+         const selectedRows = gridSelection.rows;
+         const copyToClipboardWithHeaders = (cells, columnIndexes) => {
+             if (!copyHeaders) {
+-                copyToClipboard(cells, columnIndexes, e);
++                copyToClipboard(cells, columnIndexes, e, document);
+             }
+             else {
+                 const headers = columnIndexes.map(index => ({
+@@ -2327,7 +2329,7 @@ const DataEditorImpl = (p, forwardedRef) => {
+                     displayData: columnsIn[index].title,
+                     allowOverlay: false,
+                 }));
+-                copyToClipboard([headers, ...cells], columnIndexes, e);
++                copyToClipboard([headers, ...cells], columnIndexes, e, document);
+             }
+         };
+         if (focused && getCellsForSelection !== undefined) {
+@@ -2391,8 +2393,7 @@ const DataEditorImpl = (p, forwardedRef) => {
+     const onCut = React.useCallback(async (e) => {
+         if (!keybindings.cut)
+             return;
+-        const focused = scrollRef.current?.contains(document.activeElement) === true ||
+-            canvasRef.current?.contains(document.activeElement) === true;
++        const focused = isGridFocused(scrollRef.current, canvasRef.current);
+         if (!focused)
+             return;
+         await onCopy(e);
+@@ -2614,7 +2615,7 @@ const DataEditorImpl = (p, forwardedRef) => {
+     }, []);
+     const [idealWidth, idealHeight] = React.useMemo(() => {
+         let h;
+-        const scrollbarWidth = experimental?.scrollbarWidthOverride ?? getScrollBarWidth();
++        const scrollbarWidth = experimental?.scrollbarWidthOverride ?? getScrollBarWidth(document);
+         const rowsCountWithTrailingRow = rows + (showTrailingBlankRow ? 1 : 0);
+         if (typeof rowHeight === "number") {
+             h = totalHeaderHeight + rowsCountWithTrailingRow * rowHeight;
+@@ -2649,5 +2650,6 @@ const DataEditorImpl = (p, forwardedRef) => {
+  * @category DataEditor
+  * @param {DataEditorProps} props
+  */
+-export const DataEditor = React.forwardRef(DataEditorImpl);
++const OwnedDataEditor = React.forwardRef(DataEditorImpl);
++export const DataEditor = React.forwardRef((props, ref) => React.createElement(OwnerDocumentContext.Provider, { value: props.ownerDocument }, React.createElement(OwnedDataEditor, { ...props, ref })));
+ //# sourceMappingURL=data-editor.js.map
+\ No newline at end of file
+diff --git a/node_modules/@glideapps/glide-data-grid/dist/esm/data-editor/use-autoscroll.js b/node_modules/@glideapps/glide-data-grid/dist/esm/data-editor/use-autoscroll.js
+index c086092..feec138 100644
+--- a/node_modules/@glideapps/glide-data-grid/dist/esm/data-editor/use-autoscroll.js
++++ b/node_modules/@glideapps/glide-data-grid/dist/esm/data-editor/use-autoscroll.js
+@@ -1,7 +1,9 @@
++import { useOwnerWindow } from "../common/owner-document.js";
+ import React from "react";
+ const maxPxPerMs = 2;
+ const msToFullSpeed = 1300;
+ export function useAutoscroll(scrollDirection, scrollRef, onScroll) {
++    const window = useOwnerWindow();
+     const speedScalar = React.useRef(0);
+     const [xDir, yDir] = scrollDirection ?? [0, 0];
+     React.useEffect(() => {
+diff --git a/node_modules/@glideapps/glide-data-grid/dist/esm/data-editor/use-column-sizer.js b/node_modules/@glideapps/glide-data-grid/dist/esm/data-editor/use-column-sizer.js
+index f86424a..1e5c21c 100644
+--- a/node_modules/@glideapps/glide-data-grid/dist/esm/data-editor/use-column-sizer.js
++++ b/node_modules/@glideapps/glide-data-grid/dist/esm/data-editor/use-column-sizer.js
+@@ -1,3 +1,4 @@
++import { useOwnerDocument } from "../common/owner-document.js";
+ import * as React from "react";
+ import { isSizedGridColumn, resolveCellsThunk, } from "../internal/data-grid/data-grid-types.js";
+ const defaultSize = 150;
+@@ -41,6 +42,8 @@ export function measureColumn(ctx, theme, c, colIndex, selectedData, minColumnWi
+ }
+ /** @category Hooks */
+ export function useColumnSizer(columns, rows, getCellsForSelection, clientWidth, minColumnWidth, maxColumnWidth, theme, getCellRenderer, abortController) {
++    const document = useOwnerDocument();
++    const window = document?.defaultView;
+     const rowsRef = React.useRef(rows);
+     const getCellsForSelectionRef = React.useRef(getCellsForSelection);
+     const themeRef = React.useRef(theme);
+diff --git a/node_modules/@glideapps/glide-data-grid/dist/esm/internal/click-outside-container/click-outside-container.js b/node_modules/@glideapps/glide-data-grid/dist/esm/internal/click-outside-container/click-outside-container.js
+index f81bb4e..4110d14 100644
+--- a/node_modules/@glideapps/glide-data-grid/dist/esm/internal/click-outside-container/click-outside-container.js
++++ b/node_modules/@glideapps/glide-data-grid/dist/esm/internal/click-outside-container/click-outside-container.js
+@@ -2,14 +2,15 @@ import * as React from "react";
+ export default class ClickOutsideContainer extends React.PureComponent {
+     wrapperRef = React.createRef();
+     componentDidMount() {
+-        document.addEventListener("touchend", this.clickOutside, true);
+-        document.addEventListener("mousedown", this.clickOutside, true);
+-        document.addEventListener("contextmenu", this.clickOutside, true);
++        this.document = this.wrapperRef.current?.ownerDocument;
++        this.document?.addEventListener("touchend", this.clickOutside, true);
++        this.document?.addEventListener("mousedown", this.clickOutside, true);
++        this.document?.addEventListener("contextmenu", this.clickOutside, true);
+     }
+     componentWillUnmount() {
+-        document.removeEventListener("touchend", this.clickOutside, true);
+-        document.removeEventListener("mousedown", this.clickOutside, true);
+-        document.removeEventListener("contextmenu", this.clickOutside, true);
++        this.document?.removeEventListener("touchend", this.clickOutside, true);
++        this.document?.removeEventListener("mousedown", this.clickOutside, true);
++        this.document?.removeEventListener("contextmenu", this.clickOutside, true);
+     }
+     clickOutside = (event) => {
+         if (this.props.isOutsideClick && !this.props.isOutsideClick(event)) {
+@@ -18,7 +19,7 @@ export default class ClickOutsideContainer extends React.PureComponent {
+         if (this.wrapperRef.current !== null && !this.wrapperRef.current.contains(event.target)) {
+             let node = event.target;
+             while (node !== null) {
+-                if (node.classList.contains("click-outside-ignore")) {
++                if (node.classList?.contains("click-outside-ignore")) {
+                     return;
+                 }
+                 node = node.parentElement;
+diff --git a/node_modules/@glideapps/glide-data-grid/dist/esm/internal/data-grid-overlay-editor/data-grid-overlay-editor.js b/node_modules/@glideapps/glide-data-grid/dist/esm/internal/data-grid-overlay-editor/data-grid-overlay-editor.js
+index 259b5fb..6e76cf6 100644
+--- a/node_modules/@glideapps/glide-data-grid/dist/esm/internal/data-grid-overlay-editor/data-grid-overlay-editor.js
++++ b/node_modules/@glideapps/glide-data-grid/dist/esm/internal/data-grid-overlay-editor/data-grid-overlay-editor.js
+@@ -1,3 +1,4 @@
++import { useOwnerDocument, overlayPortal } from "../../common/owner-document.js";
+ import * as React from "react";
+ import { createPortal } from "react-dom";
+ import ClickOutsideContainer from "../click-outside-container/click-outside-container.js";
+@@ -6,6 +7,8 @@ import { isEditableGridCell, isInnerOnlyCell, isObjectEditorCallbackResult, } fr
+ import { DataGridOverlayEditorStyle } from "./data-grid-overlay-editor-style.js";
+ import { useStayOnScreen } from "./use-stay-on-screen.js";
+ const DataGridOverlayEditor = p => {
++    const document = useOwnerDocument();
++    const window = document?.defaultView;
+     const { target, content, onFinishEditing: onFinishEditingIn, forceEditMode, initialValue, imageEditorOverride, markdownDivCreateNode, highlight, className, theme, id, cell, bloom, validateCell, getCellRenderer, provideEditor, isOutsideClick, } = p;
+     const [tempValue, setTempValueRaw] = React.useState(forceEditMode ? content : undefined);
+     const lastValueRef = React.useRef(tempValue ?? content);
+@@ -96,7 +99,10 @@ const DataGridOverlayEditor = p => {
+     }
+     styleOverride = { ...styleOverride, ...stayOnScreenStyle };
+     // Consider imperatively creating and adding the element to the dom?
+-    const portalElement = document.getElementById("portal");
++    const portalElement = overlayPortal(document);
++    React.useEffect(() => () => {
++        if (portalElement.dataset.gdgPortal === "true" && portalElement.childElementCount === 0) portalElement.remove();
++    }, [portalElement]);
+     if (portalElement === null) {
+         // eslint-disable-next-line no-console
+         console.error('Cannot open Data Grid overlay editor, because portal not found.  Please add `<div id="portal" />` as the last child of your `<body>`.');
+diff --git a/node_modules/@glideapps/glide-data-grid/dist/esm/internal/data-grid-overlay-editor/use-stay-on-screen.js b/node_modules/@glideapps/glide-data-grid/dist/esm/internal/data-grid-overlay-editor/use-stay-on-screen.js
+index baac6ce..c63f12f 100644
+--- a/node_modules/@glideapps/glide-data-grid/dist/esm/internal/data-grid-overlay-editor/use-stay-on-screen.js
++++ b/node_modules/@glideapps/glide-data-grid/dist/esm/internal/data-grid-overlay-editor/use-stay-on-screen.js
+@@ -1,9 +1,11 @@
++import { useOwnerWindow } from "../../common/owner-document.js";
+ import * as React from "react";
+ function useRefState() {
+     const [refState, setRefState] = React.useState();
+     return [refState ?? undefined, setRefState];
+ }
+ export function useStayOnScreen() {
++    const window = useOwnerWindow();
+     const [ref, setRef] = useRefState();
+     const [xOffset, setXOffset] = React.useState(0);
+     const [isIntersecting, setIsIntersecting] = React.useState(true);
+@@ -12,7 +14,7 @@ export function useStayOnScreen() {
+             return;
+         if (!("IntersectionObserver" in window))
+             return;
+-        const observer = new IntersectionObserver(ents => {
++        const observer = new window.IntersectionObserver(ents => {
+             if (ents.length === 0)
+                 return;
+             setIsIntersecting(ents[0].isIntersecting);
+@@ -27,12 +29,12 @@ export function useStayOnScreen() {
+         const fn = () => {
+             const { right: refRight } = ref.getBoundingClientRect();
+             setXOffset(cv => Math.min(cv + window.innerWidth - refRight - 10, 0));
+-            rafHandle = requestAnimationFrame(fn);
++            rafHandle = window.requestAnimationFrame(fn);
+         };
+-        rafHandle = requestAnimationFrame(fn);
++        rafHandle = window.requestAnimationFrame(fn);
+         return () => {
+             if (rafHandle !== undefined) {
+-                cancelAnimationFrame(rafHandle);
++                window.cancelAnimationFrame(rafHandle);
+             }
+         };
+     }, [ref, isIntersecting]);
+diff --git a/node_modules/@glideapps/glide-data-grid/dist/esm/internal/data-grid-search/data-grid-search.js b/node_modules/@glideapps/glide-data-grid/dist/esm/internal/data-grid-search/data-grid-search.js
+index 19f920f..beca517 100644
+--- a/node_modules/@glideapps/glide-data-grid/dist/esm/internal/data-grid-search/data-grid-search.js
++++ b/node_modules/@glideapps/glide-data-grid/dist/esm/internal/data-grid-search/data-grid-search.js
+@@ -1,3 +1,4 @@
++import { useOwnerWindow } from "../../common/owner-document.js";
+ /* eslint-disable unicorn/consistent-destructuring */
+ import * as React from "react";
+ import { GridCellKind, } from "../data-grid/data-grid-types.js";
+@@ -13,6 +14,7 @@ const closeX = (React.createElement("svg", { className: "button-icon", viewBox:
+     React.createElement("path", { fill: "none", stroke: "currentColor", strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "32", d: "M368 368L144 144M368 144L144 368" })));
+ const targetSearchTimeMS = 10;
+ const DataGridSearch = p => {
++    const window = useOwnerWindow();
+     const { canvasRef, cellYOffset, rows, columns, searchInputRef, searchValue, searchResults: searchResultsIn, onSearchValueChange, getCellsForSelection, onSearchResultsChanged, showSearch = false, onSearchClose, } = p;
+     const [searchID] = React.useState(() => "search-box-" + Math.round(Math.random() * 1000));
+     const [searchStringInner, setSearchStringInner] = React.useState("");
+diff --git a/node_modules/@glideapps/glide-data-grid/dist/esm/internal/data-grid/animation-manager.js b/node_modules/@glideapps/glide-data-grid/dist/esm/internal/data-grid/animation-manager.js
+index 07d7695..fdcd742 100644
+--- a/node_modules/@glideapps/glide-data-grid/dist/esm/internal/data-grid/animation-manager.js
++++ b/node_modules/@glideapps/glide-data-grid/dist/esm/internal/data-grid/animation-manager.js
+@@ -7,9 +7,16 @@ function easeOutCubic(x) {
+ }
+ export class AnimationManager {
+     callback;
+-    constructor(callback) {
++    constructor(callback, view) {
++        this.view = view;
+         this.callback = callback;
+     }
++    frame;
++    disposed = false;
++    dispose = () => {
++        this.disposed = true;
++        if (this.frame !== undefined) this.view.cancelAnimationFrame(this.frame);
++    };
+     currentHoveredItem = undefined;
+     leavingItems = [];
+     lastAnimationTime;
+@@ -46,6 +53,7 @@ export class AnimationManager {
+         return this.leavingItems.map(x => ({ ...x, hoverAmount: easeOutCubic(x.hoverAmount) }));
+     };
+     step = (timestamp) => {
++        if (this.disposed) return;
+         if (this.lastAnimationTime === undefined) {
+             this.lastAnimationTime = timestamp;
+         }
+@@ -64,13 +72,14 @@ export class AnimationManager {
+         }
+         if (this.shouldStep()) {
+             this.lastAnimationTime = timestamp;
+-            window.requestAnimationFrame(this.step);
++            this.frame = this.view.requestAnimationFrame(this.step);
+         }
+         else {
+             this.lastAnimationTime = undefined;
+         }
+     };
+     setHovered = (item) => {
++        if (this.disposed) return;
+         if (itemsAreEqual(this.currentHoveredItem?.item, item)) {
+             return;
+         }
+@@ -88,7 +97,7 @@ export class AnimationManager {
+             this.currentHoveredItem = undefined;
+         }
+         if (this.lastAnimationTime === undefined) {
+-            window.requestAnimationFrame(this.step);
++            this.frame = this.view.requestAnimationFrame(this.step);
+         }
+     };
+ }
+diff --git a/node_modules/@glideapps/glide-data-grid/dist/esm/internal/data-grid/data-grid-sprites.js b/node_modules/@glideapps/glide-data-grid/dist/esm/internal/data-grid/data-grid-sprites.js
+index a18000e..4a57b45 100644
+--- a/node_modules/@glideapps/glide-data-grid/dist/esm/internal/data-grid/data-grid-sprites.js
++++ b/node_modules/@glideapps/glide-data-grid/dist/esm/internal/data-grid/data-grid-sprites.js
+@@ -22,6 +22,8 @@ export class SpriteManager {
+     }
+     drawSprite(sprite, variant, ctx, x, y, size, theme, alpha = 1) {
+         const [bgColor, fgColor] = getColors(variant, theme);
++        const document = ctx.canvas.ownerDocument;
++        const window = document.defaultView;
+         const rSize = size * Math.ceil(window.devicePixelRatio);
+         const key = `${bgColor}_${fgColor}_${rSize}_${sprite}`;
+         let spriteCanvas = this.spriteMap.get(key);
+@@ -33,7 +35,7 @@ export class SpriteManager {
+             const spriteCtx = spriteCanvas.getContext("2d");
+             if (spriteCtx === null)
+                 return;
+-            const imgSource = new Image();
++            const imgSource = new window.Image();
+             imgSource.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(spriteCb({ fgColor, bgColor }))}`;
+             this.spriteMap.set(key, spriteCanvas);
+             const promise = imgSource.decode();
+diff --git a/node_modules/@glideapps/glide-data-grid/dist/esm/internal/data-grid/data-grid.js b/node_modules/@glideapps/glide-data-grid/dist/esm/internal/data-grid/data-grid.js
+index c32e94b..d10857f 100644
+--- a/node_modules/@glideapps/glide-data-grid/dist/esm/internal/data-grid/data-grid.js
++++ b/node_modules/@glideapps/glide-data-grid/dist/esm/internal/data-grid/data-grid.js
+@@ -1,3 +1,4 @@
++import { useOwnerDocument, ownerWindowOf, isMouseEvent } from "../../common/owner-document.js";
+ import * as React from "react";
+ import { computeBounds, getColumnIndexForX, getEffectiveColumns, getRowIndexForY, getStickyWidth, rectBottomRight, useMappedColumns, } from "./render/data-grid-lib.js";
+ import { GridCellKind, InnerGridCellKind, CompactSelection, isReadWriteCell, isInnerOnlyCell, booleanCellIsEditable, } from "./data-grid-types.js";
+@@ -25,6 +26,8 @@ const getRowData = (cell, getCellRenderer) => {
+     return r?.getAccessibilityString(cell) ?? "";
+ };
+ const DataGrid = (p, forwardedRef) => {
++    const document = useOwnerDocument();
++    const window = ownerWindowOf(document);
+     const { width, height, accessibilityHeight, columns, cellXOffset: cellXOffsetReal, cellYOffset, headerHeight, fillHandle = false, groupHeaderHeight, rowHeight, rows, getCellContent, getRowThemeOverride, onHeaderMenuClick, enableGroups, isFilling, onCanvasFocused, onCanvasBlur, isFocused, selection, freezeColumns, onContextMenu, freezeTrailingRows, fixedShadowX = true, fixedShadowY = true, drawFocusRing, onMouseDown, onMouseUp, onMouseMoveRaw, onMouseMove, onItemHovered, dragAndDropState, firstColAccessible, onKeyDown, onKeyUp, highlightRegions, canvasRef, onDragStart, onDragEnd, eventTargetRef, isResizing, resizeColumn: resizeCol, isDragging, isDraggable = false, allowResize, disabledRows, hasAppendRow, getGroupDetails, theme, prelightCells, headerIcons, verticalBorder, drawCell: drawCellCallback, drawHeader: drawHeaderCallback, onCellFocused, onDragOverCell, onDrop, onDragLeave, imageWindowLoader, smoothScrollX = false, smoothScrollY = false, experimental, getCellRenderer, } = p;
+     const translateX = p.translateX ?? 0;
+     const translateY = p.translateY ?? 0;
+@@ -106,7 +109,7 @@ const DataGrid = (p, forwardedRef) => {
+         const effectiveCols = getEffectiveColumns(mappedColumns, cellXOffset, width, undefined, translateX);
+         let button = 0;
+         let buttons = 0;
+-        if (ev instanceof MouseEvent) {
++        if (isMouseEvent(ev)) {
+             button = ev.button;
+             buttons = ev.buttons;
+         }
+@@ -118,7 +121,7 @@ const DataGrid = (p, forwardedRef) => {
+         const shiftKey = ev?.shiftKey === true;
+         const ctrlKey = ev?.ctrlKey === true;
+         const metaKey = ev?.metaKey === true;
+-        const isTouch = (ev !== undefined && !(ev instanceof MouseEvent)) || ev?.pointerType === "touch";
++        const isTouch = (ev !== undefined && !(isMouseEvent(ev))) || ev?.pointerType === "touch";
+         const scrollEdge = [
+             x < 0 ? -1 : width < x ? 1 : 0,
+             y < totalHeaderHeight ? -1 : height < y ? 1 : 0,
+@@ -142,7 +145,7 @@ const DataGrid = (p, forwardedRef) => {
+             // This is used to ensure that clicking on the scrollbar doesn't unset the selection.
+             // Unfortunately this doesn't work for overlay scrollbars because they are just a broken interaction
+             // by design.
+-            const isMaybeScrollbar = (x > width && x < width + getScrollBarWidth()) || (y > height && y < height + getScrollBarWidth());
++            const isMaybeScrollbar = (x > width && x < width + getScrollBarWidth(document)) || (y > height && y < height + getScrollBarWidth(document));
+             result = {
+                 kind: outOfBoundsKind,
+                 location: [col !== -1 ? col : x < 0 ? 0 : mappedColumns.length - 1, row ?? rows - 1],
+@@ -538,7 +541,7 @@ const DataGrid = (p, forwardedRef) => {
+         mouseDown.current = true;
+         let clientX;
+         let clientY;
+-        if (ev instanceof MouseEvent) {
++        if (isMouseEvent(ev)) {
+             clientX = ev.clientX;
+             clientY = ev.clientY;
+         }
+@@ -594,7 +597,7 @@ const DataGrid = (p, forwardedRef) => {
+         let clientX;
+         let clientY;
+         let canCancel = true;
+-        if (ev instanceof MouseEvent) {
++        if (isMouseEvent(ev)) {
+             clientX = ev.clientX;
+             clientY = ev.clientY;
+             canCancel = ev.button < 3;
+@@ -656,7 +659,7 @@ const DataGrid = (p, forwardedRef) => {
+         let clientX;
+         let clientY;
+         let canCancel = true;
+-        if (ev instanceof MouseEvent) {
++        if (isMouseEvent(ev)) {
+             clientX = ev.clientX;
+             clientY = ev.clientY;
+             canCancel = ev.button < 3;
+@@ -705,7 +708,11 @@ const DataGrid = (p, forwardedRef) => {
+         lastDrawRef.current();
+         damageRegion.current = undefined;
+     }, []);
+-    const animManagerValue = React.useMemo(() => new AnimationManager(onAnimationFrame), [onAnimationFrame]);
++    const animManagerValue = React.useMemo(() => new AnimationManager(onAnimationFrame, window), [onAnimationFrame]);
++    React.useEffect(() => {
++        animManagerValue.disposed = false;
++        return () => animManagerValue.dispose();
++    }, [animManagerValue]);
+     const animationManager = React.useRef(animManagerValue);
+     animationManager.current = animManagerValue;
+     React.useLayoutEffect(() => {
+diff --git a/node_modules/@glideapps/glide-data-grid/dist/esm/internal/data-grid/render/data-grid-render.js b/node_modules/@glideapps/glide-data-grid/dist/esm/internal/data-grid/render/data-grid-render.js
+index cb74d4b..e6fa4ba 100644
+--- a/node_modules/@glideapps/glide-data-grid/dist/esm/internal/data-grid/render/data-grid-render.js
++++ b/node_modules/@glideapps/glide-data-grid/dist/esm/internal/data-grid/render/data-grid-render.js
+@@ -63,7 +63,7 @@ export function drawGrid(arg, lastArg) {
+     if (width === 0 || height === 0)
+         return;
+     const doubleBuffer = renderStrategy === "double-buffer";
+-    const dpr = Math.min(maxScaleFactor, Math.ceil(window.devicePixelRatio ?? 1));
++    const dpr = Math.min(maxScaleFactor, Math.ceil(canvasCtx.canvas.ownerDocument.defaultView?.devicePixelRatio ?? 1));
+     // if we are double buffering we need to make sure we can blit. If we can't we need to redraw the whole thing
+     const canBlit = renderStrategy !== "direct" && computeCanBlit(arg, lastArg);
+     const canvas = canvasCtx.canvas;
+diff --git a/node_modules/@glideapps/glide-data-grid/dist/esm/internal/data-grid/use-animation-queue.js b/node_modules/@glideapps/glide-data-grid/dist/esm/internal/data-grid/use-animation-queue.js
+index 6f0947f..63f0921 100644
+--- a/node_modules/@glideapps/glide-data-grid/dist/esm/internal/data-grid/use-animation-queue.js
++++ b/node_modules/@glideapps/glide-data-grid/dist/esm/internal/data-grid/use-animation-queue.js
+@@ -1,15 +1,27 @@
++import { useOwnerWindow } from "../../common/owner-document.js";
+ import * as React from "react";
+ import {} from "./data-grid-types.js";
+ import { CellSet } from "./cell-set.js";
+ import { packColRowToNumber, unpackNumberToColRow } from "../../common/render-state-provider.js";
+ export function useAnimationQueue(draw) {
++    const window = useOwnerWindow();
++    const frame = React.useRef();
++    const active = React.useRef(true);
++    React.useEffect(() => {
++        active.current = true;
++        return () => {
++            active.current = false;
++            if (frame.current !== undefined) window.cancelAnimationFrame(frame.current);
++        };
++    }, [window]);
+     const queue = React.useRef([]);
+     const seq = React.useRef(0);
+     const drawRef = React.useRef(draw);
+     drawRef.current = draw;
+     const loop = React.useCallback(() => {
+-        const requeue = () => window.requestAnimationFrame(fn);
++        const requeue = () => { frame.current = window.requestAnimationFrame(fn); };
+         const fn = () => {
++            if (!active.current) return;
+             const toDraw = queue.current.map(unpackNumberToColRow);
+             queue.current = [];
+             drawRef.current(new CellSet(toDraw));
+@@ -20,7 +32,7 @@ export function useAnimationQueue(draw) {
+                 seq.current = 0;
+             }
+         };
+-        window.requestAnimationFrame(seq.current > 600 ? requeue : fn);
++        frame.current = window.requestAnimationFrame(seq.current > 600 ? requeue : fn);
+     }, []);
+     return React.useCallback((item) => {
+         if (queue.current.length === 0)
+diff --git a/node_modules/@glideapps/glide-data-grid/dist/esm/internal/markdown-div/markdown-div.js b/node_modules/@glideapps/glide-data-grid/dist/esm/internal/markdown-div/markdown-div.js
+index c78ff19..16eedbb 100644
+--- a/node_modules/@glideapps/glide-data-grid/dist/esm/internal/markdown-div/markdown-div.js
++++ b/node_modules/@glideapps/glide-data-grid/dist/esm/internal/markdown-div/markdown-div.js
+@@ -10,6 +10,7 @@ export default class MarkdownDiv extends React.PureComponent {
+             return;
+         const { contents, createNode } = props;
+         const innerHTML = marked(contents);
++        const document = targetElement.ownerDocument;
+         const childRange = document.createRange();
+         childRange.selectNodeContents(targetElement);
+         childRange.deleteContents();
+diff --git a/node_modules/@glideapps/glide-data-grid/dist/esm/internal/scrolling-data-grid/infinite-scroller.js b/node_modules/@glideapps/glide-data-grid/dist/esm/internal/scrolling-data-grid/infinite-scroller.js
+index 4fd4e8e..1d06367 100644
+--- a/node_modules/@glideapps/glide-data-grid/dist/esm/internal/scrolling-data-grid/infinite-scroller.js
++++ b/node_modules/@glideapps/glide-data-grid/dist/esm/internal/scrolling-data-grid/infinite-scroller.js
+@@ -1,3 +1,4 @@
++import { useOwnerWindow } from "../../common/owner-document.js";
+ import { styled } from "@linaria/react";
+ import * as React from "react";
+ import { useResizeDetector } from "../../common/resize-detector.js";
+@@ -14,6 +15,7 @@ const ScrollRegionStyle = /*#__PURE__*/styled('div')({
+   }
+ });
+ function useTouchUpDelayed(delay) {
++  const window = useOwnerWindow();
+   const [hasTouches, setHasTouches] = React.useState(false);
+   const safeWindow = typeof window === "undefined" ? null : window;
+   const cbTimer = React.useRef(0);
+@@ -29,6 +31,7 @@ function useTouchUpDelayed(delay) {
+   return hasTouches;
+ }
+ export const InfiniteScroller = p => {
++  const window = useOwnerWindow();
+   const {
+     children,
+     clientHeight,
+diff --git a/node_modules/@glideapps/glide-data-grid/dist/esm/internal/scrolling-data-grid/use-kinetic-scroll.js b/node_modules/@glideapps/glide-data-grid/dist/esm/internal/scrolling-data-grid/use-kinetic-scroll.js
+index bbf09a3..d8e7b5d 100644
+--- a/node_modules/@glideapps/glide-data-grid/dist/esm/internal/scrolling-data-grid/use-kinetic-scroll.js
++++ b/node_modules/@glideapps/glide-data-grid/dist/esm/internal/scrolling-data-grid/use-kinetic-scroll.js
+@@ -1,5 +1,7 @@
++import { useOwnerWindow } from "../../common/owner-document.js";
+ import { useEffect, useRef } from "react";
+ const useKineticScroll = (isEnabled, callback, targetScroller) => {
++    const window = useOwnerWindow();
+     const rafId = useRef(null);
+     const isTouching = useRef(null);
+     const lastScrollPosition = useRef(null);
