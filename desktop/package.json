@@ -14,7 +14,7 @@
     "desktop:dev": "node ../scripts/tauri/dev.mjs",
     "runtime:bundle": "node ../scripts/tauri/runtime.mjs",
     "desktop:build": "node ../scripts/tauri/build.mjs",
-    "postinstall": "node scripts/apply-glide-patch.mjs"
+    "postinstall": "node scripts/postinstall.mjs"
   },
   "dependencies": {
     "@glideapps/glide-data-grid": "6.0.3",

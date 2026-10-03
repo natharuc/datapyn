@@ -1,0 +1,14 @@
+{
+  "version": "8.4.0",
+  "patch_sha256": "d2c5e898427d4394079ed1666762fa4afc280a872e93c05de129314dd21f9e33",
+  "files": {
+    "dist/package/main.esm.mjs": {
+      "original": "98dbf7cc19f01f86b7834a762da4f00d6a0954d915e1af4a366dc12fa687fc21",
+      "patched": "b995fd39ab7152460ec095c88b0e728edb3e207819028649b38b91fc483fbbc8"
+    },
+    "dist/package/main.cjs.js": {
+      "original": "71756bda3f27ad0c2efb7c9f80c94915bb4b5e4baec2ad85a1272cab4036ae12",
+      "patched": "50abab31233dd38b7187e699ddb59a799a09be3f0699330224ec4cd9b215ec7a"
+    }
+  }
+}

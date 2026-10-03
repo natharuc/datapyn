@@ -108,6 +108,154 @@ fn local_asset(url: &tauri::Url, path: &str, development_origin: Option<&tauri::
     asset || development_origin.is_some_and(|origin| origin.origin() == url.origin())
 }
 
+fn popout_outer_position(position: Option<tauri::LogicalPosition<f64>>) -> Option<tauri::Position> {
+    // window.open and screenX/screenY use logical screen coordinates. Preserve
+    // that unit so Tauri resolves the target monitor's DPI without frame offsets.
+    position
+        .filter(|position| position.x.is_finite() && position.y.is_finite())
+        .map(tauri::Position::Logical)
+}
+
+fn native_popout_label(label: &str) -> bool {
+    label.strip_prefix("dock-popout-").is_some_and(|suffix| {
+        !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+    })
+}
+
+#[derive(Debug, PartialEq, Serialize)]
+struct NativePopoutLayout {
+    left: f64,
+    top: f64,
+    width: f64,
+    height: f64,
+}
+
+fn logical_popout_layout(
+    position: tauri::PhysicalPosition<i32>,
+    size: tauri::PhysicalSize<u32>,
+    scale: f64,
+) -> Option<NativePopoutLayout> {
+    if !scale.is_finite() || scale <= 0.0 || size.width == 0 || size.height == 0 {
+        return None;
+    }
+    let position = position.to_logical::<f64>(scale);
+    let size = size.to_logical::<f64>(scale);
+    Some(NativePopoutLayout {
+        left: position.x,
+        top: position.y,
+        width: size.width,
+        height: size.height,
+    })
+}
+
+#[tauri::command]
+fn popout_layout(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<std::collections::BTreeMap<String, NativePopoutLayout>, String> {
+    require_local_window(&window, &["main"])?;
+    let origin = if cfg!(debug_assertions) {
+        app.config().build.dev_url.as_ref()
+    } else {
+        None
+    };
+    let mut layouts = std::collections::BTreeMap::new();
+    for (label, popout) in app.webview_windows() {
+        if !native_popout_label(&label) || !popout.url().is_ok_and(|url| local_popout(&url, origin))
+        {
+            continue;
+        }
+        // A window can disappear during a close notification; omit it safely.
+        if let (Ok(position), Ok(size), Ok(scale)) = (
+            popout.outer_position(),
+            popout.inner_size(),
+            popout.scale_factor(),
+        ) {
+            if let Some(layout) = logical_popout_layout(position, size, scale) {
+                layouts.insert(label, layout);
+            }
+        }
+    }
+    Ok(layouts)
+}
+
+#[tauri::command]
+fn close_popout(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    label: String,
+) -> Result<(), String> {
+    require_local_window(&window, &["main"])?;
+    if !native_popout_label(&label) {
+        return Err("Only DataPyn panel windows can be closed".into());
+    }
+    let Some(popout) = app.get_webview_window(&label) else {
+        return Ok(());
+    };
+    let origin = if cfg!(debug_assertions) {
+        app.config().build.dev_url.as_ref()
+    } else {
+        None
+    };
+    if !popout
+        .url()
+        .is_ok_and(|url| url.as_str() == "about:blank" || local_popout(&url, origin))
+    {
+        return Err("Only the local DataPyn panel can be closed".into());
+    }
+    popout.destroy().map_err(|error| error.to_string())
+}
+
+/// Called immediately after building each window, on Tauri's native UI thread.
+fn disable_browser_accelerators(window: &tauri::WebviewWindow) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
+        use windows_core::Interface;
+
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        window
+            .with_webview(move |webview| {
+                // WebView2 intercepts F5/Ctrl+R before DOM preventDefault. Disable
+                // browser actions while retaining DOM key events and text editing.
+                // SAFETY: Tauri runs this closure on the controller's COM/UI thread.
+                let result = unsafe {
+                    (|| -> windows_core::Result<bool> {
+                        let settings = webview
+                            .controller()
+                            .CoreWebView2()?
+                            .Settings()?
+                            .cast::<ICoreWebView2Settings3>()?;
+                        settings.SetAreBrowserAcceleratorKeysEnabled(false)?;
+                        let mut enabled = windows_core::BOOL(1);
+                        settings.AreBrowserAcceleratorKeysEnabled(&mut enabled)?;
+                        Ok(enabled.as_bool())
+                    })()
+                }
+                .map_err(|error| error.to_string())
+                .and_then(|enabled| {
+                    if enabled {
+                        Err("WebView2 did not disable browser accelerator keys".into())
+                    } else {
+                        Ok(())
+                    }
+                });
+                let _ = sender.send(result);
+            })
+            .map_err(|error| error.to_string())?;
+        // with_webview executes synchronously on the native UI thread. Avoid a
+        // blocking wait if this function is accidentally moved to another thread.
+        receiver
+            .try_recv()
+            .map_err(|_| "Native shortcut setup must run on the UI thread".to_string())?
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = window;
+        Ok(())
+    }
+}
+
 fn require_local_window(window: &tauri::WebviewWindow, labels: &[&str]) -> Result<(), String> {
     if !labels.contains(&window.label()) {
         return Err("This window cannot use this command".into());
@@ -404,12 +552,13 @@ pub fn run() {
                 .iter()
                 .find(|config| config.label == "splash")
                 .ok_or("Splash window configuration is unavailable")?;
-            tauri::WebviewWindowBuilder::from_config(app, splash_config)?
+            let splash = tauri::WebviewWindowBuilder::from_config(app, splash_config)?
                 .on_navigation({
                     let origin = origin.clone();
                     move |url| local_asset(url, "/splash.html", origin.as_ref())
                 })
                 .build()?;
+            disable_browser_accelerators(&splash).map_err(std::io::Error::other)?;
             let config = app
                 .config()
                 .app
@@ -417,19 +566,25 @@ pub fn run() {
                 .iter()
                 .find(|config| config.label == "main")
                 .ok_or("Main window configuration is unavailable")?;
-            tauri::WebviewWindowBuilder::from_config(app, config)?
+            let main = tauri::WebviewWindowBuilder::from_config(app, config)?
                 .visible(false)
                 .on_new_window(move |url, features| {
                     if !local_popout(&url, origin.as_ref()) {
                         return tauri::webview::NewWindowResponse::Deny;
                     }
+                    let outer_position = popout_outer_position(features.position());
                     let label = format!("dock-popout-{}", windows.fetch_add(1, Ordering::Relaxed));
+                    let label_script = format!(
+                        "Object.defineProperty(window,'__DATAPYN_NATIVE_LABEL__',{{value:{},writable:false,configurable:false}});",
+                        serde_json::to_string(&label).unwrap()
+                    );
                     match tauri::WebviewWindowBuilder::new(
                         &handle,
                         label,
                         tauri::WebviewUrl::External("about:blank".parse().unwrap()),
                     )
                     .window_features(features)
+                    .initialization_script(label_script)
                     .on_navigation({
                         let origin = origin.clone();
                         move |url| {
@@ -442,7 +597,22 @@ pub fn run() {
                     .title("DataPyn")
                     .build()
                     {
-                        Ok(window) => tauri::webview::NewWindowResponse::Create { window },
+                        Ok(window) => {
+                            if let Err(error) = disable_browser_accelerators(&window) {
+                                let _ = window.close();
+                                let _ = handle.emit("datapyn-popout-error", error);
+                                return tauri::webview::NewWindowResponse::Deny;
+                            }
+                            // Builders can interpret position as the content origin.
+                            // Dockview serializes the outer origin; reapply it through
+                            // Tauri's outer-position API after decorations exist.
+                            if let Some(position) = outer_position {
+                                if let Err(error) = window.set_position(position) {
+                                    let _ = handle.emit("datapyn-popout-error", error.to_string());
+                                }
+                            }
+                            tauri::webview::NewWindowResponse::Create { window }
+                        }
                         Err(error) => {
                             let _ = handle.emit("datapyn-popout-error", error.to_string());
                             tauri::webview::NewWindowResponse::Deny
@@ -450,6 +620,7 @@ pub fn run() {
                     }
                 })
                 .build()?;
+            disable_browser_accelerators(&main).map_err(std::io::Error::other)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -459,7 +630,9 @@ pub fn run() {
             splash_state,
             splash_publish,
             splash_retry,
-            splash_exit
+            splash_exit,
+            popout_layout,
+            close_popout
         ])
         .build(tauri::generate_context!())
         .expect("Unable to initialize the DataPyn desktop host");
@@ -499,7 +672,8 @@ pub fn run() {
 #[cfg(test)]
 mod update_tests {
     use super::{
-        buffer_startup_files, local_asset, local_popout, update_status, SplashPhase, SplashSnapshot,
+        buffer_startup_files, local_asset, local_popout, logical_popout_layout,
+        native_popout_label, popout_outer_position, update_status, SplashPhase, SplashSnapshot,
     };
     use serde_json::json;
     use std::sync::{Arc, Barrier, Mutex};
@@ -545,6 +719,70 @@ mod update_tests {
             &"http://localhost:1420/popout.html".parse().unwrap(),
             None
         ));
+    }
+
+    #[test]
+    fn popout_position_keeps_outer_coordinates_and_logical_dpi_units() {
+        for (x, y) in [(377.0, 659.0), (-1230.0, -410.0), (377.5, 659.25)] {
+            let requested = tauri::LogicalPosition::new(x, y);
+            let position = popout_outer_position(Some(requested)).unwrap();
+            assert!(matches!(position, tauri::Position::Logical(value) if value == requested));
+            let physical: tauri::PhysicalPosition<i32> = position.to_physical(1.5);
+            assert_eq!(physical, requested.to_physical(1.5));
+        }
+    }
+
+    #[test]
+    fn popout_position_rejects_non_finite_coordinates_and_omitted_positions() {
+        assert!(popout_outer_position(None).is_none());
+        for (x, y) in [
+            (f64::NAN, 0.0),
+            (0.0, f64::INFINITY),
+            (f64::NEG_INFINITY, 0.0),
+        ] {
+            assert!(popout_outer_position(Some(tauri::LogicalPosition::new(x, y))).is_none());
+        }
+    }
+
+    #[test]
+    fn native_popout_geometry_uses_outer_origin_and_client_size_in_logical_pixels() {
+        let layout = logical_popout_layout(
+            tauri::PhysicalPosition::new(-2400, 1320),
+            tauri::PhysicalSize::new(1690, 620),
+            2.0,
+        )
+        .unwrap();
+        assert_eq!(layout.left, -1200.0);
+        assert_eq!(layout.top, 660.0);
+        assert_eq!(layout.width, 845.0);
+        assert_eq!(layout.height, 310.0);
+        assert!(logical_popout_layout(
+            tauri::PhysicalPosition::new(0, 0),
+            tauri::PhysicalSize::new(0, 0),
+            1.0
+        )
+        .is_none());
+        assert!(logical_popout_layout(
+            tauri::PhysicalPosition::new(0, 0),
+            tauri::PhysicalSize::new(845, 310),
+            f64::NAN
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn native_popout_commands_reject_main_splash_and_non_panel_labels() {
+        assert!(native_popout_label("dock-popout-0"));
+        assert!(native_popout_label("dock-popout-123"));
+        for label in [
+            "main",
+            "splash",
+            "dock-popout-",
+            "dock-popout-main",
+            "other-window",
+        ] {
+            assert!(!native_popout_label(label));
+        }
     }
 
     #[test]

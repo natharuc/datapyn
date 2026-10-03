@@ -46,7 +46,7 @@ Defaults CSV (separador, decimal, encoding, cabeçalhos e abertura da pasta) e d
 
 O agente padrão e as preferências de modelo/reasoning da Pynia são usados em conversas novas, somente quando o agente anuncia a opção. Conversas ACP existentes conservam sua configuração. Valores Qt desconhecidos e a geometria binária permanecem disponíveis para retornar ao PyQt6; o Tauri usa seus componentes e layout próprios.
 
-Sessões, bancos de recuperação, caches, resultados, credenciais, registros de workspaces e diretórios de pacotes ficam fora dessa transferência. Layout Qt binário é preservado para o PyQt6; o layout Dockview usa a persistência interna de sessões.
+Sessões, bancos de recuperação, caches, resultados, credenciais, registros de workspaces e diretórios de pacotes ficam fora dessa transferência. `MainWindow.ini` e `DockingLayout.ini` conservam o layout Qt binário para o PyQt6; importar mostra o aviso de que essa geometria não pode ser convertida diretamente para Dockview. O Tauri grava os nove docks e a geometria de sua janela principal nos metadados privados `layout.docking`/`layout.mainWindow` do perfil. Reorganizar esses painéis não modifica os bytes Qt arquivados nem acrescenta estruturas Dockview ao formato de configuração do PyQt6.
 
 ## Preferências globais do PyQt6
 
@@ -68,4 +68,4 @@ O segundo comando altera as preferências globais do PyQt6 nesta máquina. Execu
 
 ## Sessões
 
-As sessões são restauradas automaticamente com abas, blocos, ordem, foco, cursor, scroll, layout, preferências e atalhos. O salvamento é incremental, transacional e separado da troca pública de configurações. Consulte [TAURI_SESSION_PERSISTENCE.md](TAURI_SESSION_PERSISTENCE.md) para migração, recuperação, limites e evidência de desempenho.
+As sessões são restauradas automaticamente com abas, blocos, ordem, foco, cursor, scroll, layout, preferências e atalhos. O layout inclui posição/ordem dos docks, abas selecionadas, dimensões e painéis ocultos, flutuantes ou destacados. A geometria nativa é restaurada na abertura e adaptada aos monitores disponíveis. O salvamento é incremental, transacional e separado da troca pública de configurações. Consulte [TAURI_SESSION_PERSISTENCE.md](TAURI_SESSION_PERSISTENCE.md) para migração, recuperação, limites e evidência de desempenho.

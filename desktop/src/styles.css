@@ -3,7 +3,11 @@
 @font-face { font-family: 'Ubuntu Mono'; src: url('./assets/UbuntuMono-Regular.ttf') format('truetype'); font-weight: 400; font-display: swap; }
 :root { color-scheme: dark; font-family: Ubuntu, sans-serif; font-size: 12px; color: #dce5f3; background: #0c111b; font-synthesis: none; --bg: #0c111b; --panel: #121a2b; --card: #161f30; --border: #253147; --border-muted: #1b263a; --muted: #8b9cb3; --dim: #657791; --blue: #3369ff; --blue-light: #9ab6ff; --sql: #e8b36d; --python: #7aaaff; --green: #68c49a; }
 * { box-sizing: border-box; }
-body { margin: 0; min-width: 780px; min-height: 540px; overflow: hidden; }
+/* Hidden overflow still permits focus/scrollIntoView to scroll the entire app.
+   Only panel viewports scroll; desktop chrome must remain anchored to the window. */
+html { height: 100%; overflow: clip; }
+body { margin: 0; height: 100%; min-width: 780px; min-height: 540px; overflow: clip; }
+#root { height: 100%; overflow: clip; }
 button, input, select, textarea { font: inherit; }
 button { color: inherit; cursor: pointer; border: 1px solid transparent; background: none; transition: background 90ms, border-color 90ms; }
 button:disabled { opacity: .38; cursor: default; }

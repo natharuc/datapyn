@@ -50,12 +50,22 @@ export function selectedCode(blockId: string): string | undefined {
   const before = a.lineNumber < b.lineNumber || (a.lineNumber === b.lineNumber && a.column < b.column);
   return record.model.getValueInRange({ startLineNumber: before ? a.lineNumber : b.lineNumber, startColumn: before ? a.column : b.column, endLineNumber: before ? b.lineNumber : a.lineNumber, endColumn: before ? b.column : a.column });
 }
+/** Reveal a virtualized block inside its own panel, keeping desktop/dock chrome still. */
+export function revealEditorBlock(element:HTMLElement):void {
+  const viewport=element.closest<HTMLElement>(".editor-area");
+  if(!viewport || viewport.clientHeight<=0)return;
+  const block=element.getBoundingClientRect(),bounds=viewport.getBoundingClientRect();
+  const top=bounds.top+viewport.clientTop,bottom=top+viewport.clientHeight;
+  // A tall block already spanning the viewport is visible; preserve its position.
+  const delta=block.top<top && block.bottom>bottom ? 0 : block.top<top ? block.top-top : block.bottom>bottom ? block.bottom-bottom : 0;
+  if(delta)viewport.scrollTop=Math.max(0,Math.min(viewport.scrollHeight-viewport.clientHeight,viewport.scrollTop+delta));
+}
 export function focusEditor(blockId: string) {
   pendingFocus = blockId;
   focusedEditor = blockId;
   const record = models.get(blockId), selector = `[data-block-id="${CSS.escape(blockId)}"]`;
   const element = findInDocuments(selector, record?.container?.ownerDocument);
-  element?.scrollIntoView({ block: "nearest" });
+  if(element)revealEditorBlock(element);
   const editor = record?.editor;
   const view = element?.ownerDocument?.defaultView;
   if (view && view !== window) view.focus();

@@ -38,12 +38,20 @@ import {useOwnerDocumentRevision} from "./useOwnerDocument";
 import {readNotificationFlags,saveNotificationFlags} from "./notificationPreferences";
 import {startupEditorId} from "./splashProtocol";
 import {useStartupSplash} from "./useStartupSplash";
+import {PANEL_IDS,isBottomPanel,type BottomPanelId,type DockingControls,type PanelId} from "./dockingLayout";
+import {normalizeMainWindowLayout,type MainWindowLayout} from "./windowLayout";
+import {useWindowLayout} from "./useWindowLayout";
+import {flushNativePopoutLayouts} from "./nativePopoutLayout";
+import {OutputRevealTracker} from "./outputReveal";
+import {hasVisibleShortcutDialog} from "./shortcutModalGuard";
 const DataActions = lazy(()=>import("./DataActions").then(m=>({default:m.DataActions})));
 const VariableInspector = lazy(()=>import("./VariableInspector").then(m=>({default:m.VariableInspector})));
 const ChartPanel = lazy(()=>import("./ChartPanel").then(m=>({default:m.ChartPanel})));
 const PackageManagerDialog = lazy(()=>import("./PackageManagerDialog").then(m=>({default:m.PackageManagerDialog})));
 const MarkdownBlock = lazy(()=>import("./MarkdownBlock").then(m=>({default:m.MarkdownBlock})));
 const PyniaPanel = lazy(()=>import("./PyniaPanel").then(m=>({default:m.PyniaPanel})));
+const PyniaOutputPanel = lazy(()=>import("./PyniaOutputPanel").then(m=>({default:m.PyniaOutputPanel})));
+const LayoutDialog = lazy(()=>import("./LayoutDialog").then(m=>({default:m.LayoutDialog})));
 const NotificationsDialog = lazy(()=>import("./NotificationsDialog").then(m=>({default:m.NotificationsDialog})));
 const VariableSnapshotPanel = lazy(()=>import("./VariableSnapshotPanel").then(m=>({default:m.VariableSnapshotPanel})));
 const MonacoBlock = lazy(()=>import("./MonacoBlock").then(m=>({default:m.MonacoBlock})));
@@ -82,6 +90,11 @@ export function App() {
   const [gridView, setGridView] = useState<DataView>();
   const [formatColumnRequest,setFormatColumnRequest] = useState<{sessionId:string;resultId:string;column:string;revision:number}>();
   const [dockLayout,setDockLayout]=useState<unknown>(),[dockReset,setDockReset]=useState(0);
+  const docking=useRef<DockingControls>(),[dockControls,setDockControls]=useState<DockingControls>();
+  const [dockPanels,setDockPanels]=useState<PanelId[]>([...PANEL_IDS]),[layoutDialog,setLayoutDialog]=useState(false);
+  const [visibleDockPanels,setVisibleDockPanels]=useState<PanelId[]>([]);
+  const [mainWindowLayout,setMainWindowLayout]=useState<MainWindowLayout>();
+  const dockPanelsChanged=useCallback((ids:PanelId[])=>{setDockPanels(ids);setLeftVisible(ids.includes("connections") || ids.includes("explorer"));setRightVisible(ids.includes("variables") || ids.includes("pynia"));},[]);
   const [entityInfo,setEntityInfo]=useState<{identifier:string;blockId:string}>();
   const [tabContext,setTabContext]=useState<{id:string;x:number;y:number}>();
   const [closingMany,setClosingMany]=useState<string[]>(),[editingChart,setEditingChart]=useState<{id:string;title:string}>();
@@ -91,6 +104,7 @@ export function App() {
   const [recentVisible,setRecentVisible] = useState(false);
   const [notificationDialog,setNotificationDialog] = useState(false), [snapshotVisible,setSnapshotVisible] = useState(false);
   const [profile,setProfile] = useState<ProfileState>(), [workspaceManager,setWorkspaceManager] = useState(false), [switchingProfile,setSwitchingProfile] = useState(false);
+  const windowLayout=useWindowLayout(mainWindowLayout,profile?.active_id,setMainWindowLayout);
   const [preparedSession,setPreparedSession] = useState<string>();
   const popoutKeyboard=useRef<(event:KeyboardEvent)=>void>();
   const attachPopoutKeyboard=useCallback((target:Window)=>{const handle=(event:KeyboardEvent)=>popoutKeyboard.current?.(event);target.addEventListener("keydown",handle,true);return()=>target.removeEventListener("keydown",handle,true);},[]);
@@ -98,10 +112,12 @@ export function App() {
   const [startupLayout,setStartupLayout]=useState<string>(),[startupEditors,setStartupEditors]=useState<ReadonlySet<string>>(()=>new Set());
   const [startupFilesReady,setStartupFilesReady]=useState(!isDesktop()),[startupFilesError,setStartupFilesError]=useState("");
   const requiredEditor=profile ? startupEditorId(session.blocks,session.focusedBlockId,session.maximizedBlockId) : undefined;
-  const startupActive=useStartupSplash({runtime:state.runtimeStatus,runtimeError:state.message,profileError:profileLoadError || startupFilesError,profile:Boolean(profile),layout:startupLayout === profile?.active_id,editor:!requiredEditor || startupEditors.has(`${profile?.active_id}:${requiredEditor}`),files:startupFilesReady,onRetry:()=>{setProfileLoadError("");setStartupFilesError("");setStartupFilesReady(false);setProfileRetry(n=>n+1);if(state.runtimeStatus === "unavailable")void workspace.retryRuntime();}});
+  const startupActive=useStartupSplash({runtime:state.runtimeStatus,runtimeError:state.message,profileError:profileLoadError || startupFilesError,profile:Boolean(profile),layout:startupLayout === profile?.active_id && windowLayout.ready,editor:!requiredEditor || startupEditors.has(`${profile?.active_id}:${requiredEditor}`),files:startupFilesReady,onRetry:()=>{setProfileLoadError("");setStartupFilesError("");setStartupFilesReady(false);setProfileRetry(n=>n+1);if(state.runtimeStatus === "unavailable")void workspace.retryRuntime();}});
   const startupEditorInitialized=useCallback((id:string)=>{if(!startupActive)return;const key=`${profile?.active_id}:${id}`;setStartupEditors(previous=>previous.has(key) ? previous : new Set([...previous,key]));},[profile?.active_id,startupActive]);
   const [closingWorkspace,setClosingWorkspace]=useState(false);
   const editingLocked=switchingProfile || closingWorkspace;
+  const outputReveals=useRef(new OutputRevealTracker()),outputRevealAllowed=useRef(false);
+  outputRevealAllowed.current=Boolean(profile && startupLayout === profile.active_id && !editingLocked);
   const workspaceExtras=useRef<Record<string,unknown>>({}),layoutExtras=useRef<Record<string,unknown>>({});
   const configurationDefaults=(workspaceExtras.current.imported_defaults ?? {}) as ConfigurationDefaults;
   const exportOptions=documentExportSettings(session.extras,configurationDefaults),copyOptions=documentCopySettings(session.extras,configurationDefaults);
@@ -133,13 +149,21 @@ export function App() {
       if(operation !== "create" && operation !== "edit")throw new Error(`Operação de gráfico não suportada: ${String(operation)}`);
       const config=(args.config && typeof args.config === "object" ? args.config : args) as ChartConfig;
       const chart:SavedChart = found && operation === "edit" ? {...found,config:{...found.config,...config},title:String(config.title ?? args.title ?? found.title)} : {id:crypto.randomUUID(),title:String(config.title ?? args.title ?? `Gráfico ${saved.length+1}`),variable_name:String(args.variable_name ?? config.source_label ?? target.results.at(-1)?.variable_name ?? "df"),config:{...config}};
-      workspace.patchSession(sessionId,s=>({...s,modified:true,extras:{...s.extras,charts:operation === "edit"?saved.map(c=>c.id === chart.id?chart:c):[...saved,chart]}}));workspace.activate(sessionId);setPanel("results");setActiveChart(chart.id);return{chart};
+      workspace.patchSession(sessionId,s=>({...s,modified:true,extras:{...s.extras,charts:operation === "edit"?saved.map(c=>c.id === chart.id?chart:c):[...saved,chart]}}));workspace.activate(sessionId);activateBottom("results");setActiveChart(chart.id);return{chart};
     }}).then(result=>runtime.request("pynia.tool_reply",{request_id:event.payload.request_id,result}),failure=>runtime.request("pynia.tool_reply",{request_id:event.payload.request_id,error:errorText(failure)})).catch(failure=>reportMessage(errorText(failure)));
   };
   useEffect(()=>{let disposed=false,cleanup:(()=>void)|undefined;void subscribeServiceEvents(event=>serviceHandler.current(event)).then(fn=>{if(disposed)fn();else cleanup=fn;});return()=>{disposed=true;cleanup?.();};},[]);
   const [closingId, setClosingId] = useState<string>(), [editingTitle, setEditingTitle] = useState<string>();
   const [titleDraft, setTitleDraft] = useState("");
-  const [panel, setPanel] = useState<"results" | "summary" | "output">("results"), [resultHeight, setResultHeight] = useState(preferences.resultHeight);
+  const [panel, setPanel] = useState<BottomPanelId>("results"), [resultHeight, setResultHeight] = useState(preferences.resultHeight);
+  const activateBottom=useCallback((next:BottomPanelId)=>{docking.current?.show(next);setPanel(next);},[]);
+  const toggleDockGroup=(ids:PanelId[])=>{if(editingLocked || !docking.current)return;const visible=ids.some(id=>dockPanels.includes(id));ids.forEach(id=>visible ? docking.current?.hide(id) : docking.current?.show(id));};
+  const restoreDockLayout=(resetSizes=false)=>{
+    if(editingLocked)return;
+    if(resetSizes){setPreferences(p=>({...p,leftWidth:DEFAULT_PREFERENCES.leftWidth,rightWidth:DEFAULT_PREFERENCES.rightWidth,resultHeight:DEFAULT_PREFERENCES.resultHeight}));setResultHeight(DEFAULT_PREFERENCES.resultHeight);}
+    if(docking.current)docking.current.reset(resetSizes ? {leftWidth:DEFAULT_PREFERENCES.leftWidth,rightWidth:DEFAULT_PREFERENCES.rightWidth,resultHeight:DEFAULT_PREFERENCES.resultHeight} : undefined);else setDockReset(n=>n+1);
+    workspace.maximizeBlock(workspace.getSnapshot().activeId);
+  };
   const [periodicSeconds, setPeriodicSeconds] = useState(30), [elapsed, setElapsed] = useState(0);
   const [activeResult, setActiveResult] = useState<Record<string, string>>({}), [copySignal, setCopySignal] = useState(0);
   const [shortcuts, setShortcuts] = useState<Record<Command, string>>(() => {
@@ -171,18 +195,20 @@ export function App() {
     workspaceExtras.current=Object.fromEntries(Object.entries(loaded.state ?? {}).filter(([key])=>!["documents","activeIndex","preferences","shortcuts","layout","saved_at","revision"].includes(key)));
     updateConfigurationDefaults(mergeConfigurationDefaults(defaults,(workspaceExtras.current.imported_defaults ?? {}) as ConfigurationDefaults));
     layoutExtras.current=loaded.state?.layout ?? {};
+    setMainWindowLayout(normalizeMainWindowLayout(loaded.state?.layout?.mainWindow));docking.current=undefined;setDockControls(undefined);captureLayout.current=()=>undefined;
+    outputRevealAllowed.current=false;outputReveals.current.clear();setVisibleDockPanels([]);
     state.sessions.forEach(s=>s.blocks.forEach(b=>disposeModel(b.id)));
     if(loaded.state?.documents)workspace.restoreSnapshot(loaded.state);else if(profile)workspace.restoreSnapshot({});else workspace.restoreBrowserDraftMigration();
     const prefs=normalizePreferences((loaded.state?.preferences ?? DEFAULT_PREFERENCES) as Partial<Preferences>);
     if(loaded.state || profile){setPreferences(prefs);setLeftVisible(prefs.leftVisible);setRightVisible(prefs.rightVisible);setResultHeight(prefs.resultHeight);setShortcuts({...DEFAULT_SHORTCUTS,...loaded.state?.shortcuts} as Record<Command,string>);}
     setDockLayout(loaded.state?.layout?.docking);
-    setPanel(loaded.state?.layout?.panel === "output" ? "output" : loaded.state?.layout?.panel === "summary" ? "summary" : "results");setRightPanel(loaded.state?.layout?.rightPanel === "pynia" ? "pynia" : "variables");
+    const restoredPanel=loaded.state?.layout?.panel;setPanel(isBottomPanel(restoredPanel) ? restoredPanel : "results");setRightPanel(loaded.state?.layout?.rightPanel === "pynia" ? "pynia" : "variables");
     setActiveChart(undefined);setActiveResult({});setProfile(loaded);setGridView(undefined);setFormatColumnRequest(undefined);setExplorerRefresh(n=>n+1);
   };
   const applyProfileRef=useRef(applyProfile);applyProfileRef.current=applyProfile;
   useEffect(()=>{if(state.runtimeStatus !== "ready" || profile)return;let active=true;setProfileLoadError("");void Promise.all([nativeDrafts.current.load(),connections.refresh(),runtime.request<{defaults:ConfigurationDefaults}>("configurations.defaults.get")]).then(([loaded,,settings])=>{if(active)applyProfileRef.current(loaded,settings.defaults);}).catch(failure=>{if(active){setProfileLoadError(errorText(failure));reportMessage(errorText(failure));}});return()=>{active=false;};},[state.runtimeStatus,profile,profileRetry]);
-  flushWorkspace.current=async()=>{workspace.persist();if(profile){nativeDrafts.current.schedule(profile.active_id,{...workspaceExtras.current,...workspace.nativeSnapshot(),preferences:{...preferences,leftVisible,rightVisible,resultHeight},shortcuts:{...shortcuts},layout:{...layoutExtras.current,panel,rightPanel,docking:captureLayout.current() ?? dockLayout}});}await nativeDrafts.current.flush();if(state.runtimeStatus === "ready"){const flushed=await runtime.request<{sessions:Array<{error?:string;saved?:boolean;session_id:string}>}>("system.flush_workspace");const failures=flushed.sessions.filter(s=>s.error);if(failures.length)throw new Error(failures.map(s=>`${s.session_id}: ${s.error}`).join("; "));}};
-  useEffect(()=>{if(!profile || switchingProfile || state.runtimeStatus !== "ready")return;const snapshot:NativeWorkspaceState={...workspaceExtras.current,...workspace.nativeSnapshot(),preferences:{...preferences,leftVisible,rightVisible,resultHeight},shortcuts:{...shortcuts},layout:{...layoutExtras.current,panel,rightPanel,docking:dockLayout}};nativeDrafts.current.schedule(profile.active_id,snapshot);},[profile?.active_id,state.documentRevision,preferences,shortcuts,leftVisible,rightVisible,resultHeight,panel,rightPanel,dockLayout,switchingProfile,state.runtimeStatus]);
+  flushWorkspace.current=async()=>{workspace.persist();if(profile){await flushNativePopoutLayouts();const mainWindow=await windowLayout.capture().catch(()=>mainWindowLayout);nativeDrafts.current.schedule(profile.active_id,{...workspaceExtras.current,...workspace.nativeSnapshot(),preferences:{...preferences,leftVisible,rightVisible,resultHeight},shortcuts:{...shortcuts},layout:{...layoutExtras.current,panel,rightPanel,mainWindow,docking:captureLayout.current() ?? dockLayout}});}await nativeDrafts.current.flush();if(state.runtimeStatus === "ready"){const flushed=await runtime.request<{sessions:Array<{error?:string;saved?:boolean;session_id:string}>}>("system.flush_workspace");const failures=flushed.sessions.filter(s=>s.error);if(failures.length)throw new Error(failures.map(s=>`${s.session_id}: ${s.error}`).join("; "));}};
+  useEffect(()=>{if(!profile || switchingProfile || state.runtimeStatus !== "ready" || startupLayout !== profile.active_id || !windowLayout.ready)return;const snapshot:NativeWorkspaceState={...workspaceExtras.current,...workspace.nativeSnapshot(),preferences:{...preferences,leftVisible,rightVisible,resultHeight},shortcuts:{...shortcuts},layout:{...layoutExtras.current,panel,rightPanel,mainWindow:mainWindowLayout,docking:dockLayout}};nativeDrafts.current.schedule(profile.active_id,snapshot);},[profile?.active_id,state.documentRevision,preferences,shortcuts,leftVisible,rightVisible,resultHeight,panel,rightPanel,dockLayout,mainWindowLayout,startupLayout,windowLayout.ready,switchingProfile,state.runtimeStatus]);
   useEffect(()=>{if(state.runtimeStatus !== "ready" || !profile)return;let active=true;void readNotificationFlags(runtime).then(flags=>{if(active)setPreferences(p=>({...p,...flags}));}).catch(failure=>reportMessage(errorText(failure)));return()=>{active=false;};},[state.runtimeStatus,profile?.active_id]);
   useEffect(()=>{if(state.runtimeStatus === "ready" && profile)void runtime.request("connection.idle_timeout",{seconds:preferences.connectionIdleSeconds}).catch(failure=>reportMessage(errorText(failure)));},[state.runtimeStatus,profile?.active_id,preferences.connectionIdleSeconds]);
   useEffect(()=>{
@@ -221,7 +247,7 @@ export function App() {
         const nextShortcuts={...shortcuts,...imported.shortcuts} as Record<Command,string>;
         updateConfigurationDefaults(imported.defaults ?? {});
         setPreferences(nextPreferences);setLeftVisible(nextPreferences.leftVisible);setRightVisible(nextPreferences.rightVisible);setResultHeight(nextPreferences.resultHeight);setShortcuts(nextShortcuts);
-        nativeDrafts.current.schedule(profile.active_id,{...workspaceExtras.current,...workspace.nativeSnapshot(),preferences:{...nextPreferences},shortcuts:nextShortcuts,layout:{...layoutExtras.current,panel,rightPanel,docking:captureLayout.current() ?? dockLayout}});
+        nativeDrafts.current.schedule(profile.active_id,{...workspaceExtras.current,...workspace.nativeSnapshot(),preferences:{...nextPreferences},shortcuts:nextShortcuts,layout:{...layoutExtras.current,panel,rightPanel,mainWindow:mainWindowLayout,docking:captureLayout.current() ?? dockLayout}});
         await nativeDrafts.current.flush();
         setExplorerRefresh(n=>n+1);reportMessage(translateUi("Configurações importadas e aplicadas."));
       }finally{workspace.setEditingLocked(false);setSwitchingProfile(false);}
@@ -238,13 +264,13 @@ export function App() {
   const showResult = (result: ResultRef, variables?: RuntimeVariable[], generatedCode?:string) => {
     if(generatedCode){const block=workspace.addBlock(session.id,"python",generatedCode,session.focusedBlockId);requestAnimationFrame(()=>focusEditor(block.id));}
     workspace.patchSession(session.id,s=>({...s,results:[...s.results.filter(r=>r.result_id !== result.result_id),result],variables:variables ?? s.variables,resultRevision:s.resultRevision+1}));
-    setActiveResult(previous=>({...previous,[session.id]:result.result_id}));setActiveChart(undefined);setPanel("results");
+    setActiveResult(previous=>({...previous,[session.id]:result.result_id}));setActiveChart(undefined);activateBottom("results");
   };
   const createChart = () => {
     if (!result) return;
     const chart: SavedChart = {id:crypto.randomUUID(),title:`Gráfico ${charts.length+1}`,variable_name:result.variable_name,config:{}};
     workspace.patchSession(session.id,s=>({...s,modified:true,extras:{...s.extras,charts:[...charts,chart]}}));
-    setActiveChart(chart.id);setPanel("results");
+    setActiveChart(chart.id);activateBottom("results");
   };
   const connectSaved = useCallback(async (connection: SavedConnection, newTab = false) => {
     const target = newTab ? workspace.createSession() : workspace.session(); if (!target) return;
@@ -271,7 +297,7 @@ export function App() {
     const current = workspace.session(); if (!current) return;
     const focused = current.blocks.find((block) => block.id === current.focusedBlockId);
     const block = workspace.addBlock(current.id, language ?? focused?.language ?? "sql", "", current.focusedBlockId);
-    requestAnimationFrame(() => { document.querySelector(`[data-block-id="${block.id}"]`)?.scrollIntoView({ block: "nearest" }); focusEditor(block.id); });
+    requestAnimationFrame(() => focusEditor(block.id));
   }, []);
   const rememberFile = (path:string) => setRecentFiles(previous=>{const next=[path,...previous.filter(p=>p !== path)].slice(0,20);try{localStorage.setItem("datapyn.desktop.recent-files.v1",JSON.stringify(next));}catch{/* Optional history. */}return next;});
   const openFiles = useCallback(async (paths:string[]) => {
@@ -350,7 +376,7 @@ export function App() {
 
   const commands = useRef<(command: Command) => void>(() => {});
   commands.current = (command) => {
-    if(!profile || switchingProfile)return;
+    if(!profile || editingLocked)return;
     const current = workspace.session(); if (!current) return;
     switch (command) {
       case "run": runCurrent(); break;
@@ -372,8 +398,8 @@ export function App() {
       case "manageConnections": setConnectionsManager(true); break;
       case "newConnection": setConnectionDialog(true); break;
       case "reloadSchema": setExplorerRefresh(n => n + 1); break;
-      case "restoreView": setDockReset(n=>n+1); workspace.maximizeBlock(current.id); setLeftVisible(true); setRightVisible(true); break;
-      case "resetLayout": setDockReset(n=>n+1);setDockLayout(undefined);setPreferences(p => ({...p,leftWidth:DEFAULT_PREFERENCES.leftWidth,rightWidth:DEFAULT_PREFERENCES.rightWidth})); setResultHeight(310); setLeftVisible(true); setRightVisible(true); workspace.maximizeBlock(current.id); break;
+      case "restoreView": restoreDockLayout(); break;
+      case "resetLayout": restoreDockLayout(true); break;
       case "find": run(Promise.resolve(editorAction(current.focusedBlockId,"actions.find"))); break;
       case "replace": run(Promise.resolve(editorAction(current.focusedBlockId,"editor.action.startFindReplaceAction"))); break;
       case "formatCode": run(formatEditor(current.focusedBlockId)); break;
@@ -392,7 +418,7 @@ export function App() {
     const handle = (event: KeyboardEvent) => {
       if(workspace.isEditingLocked()){event.preventDefault();event.stopPropagation();return;}
       const eventDocument=(event.target as Node | null)?.ownerDocument ?? document;
-      if (connectionDialog || settingsDialog || closingId || connectionPicker || connectionsManager || (document.querySelector('[role="dialog"]') || eventDocument.querySelector('[role="dialog"]'))) {
+      if (connectionDialog || settingsDialog || closingId || connectionPicker || connectionsManager || hasVisibleShortcutDialog(document) || (eventDocument !== document && hasVisibleShortcutDialog(eventDocument))) {
         if (event.key === "Escape") { event.preventDefault(); setSettingsDialog(false); if (!connectionDialog) setClosingId(undefined); }
         return;
       }
@@ -408,15 +434,21 @@ export function App() {
     popoutKeyboard.current=handle;
     window.addEventListener("keydown", handle, true); return () => window.removeEventListener("keydown", handle, true);
   }, [shortcuts, connectionDialog, settingsDialog, closingId, connectionPicker, connectionsManager]);
-  useEffect(() => { if (session.blocks.some((block) => block.status === "failed")) setPanel("output"); }, [session.blocks]);
-  useEffect(() => { if (session.results.length) setPanel("results"); }, [session.results]);
+  useEffect(() => {
+    const observe = () => {
+      const snapshot=workspace.getSnapshot(),reveal=outputReveals.current.observe(snapshot.sessions,snapshot.activeId);
+      if (!reveal || !outputRevealAllowed.current || workspace.isEditingLocked()) return;
+      activateBottom(reveal.panel);
+      if (reveal.rich) setActiveResult(previous=>({...previous,[reveal.sessionId]:"__images__"}));
+    };
+    observe(); const unsubscribe=workspace.subscribe(observe); return () => {unsubscribe();};
+  }, [activateBottom]);
   useEffect(() => {
     let preamble="";
     session.blocks.forEach((block) => {setCompletionContext(block.id, { variables: session.variables, tables:[], sessionId: session.id,
       connectionId: block.connection_id ?? session.savedConnectionId, database: block.database_name ?? session.database, schema: block.schema ?? session.schema,
       preamble, globalImports: "import pandas as pd\nimport numpy as np\nimport polars as pl" });if(block.language === "python" && (!block.cell_type || block.cell_type === "code")){preamble=(preamble+"\n"+block.code).slice(-200_000);const line=preamble.indexOf("\n");if(preamble.length === 200_000 && line >= 0)preamble=preamble.slice(line+1);}});
   }, [session.id, session.blocks, session.variables, session.savedConnectionId, session.database, session.schema]);
-  useEffect(() => { if (session.images.length || session.richOutputs?.length) { setPanel("results"); setActiveResult((previous) => ({ ...previous, [session.id]: "__images__" })); } }, [session.images,session.richOutputs, session.id]);
 
   const result = activeResult[session.id] === "__images__" && (session.richOutputs?.length || session.images.length) ? undefined : session.results.find((item) => item.result_id === activeResult[session.id]) ?? session.results.at(-1);
   const focusedBlock = session.blocks.find((block) => block.id === session.focusedBlockId);
@@ -429,6 +461,7 @@ export function App() {
         <button onClick={() => run(saveDocument())}>{translateUi("Salvar")}<kbd>{translateUi("Ctrl S")}</kbd></button>
         <button onClick={() => run(saveDocument(true))}>{translateUi("Salvar como")}</button>
         <button onClick={() => setSettingsDialog(true)}>{translateUi("Configurações")}</button>
+        <button disabled={!dockControls || editingLocked} aria-haspopup="dialog" aria-expanded={layoutDialog} onClick={()=>setLayoutDialog(true)}>{translateUi("Exibir")}</button>
         <button onClick={() => setPackageDialog(true)}>{translateUi("Pacotes Python")}</button>
         <button onClick={()=>setRecentVisible(!recentVisible)}>{translateUi("Recentes")}</button>
         <button onClick={()=>setNotificationDialog(true)}>{translateUi("Notificações")}</button>
@@ -448,7 +481,7 @@ export function App() {
       <IconButton title={translateUi("Nova sessão (Ctrl+N / Ctrl+T)")} onClick={() => workspace.createSession()} className="new-session"><Plus size={17} /></IconButton>
     </div>
     <div className="workspace-toolbar">
-      <IconButton title={leftVisible ? "Ocultar conexões" : "Mostrar conexões"} onClick={() => setLeftVisible(!leftVisible)}>{leftVisible ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}</IconButton>
+      <IconButton title={leftVisible ? "Ocultar conexões" : "Mostrar conexões"} disabled={editingLocked} onClick={() => toggleDockGroup(["connections","explorer"])}>{leftVisible ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}</IconButton>
       <button className="connection-button" onClick={() => setConnectionDialog(true)}><Database size={14} /><span>{session.connection?.name || session.connection?.database || "Conectar ao banco"}</span><ChevronDown size={12} /></button>
       {session.connection?.schema && <span className="context-chip">{session.connection.schema}</span>}
       <span className="toolbar-divider" />
@@ -459,11 +492,11 @@ export function App() {
       <label className="periodic-control" title={translateUi("Executar todos periodicamente nesta aba")}><input type="number" min="1" max="86400" value={periodicSeconds} onChange={e => setPeriodicSeconds(Math.max(1,+e.target.value))} aria-label={translateUi("Intervalo em segundos")}/>{translateUi("s")}<button className={session.periodicSeconds ? "active" : ""} disabled={runDisabled && !session.periodicSeconds} onClick={() => session.periodicSeconds ? workspace.stopPeriodic(session.id) : run(workspace.startPeriodic(session.id, periodicSeconds))}>{t(session.periodicSeconds ? "Parar repetição" : "Repetir")}</button></label>
       <span className="execution-time">{(elapsed / 1000).toFixed(1)}{translateUi("s")}</span>
       <span className="toolbar-hint">{session.blocks.length} {translateUi("blocos")}</span>
-      <IconButton title={rightVisible ? "Ocultar variáveis" : "Mostrar variáveis"} onClick={() => setRightVisible(!rightVisible)}>{rightVisible ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}</IconButton>
+      <IconButton title={rightVisible ? "Ocultar variáveis" : "Mostrar variáveis"} disabled={editingLocked} onClick={() => toggleDockGroup(["variables","pynia"])}>{rightVisible ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}</IconButton>
     </div>
     {isDesktop() && !profile && <div className="workspace-loading" role="status" aria-live="polite">{profileLoadError || state.runtimeStatus === "unavailable" ? <><span>{profileLoadError || state.message}</span><button className="text-button" onClick={()=>state.runtimeStatus === "unavailable" ? run(workspace.retryRuntime()) : setProfileRetry(n=>n+1)}>{translateUi("Tentar novamente")}</button></> : <><LoaderCircle className="spin" size={22}/><span>{translateUi(state.runtimeStatus === "ready" ? "Restaurando workspace…" : "Iniciando runtime Python…")}</span></>}</div>}
     {state.runtimeStatus === "unavailable" && <div className="runtime-banner"><Activity size={14} /><span>{isDesktop() ? state.message : "Prévia da interface. O runtime Python está disponível no aplicativo desktop."}</span>{isDesktop() && <button className="text-button" onClick={() => run(workspace.retryRuntime())}><RefreshCw size={12} /> {translateUi("Reconectar")}</button>}</div>}
-    <main className="workbench">{(!isDesktop() || profile) && <Suspense fallback={<p className="explorer-empty">{translateUi("Carregando painéis…")}</p>}><DockingWorkbench key={profile?.active_id ?? "startup"} initialLayout={dockLayout} onInitialized={()=>setStartupLayout(profile?.active_id)} onPopoutReady={attachPopoutKeyboard} onCaptureReady={capture=>{captureLayout.current=capture;}} onLayoutChange={setDockLayout} theme={preferences.theme} leftWidth={preferences.leftWidth} rightWidth={preferences.rightWidth} resultHeight={resultHeight} leftVisible={leftVisible} rightVisible={rightVisible} activeBottom={panel} activeRight={rightPanel} resetRevision={dockReset} onActivate={id=>{if(id === "results" || id === "summary" || id === "output")setPanel(id);if(id === "variables" || id === "pynia")setRightPanel(id);}} panels={{
+    <main className="workbench">{(!isDesktop() || profile) && <Suspense fallback={<p className="explorer-empty">{translateUi("Carregando painéis…")}</p>}><DockingWorkbench key={profile?.active_id ?? "startup"} initialLayout={dockLayout} locked={editingLocked} onControlsReady={controls=>{docking.current=controls;setDockControls(controls);}} onPanelsChange={dockPanelsChanged} onVisiblePanelsChange={setVisibleDockPanels} onRestoreError={reportMessage} onInitialized={()=>setStartupLayout(profile?.active_id)} onPopoutReady={attachPopoutKeyboard} onCaptureReady={capture=>{captureLayout.current=capture;}} onLayoutChange={setDockLayout} theme={preferences.theme} leftWidth={preferences.leftWidth} rightWidth={preferences.rightWidth} resultHeight={resultHeight} leftVisible={leftVisible} rightVisible={rightVisible} activeBottom={panel} activeRight={rightPanel} resetRevision={dockReset} onActivate={id=>{if(isBottomPanel(id))setPanel(id);if(id === "variables" || id === "pynia")setRightPanel(id);}} panels={{
       connections:<ConnectionsSidebar activeConnectionId={session.savedConnectionId} onConnect={connectSaved} onDisconnect={() => workspace.disconnect(session.id)} onError={reportMessage} disabled={session.busy || !profile || switchingProfile}/>,
       explorer:<ObjectExplorer sessionId={session.id} connectionId={focusedBlock?.connection_id ?? session.savedConnectionId} database={focusedBlock?.database_name ?? session.database} schema={focusedBlock?.schema ?? session.schema} dbType={session.connection?.db_type} connected={preparedSession === `${profile?.active_id}:${session.id}` && Boolean(session.connection || focusedBlock?.connection_id || session.savedConnectionId)} refresh={explorerRefresh} disabled={session.busy} onError={reportMessage}
           onInsert={(code, language = "sql", newBlock = false) => { if (newBlock) { const block = workspace.addBlock(session.id,language,code,session.focusedBlockId); if (focusedBlock?.connection_id) workspace.updateBlock(session.id,block.id,{connection_id:focusedBlock.connection_id,database_name:focusedBlock.database_name,schema:focusedBlock.schema}); requestAnimationFrame(()=>focusEditor(block.id)); } else insertInEditor(session.focusedBlockId,code); }}
@@ -482,9 +515,10 @@ export function App() {
             {(session.results.length > 0 || (session.richOutputs?.length ?? session.images.length) > 0) && <div className="result-tabs">{session.results.map((item) => <div className="chart-tab" key={item.result_id} style={{borderTop:`2px solid ${effectiveConnectionColor(session.blocks.find(b=>b.results?.some(r=>r.result_id === item.result_id))?.connection_id ?? session.savedConnectionId ?? "",catalogState.catalog) ?? "transparent"}`}}><button className={result?.result_id === item.result_id ? "active" : ""} onClick={() => setActiveResult((previous) => ({ ...previous, [session.id]: item.result_id }))}><Table2 size={12} />{item.variable_name || t("Resultado")}<span>{item.row_count.toLocaleString(preferences.locale)}</span></button><button aria-label={`${t("Fechar resultado")} ${item.variable_name}`} disabled={session.busy} onClick={()=>{workspace.closeResult(session.id,item.result_id);setGridView(undefined);}}><X size={11}/></button></div>)}{(session.richOutputs?.length ?? session.images.length) > 0 && <button className={!result ? "active" : ""} onClick={() => setActiveResult((previous) => ({ ...previous, [session.id]: "__images__" }))}>{translateUi("Resultados Python")}<span>{session.richOutputs?.length ?? session.images.length}</span></button>}</div>}
             {activeChart ? (()=>{const chart=charts.find(c=>c.id === activeChart);const source=[...session.results,...session.blocks.flatMap(b=>b.results ?? [])].find(r=>r.variable_name === chart?.variable_name);return chart && source ? <Suspense fallback={<p>{translateUi("Carregando gráfico…")}</p>}><ChartPanel key={`${session.id}:${chart.id}`} sessionId={session.id} result={source} view={source.result_id === result?.result_id ? gridView : undefined} initialConfig={chart.config} disabled={session.busy} onMessage={reportMessage} onConfigChange={config=>workspace.patchSession(session.id,s=>({...s,modified:true,extras:{...s.extras,charts:((s.extras.charts ?? []) as SavedChart[]).map(c=>c.id === chart.id?{...c,config}:c)}}))}/></Suspense> : <p className="explorer-empty">{translateUi("Execute o bloco que cria")}{chart?.variable_name} {translateUi("para restaurar este gráfico.")}</p>;})() : result ? <ResultGrid key={`${session.id}:${result.result_id}`} sessionId={session.id} result={result} transport={runtime} onMessage={reportMessage} copySignal={copySignal} onViewChange={view=>{setGridView(view);const saved={filter:view.filter,sort:view.sort};workspace.patchSession(session.id,s=>{const prior=(s.extras.table_views ?? {}) as Record<string,unknown>;return JSON.stringify(prior[result.variable_name]) === JSON.stringify(saved) ? s : {...s,extras:{...s.extras,table_views:{...prior,[result.variable_name]:saved}}};});}} initialView={(session.extras.table_views as Record<string,DataView>)?.[result.variable_name]} refreshRevision={session.resultRevision} formatColumnRequest={formatColumnRequest?.sessionId === session.id && formatColumnRequest.resultId === result.result_id ? formatColumnRequest : undefined} displayRowLimit={preferences.displayRowLimit} theme={preferences.theme} uiFont={preferences.gridFont} uiFontSize={preferences.gridFontSize} onFontSizeChange={gridFontSize=>setPreferences(p=>({...p,gridFontSize}))} dbType={session.connection?.db_type} columnFormats={((session.extras.result_view_state as Record<string,unknown>)?.column_formats ?? {}) as ColumnFormats} onColumnFormatsChange={column_formats=>workspace.patchSession(session.id,s=>({...s,modified:true,extras:{...s.extras,result_view_state:{...(s.extras.result_view_state as object),column_formats}}}))} copySeparator={copyOptions.separator} nullDisplay={copyOptions.nullDisplay} onCopySettingsChange={settings=>{updateConfigurationDefaults({copy_separator:settings.copySeparator,copy_null_display:settings.nullDisplay});workspace.patchSession(session.id,s=>({...s,extras:{...s.extras,copy_separator:settings.copySeparator,copy_null_display:settings.nullDisplay}}));}} /> : session.richOutputs?.length ? <Suspense fallback={<p>{translateUi("Carregando resultados Python…")}</p>}><RichResults sessionId={session.id} outputs={session.richOutputs} onMessage={reportMessage}/></Suspense> : session.images.length ? <div className="figure-results">{session.images.map((image, index) => <img key={index} src={`data:${image.mime};base64,${image.data}`} alt={`Gráfico Python ${index + 1}`} />)}</div> : <div className="empty-results"><div className="empty-grid-icon"><Table2 size={25} /></div><strong>{t(session.busy ? "Executando análise…" : "Seus resultados aparecem aqui")}</strong><p>{translateUi("Execute um bloco SQL ou retorne um DataFrame em Python.")}</p><span><kbd>{translateUi("F5")}</kbd> {translateUi("executar bloco")}<span className="bullet">·</span><kbd>{translateUi("Ctrl F5")}</kbd> {translateUi("executar todos")}</span></div>}
 </section>,
-      summary:<Suspense fallback={<p>{translateUi("Carregando resumo…")}</p>}><SummaryPanel sessionId={session.id} result={result} view={gridView} active={panel === "summary"} disabled={session.busy || state.runtimeStatus !== "ready"} onMessage={reportMessage} onFormatColumn={column=>{if(!result)return;setActiveChart(undefined);setPanel("results");setFormatColumnRequest(previous=>({sessionId:session.id,resultId:result.result_id,column,revision:(previous?.revision ?? 0)+1}));}}/></Suspense>,
+      summary:<Suspense fallback={<p>{translateUi("Carregando resumo…")}</p>}><SummaryPanel sessionId={session.id} result={result} view={gridView} active={visibleDockPanels.includes("summary")} disabled={session.busy || state.runtimeStatus !== "ready"} onMessage={reportMessage} onFormatColumn={column=>{if(!result)return;setActiveChart(undefined);activateBottom("results");setFormatColumnRequest(previous=>({sessionId:session.id,resultId:result.result_id,column,revision:(previous?.revision ?? 0)+1}));}}/></Suspense>,
       output:<OutputPanel session={session} />,
       pynia:<Suspense fallback={<p>{translateUi("Carregando Pynia…")}</p>}><PyniaPanel defaults={configurationDefaults.pynia} sessionId={session.id} sessionTitle={session.title} initialState={session.extras.pynia_chat_state as Record<string,unknown>} context={{focused_block_id:session.focusedBlockId,blocks:session.blocks,selection:selectedCode(session.focusedBlockId),database:session.database,schema:session.schema}} onInsert={(code,language)=>{const block=workspace.addBlock(session.id,language,code,session.focusedBlockId);requestAnimationFrame(()=>focusEditor(block.id));}} onState={pynia_chat_state=>workspace.patchSession(session.id,s=>JSON.stringify(s.extras.pynia_chat_state) === JSON.stringify(pynia_chat_state) ? s : {...s,extras:{...s.extras,pynia_chat_state}})}/></Suspense>,
+      pyniaOutput:<Suspense fallback={<p>{translateUi("Carregando Pynia…")}</p>}><PyniaOutputPanel defaults={configurationDefaults.pynia} sessionId={session.id} sessionTitle={session.title} initialState={session.extras.pynia_chat_state as Record<string,unknown>}/></Suspense>,
       variables:<>
         <div className="namespace-heading"><Braces size={14} /><span>{translateUi("Namespace da sessão")}</span></div>
         <Suspense fallback={<p className="explorer-empty">{translateUi("Carregando variáveis…")}</p>}><VariableInspector sessionId={session.id} variables={session.variables} disabled={session.busy} onResult={showResult} onVariables={variables => workspace.patchSession(session.id,s=>({...s,variables,resultRevision:s.resultRevision+1}))} onInsert={name=>insertInEditor(session.focusedBlockId,name)}/></Suspense>
@@ -494,6 +528,7 @@ export function App() {
 </>,
     }}/></Suspense>}</main>
     <footer className="statusbar"><span className={`status-runtime ${state.runtimeStatus}`}><Circle size={7} fill="currentColor" />{t(state.runtimeStatus === "ready" ? "Runtime conectado" : "Runtime offline")}</span><span className="status-message" role="status" title={state.message}>{state.message}</span><span className="status-file" title={session.filePath}>{session.filePath?.split(/[\\/]/).at(-1) || t("Rascunho local")}</span><span className="status-language">{focusedBlock?.language.toUpperCase()}</span><IconButton title={translateUi("Configurar atalhos")} onClick={() => setSettingsDialog(true)}><Settings2 size={12} /></IconButton></footer>
+    {layoutDialog && dockControls && !editingLocked && <Suspense fallback={null}><LayoutDialog controls={dockControls} visiblePanels={dockPanels} restoreShortcut={shortcuts.restoreView} resetShortcut={shortcuts.resetLayout} onRestore={()=>restoreDockLayout()} onReset={()=>restoreDockLayout(true)} canSave={Boolean(profile) && !editingLocked} onSave={async()=>{await flushWorkspace.current();reportMessage(translateUi("Layout salvo."));}} onMessage={reportMessage} onClose={()=>setLayoutDialog(false)}/></Suspense>}
     {entityInfo && <Suspense fallback={null}><EntityInfoDialog identifier={entityInfo.identifier} scope={{session_id:session.id,connection_id:session.blocks.find(b=>b.id === entityInfo.blockId)?.connection_id ?? session.savedConnectionId,database:session.blocks.find(b=>b.id === entityInfo.blockId)?.database_name ?? session.database,schema:session.blocks.find(b=>b.id === entityInfo.blockId)?.schema ?? session.schema}} onClose={()=>setEntityInfo(undefined)}/></Suspense>}
     {tabContext && <><div className="context-dismiss" onClick={()=>setTabContext(undefined)}/><div className="tab-context" style={{left:Math.min(tabContext.x,innerWidth-190),top:Math.min(tabContext.y,innerHeight-190)}}><button onClick={()=>{workspace.duplicateSession(tabContext.id);setTabContext(undefined);}}>{translateUi("Duplicar análise")}</button><button onClick={()=>{const target=workspace.session(tabContext.id);if(target){setEditingTitle(target.id);setTitleDraft(target.title);}setTabContext(undefined);}}>{translateUi("Renomear")}</button><button onClick={()=>{run(closeSession(tabContext.id));setTabContext(undefined);}}>{translateUi("Fechar")}</button><button onClick={()=>{setClosingMany(state.sessions.filter(s=>s.id !== tabContext.id).map(s=>s.id));setTabContext(undefined);}}>{translateUi("Fechar outras")}</button><button onClick={()=>{setClosingMany(state.sessions.map(s=>s.id));setTabContext(undefined);}}>{translateUi("Fechar todas")}</button></div></>}
     {closingMany && <Modal title={translateUi("Fechar análises")} onClose={()=>setClosingMany(undefined)}><div className="confirm-copy"><p>{closingMany.length} {translateUi("análises. Alterações permanecem no workspace até serem salvas ou descartadas.")}</p><ul>{closingMany.map(id=><li key={id}>{workspace.session(id)?.title}{workspace.session(id)?.modified?" •":""}</li>)}</ul></div><footer className="modal-footer"><button onClick={()=>setClosingMany(undefined)}>{translateUi("Voltar")}</button><button disabled={closingMany.some(id=>workspace.session(id)?.busy)} onClick={()=>run((async()=>{for(const id of closingMany){const target=workspace.session(id);if(target){await workspace.closeSession(id);target.blocks.forEach(b=>disposeModel(b.id));}}setClosingMany(undefined);})())}>{translateUi("Descartar e fechar")}</button><button className="primary-button" disabled={closingMany.some(id=>workspace.session(id)?.busy)} onClick={()=>run((async()=>{for(const id of closingMany){const target=workspace.session(id);if(!target)continue;if(target.modified){await saveDocument(false,id);if(workspace.session(id)?.modified)return;}await workspace.closeSession(id);target.blocks.forEach(b=>disposeModel(b.id));}setClosingMany(undefined);})())}>{translateUi("Salvar e fechar")}</button></footer></Modal>}
