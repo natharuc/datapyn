@@ -28,6 +28,6 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": ["../../source/src/assets/datapyn-logo.ico"]
+    "icon": ["../../source/src/assets/datapyn-logo.ico", "icons/256x256.png"]
   }
 }
