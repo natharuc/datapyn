@@ -1,10 +1,11 @@
 mod runtime;
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     path::PathBuf,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Mutex,
     },
 };
@@ -13,8 +14,91 @@ use tauri::{Emitter, Manager, State};
 #[derive(Default)]
 struct StartupFiles(Mutex<Vec<String>>);
 
-fn local_popout(url: &tauri::Url, development_origin: Option<&tauri::Url>) -> bool {
-    if url.path() != "/popout.html" || !url.username().is_empty() || url.password().is_some() {
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum SplashPhase {
+    Frontend,
+    Runtime,
+    Workspace,
+    Editor,
+    Ready,
+    Error,
+}
+
+impl SplashPhase {
+    fn rank(&self) -> u8 {
+        match self {
+            Self::Frontend => 0,
+            Self::Runtime => 1,
+            Self::Workspace => 2,
+            Self::Editor => 3,
+            Self::Ready | Self::Error => 4,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct SplashSnapshot {
+    phase: SplashPhase,
+    message: String,
+    attempt: u64,
+    version: String,
+}
+
+impl SplashSnapshot {
+    fn new(version: String) -> Self {
+        Self {
+            phase: SplashPhase::Frontend,
+            message: "Preparando seu ambiente de trabalho…".into(),
+            attempt: 0,
+            version,
+        }
+    }
+
+    fn accepts(&self, phase: &SplashPhase, attempt: Option<u64>) -> bool {
+        attempt.map_or(true, |attempt| attempt == self.attempt)
+            && !matches!(self.phase, SplashPhase::Ready | SplashPhase::Error)
+            && phase.rank() >= self.phase.rank()
+    }
+
+    fn retry(&mut self) -> bool {
+        if self.phase != SplashPhase::Error {
+            return false;
+        }
+        self.attempt += 1;
+        self.phase = SplashPhase::Runtime;
+        self.message = "Iniciando novamente…".into();
+        true
+    }
+}
+
+struct SplashLifecycle {
+    latest: Mutex<SplashSnapshot>,
+    exiting: AtomicBool,
+    publishing: tokio::sync::Mutex<()>,
+}
+
+fn buffer_startup_files(
+    latest: &Mutex<SplashSnapshot>,
+    queue: &Mutex<Vec<String>>,
+    files: &mut Vec<String>,
+) -> Result<bool, String> {
+    // Keep the startup-state lock until files are queued. Publishing ready
+    // takes the same lock before draining the queue, so a concurrent second
+    // launch cannot enqueue behind that final drain.
+    let state = latest.lock().map_err(|_| "Startup state unavailable")?;
+    if state.phase == SplashPhase::Ready {
+        return Ok(false);
+    }
+    queue
+        .lock()
+        .map_err(|_| "Startup files unavailable")?
+        .append(files);
+    Ok(true)
+}
+
+fn local_asset(url: &tauri::Url, path: &str, development_origin: Option<&tauri::Url>) -> bool {
+    if url.path() != path || !url.username().is_empty() || url.password().is_some() {
         return false;
     }
     let asset = (url.scheme() == "tauri" && url.host_str() == Some("localhost"))
@@ -22,6 +106,168 @@ fn local_popout(url: &tauri::Url, development_origin: Option<&tauri::Url>) -> bo
             && url.host_str() == Some("tauri.localhost")
             && url.port().is_none());
     asset || development_origin.is_some_and(|origin| origin.origin() == url.origin())
+}
+
+fn require_local_window(window: &tauri::WebviewWindow, labels: &[&str]) -> Result<(), String> {
+    if !labels.contains(&window.label()) {
+        return Err("This window cannot use this command".into());
+    }
+    let url = window.url().map_err(|error| error.to_string())?;
+    let origin = if cfg!(debug_assertions) {
+        window.app_handle().config().build.dev_url.as_ref()
+    } else {
+        None
+    };
+    let paths: &[&str] = match window.label() {
+        "main" => &["/", "/index.html"],
+        "splash" => &["/splash.html"],
+        _ => &[],
+    };
+    if paths.iter().any(|path| local_asset(&url, path, origin)) {
+        Ok(())
+    } else {
+        Err("Only the local DataPyn interface can use this command".into())
+    }
+}
+
+#[tauri::command]
+fn splash_state(
+    window: tauri::WebviewWindow,
+    state: State<'_, SplashLifecycle>,
+) -> Result<SplashSnapshot, String> {
+    require_local_window(&window, &["main", "splash"])?;
+    state
+        .latest
+        .lock()
+        .map(|state| state.clone())
+        .map_err(|_| "Startup state unavailable".into())
+}
+
+#[tauri::command]
+async fn splash_publish(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<'_, SplashLifecycle>,
+    phase: SplashPhase,
+    message: Option<String>,
+    attempt: Option<u64>,
+) -> Result<SplashSnapshot, String> {
+    require_local_window(&window, &["main"])?;
+    let _publishing = state.publishing.lock().await;
+    let mut snapshot = {
+        let latest = state
+            .latest
+            .lock()
+            .map_err(|_| "Startup state unavailable")?;
+        if !latest.accepts(&phase, attempt) {
+            return Ok(latest.clone());
+        }
+        latest.clone()
+    };
+    snapshot.phase = phase;
+    if let Some(message) = message {
+        snapshot.message = message.chars().take(2000).collect();
+    }
+    if snapshot.phase == SplashPhase::Ready {
+        let show = app
+            .get_webview_window("main")
+            .ok_or_else(|| "Main window unavailable".to_string())
+            .and_then(|main| {
+                main.show().map_err(|error| error.to_string())?;
+                main.set_focus().map_err(|error| error.to_string())
+            });
+        if let Err(error) = show {
+            if let Some(main) = app.get_webview_window("main") {
+                let _ = main.hide();
+            }
+            snapshot.phase = SplashPhase::Error;
+            snapshot.message = format!("Não foi possível abrir a janela principal: {error}");
+        }
+    }
+    {
+        let mut latest = state
+            .latest
+            .lock()
+            .map_err(|_| "Startup state unavailable")?;
+        // A retry may have started while native window operations were queued.
+        if latest.attempt != snapshot.attempt
+            || matches!(latest.phase, SplashPhase::Ready | SplashPhase::Error)
+        {
+            return Ok(latest.clone());
+        }
+        *latest = snapshot.clone();
+    }
+    if let Some(splash) = app.get_webview_window("splash") {
+        let _ = splash.emit("splash-state", &snapshot);
+        if snapshot.phase == SplashPhase::Ready {
+            let _ = splash.destroy();
+        }
+    }
+    if snapshot.phase == SplashPhase::Ready {
+        // Files from a second launch are buffered until React has restored its
+        // workspace and installed its open-files listener.
+        let files = app.state::<StartupFiles>();
+        if let Ok(mut queue) = files.0.lock() {
+            if !queue.is_empty() {
+                let files = std::mem::take(&mut *queue);
+                let _ = window.emit("datapyn-open-files", files);
+            }
+        };
+    }
+    Ok(snapshot)
+}
+
+#[tauri::command]
+fn splash_retry(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<'_, SplashLifecycle>,
+) -> Result<SplashSnapshot, String> {
+    require_local_window(&window, &["splash"])?;
+    let (mut snapshot, retry) = {
+        let mut latest = state
+            .latest
+            .lock()
+            .map_err(|_| "Startup state unavailable")?;
+        let retry = latest.retry();
+        (latest.clone(), retry)
+    };
+    if retry {
+        let _ = window.emit("splash-state", &snapshot);
+        let delivered = app
+            .get_webview_window("main")
+            .ok_or_else(|| "Main window unavailable".to_string())
+            .and_then(|main| {
+                main.emit("splash-retry", &snapshot)
+                    .map_err(|error| error.to_string())
+            });
+        if let Err(error) = delivered {
+            snapshot.phase = SplashPhase::Error;
+            snapshot.message = format!("Não foi possível reiniciar a interface: {error}");
+            *state
+                .latest
+                .lock()
+                .map_err(|_| "Startup state unavailable")? = snapshot.clone();
+            let _ = window.emit("splash-state", &snapshot);
+        }
+    }
+    Ok(snapshot)
+}
+
+#[tauri::command]
+fn splash_exit(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<'_, SplashLifecycle>,
+) -> Result<(), String> {
+    require_local_window(&window, &["splash"])?;
+    state.exiting.store(true, Ordering::Release);
+    app.exit(0);
+    Ok(())
+}
+
+fn local_popout(url: &tauri::Url, development_origin: Option<&tauri::Url>) -> bool {
+    local_asset(url, "/popout.html", development_origin)
 }
 
 fn collect_files(args: &[String], cwd: &str) -> Vec<String> {
@@ -47,7 +293,11 @@ fn collect_files(args: &[String], cwd: &str) -> Vec<String> {
 }
 
 #[tauri::command]
-fn startup_files(state: State<'_, StartupFiles>) -> Result<Vec<String>, String> {
+fn startup_files(
+    window: tauri::WebviewWindow,
+    state: State<'_, StartupFiles>,
+) -> Result<Vec<String>, String> {
+    require_local_window(&window, &["main"])?;
     let mut paths = state.0.lock().map_err(|_| "Startup files unavailable")?;
     Ok(std::mem::take(&mut *paths))
 }
@@ -89,10 +339,12 @@ fn updater_status(app: tauri::AppHandle) -> Value {
 #[tauri::command]
 async fn backend_request(
     app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     state: State<'_, runtime::Backend>,
     method: String,
     params: Option<Value>,
 ) -> Result<Value, String> {
+    require_local_window(&window, &["main"])?;
     state
         .request(app, method, params.unwrap_or_else(|| serde_json::json!({})))
         .await
@@ -101,7 +353,18 @@ async fn backend_request(
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
-            let files = collect_files(&args, &cwd);
+            let mut files = collect_files(&args, &cwd);
+            let state = app.state::<SplashLifecycle>();
+            let queued =
+                buffer_startup_files(&state.latest, &app.state::<StartupFiles>().0, &mut files)
+                    .unwrap_or(true);
+            if queued {
+                if let Some(window) = app.get_webview_window("splash") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+                return;
+            }
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();
                 let _ = window.show();
@@ -121,6 +384,11 @@ pub fn run() {
                 .to_string_lossy(),
         ))))
         .manage(runtime::Backend::default())
+        .manage(SplashLifecycle {
+            latest: Mutex::new(SplashSnapshot::new(env!("CARGO_PKG_VERSION").into())),
+            exiting: AtomicBool::new(false),
+            publishing: tokio::sync::Mutex::new(()),
+        })
         .setup(|app| {
             let handle = app.handle().clone();
             let origin = if cfg!(debug_assertions) {
@@ -129,6 +397,19 @@ pub fn run() {
                 None
             };
             let windows = AtomicUsize::new(0);
+            let splash_config = app
+                .config()
+                .app
+                .windows
+                .iter()
+                .find(|config| config.label == "splash")
+                .ok_or("Splash window configuration is unavailable")?;
+            tauri::WebviewWindowBuilder::from_config(app, splash_config)?
+                .on_navigation({
+                    let origin = origin.clone();
+                    move |url| local_asset(url, "/splash.html", origin.as_ref())
+                })
+                .build()?;
             let config = app
                 .config()
                 .app
@@ -137,6 +418,7 @@ pub fn run() {
                 .find(|config| config.label == "main")
                 .ok_or("Main window configuration is unavailable")?;
             tauri::WebviewWindowBuilder::from_config(app, config)?
+                .visible(false)
                 .on_new_window(move |url, features| {
                     if !local_popout(&url, origin.as_ref()) {
                         return tauri::webview::NewWindowResponse::Deny;
@@ -173,27 +455,54 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             backend_request,
             startup_files,
-            updater_status
+            updater_status,
+            splash_state,
+            splash_publish,
+            splash_retry,
+            splash_exit
         ])
         .build(tauri::generate_context!())
         .expect("Unable to initialize the DataPyn desktop host");
 
     app.run(|app, event| {
+        if let tauri::RunEvent::WindowEvent { label, event: tauri::WindowEvent::CloseRequested { api, .. }, .. } = &event {
+            if label == "splash" {
+                api.prevent_close();
+                app.state::<SplashLifecycle>().exiting.store(true, Ordering::Release);
+                app.exit(0);
+            }
+        }
         if matches!(&event, tauri::RunEvent::WindowEvent {label,event:tauri::WindowEvent::Destroyed,..} if label == "main") {
             for (label, window) in app.webview_windows() {
-                if label.starts_with("dock-popout-") { let _ = window.destroy(); }
+                if label.starts_with("dock-popout-") || label == "splash" { let _ = window.destroy(); }
+            }
+        }
+        if matches!(&event, tauri::RunEvent::WindowEvent {label,event:tauri::WindowEvent::Destroyed,..} if label == "splash") {
+            let state = app.state::<SplashLifecycle>();
+            let ready = state.latest.lock().map(|snapshot| snapshot.phase == SplashPhase::Ready).unwrap_or(false);
+            if !ready {
+                state.exiting.store(true, Ordering::Release);
+                app.exit(0);
             }
         }
         if matches!(event, tauri::RunEvent::Exit) {
-            app.state::<runtime::Backend>().shutdown();
+            // Cancelling startup must not wait for a request that holds the
+            // runtime client mutex. Process exit closes the broker pipe and
+            // Windows' KILL_ON_JOB_CLOSE handle, including owned kernels.
+            if !app.state::<SplashLifecycle>().exiting.load(Ordering::Acquire) {
+                app.state::<runtime::Backend>().shutdown();
+            }
         }
     });
 }
 
 #[cfg(test)]
 mod update_tests {
-    use super::{local_popout, update_status};
+    use super::{
+        buffer_startup_files, local_asset, local_popout, update_status, SplashPhase, SplashSnapshot,
+    };
     use serde_json::json;
+    use std::sync::{Arc, Barrier, Mutex};
 
     #[test]
     fn unsigned_or_non_tls_channels_are_unavailable() {
@@ -236,5 +545,142 @@ mod update_tests {
             &"http://localhost:1420/popout.html".parse().unwrap(),
             None
         ));
+    }
+
+    #[test]
+    fn startup_progress_is_monotonic_and_ready_is_terminal() {
+        let mut state = SplashSnapshot::new("1.57.0".into());
+        for phase in [
+            SplashPhase::Runtime,
+            SplashPhase::Workspace,
+            SplashPhase::Editor,
+            SplashPhase::Ready,
+        ] {
+            assert!(state.accepts(&phase, Some(0)));
+            state.phase = phase;
+        }
+        assert!(!state.accepts(&SplashPhase::Runtime, Some(0)));
+        assert!(!state.accepts(&SplashPhase::Error, Some(0)));
+        assert!(!state.retry());
+    }
+
+    #[test]
+    fn failed_startup_requires_explicit_retry_and_rejects_stale_updates() {
+        let mut state = SplashSnapshot::new("1.57.0".into());
+        state.phase = SplashPhase::Workspace;
+        assert!(!state.accepts(&SplashPhase::Runtime, Some(0)));
+        assert!(state.accepts(&SplashPhase::Error, Some(0)));
+        state.phase = SplashPhase::Error;
+        assert!(!state.accepts(&SplashPhase::Ready, Some(0)));
+        assert!(state.retry());
+        assert_eq!(state.attempt, 1);
+        assert_eq!(state.phase, SplashPhase::Runtime);
+        assert!(!state.accepts(&SplashPhase::Ready, Some(0)));
+        assert!(state.accepts(&SplashPhase::Workspace, Some(1)));
+        assert!(!state.retry());
+    }
+
+    #[test]
+    fn splash_snapshot_contains_status_and_build_version() {
+        let state = serde_json::to_value(SplashSnapshot::new("1.57.0".into())).unwrap();
+        assert_eq!(state["phase"], "frontend");
+        assert_eq!(state["attempt"], 0);
+        assert_eq!(state["version"], "1.57.0");
+        assert!(state["message"]
+            .as_str()
+            .is_some_and(|message| !message.is_empty()));
+    }
+
+    #[test]
+    fn splash_only_accepts_its_local_entrypoint() {
+        let origin = "http://localhost:1420".parse().unwrap();
+        for address in [
+            "http://localhost:1420/splash.html",
+            "tauri://localhost/splash.html",
+            "http://tauri.localhost/splash.html",
+        ] {
+            assert!(local_asset(
+                &address.parse().unwrap(),
+                "/splash.html",
+                Some(&origin)
+            ));
+        }
+        for address in [
+            "https://example.com/splash.html",
+            "http://localhost:1421/splash.html",
+            "http://localhost:1420/",
+            "http://user@localhost:1420/splash.html",
+            "file:///splash.html",
+        ] {
+            assert!(!local_asset(
+                &address.parse().unwrap(),
+                "/splash.html",
+                Some(&origin)
+            ));
+        }
+    }
+
+    #[test]
+    fn splash_has_no_runtime_or_filesystem_plugin_capability() {
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/splash.json")).unwrap();
+        assert_eq!(capability["windows"], json!(["splash"]));
+        assert_eq!(
+            capability["permissions"],
+            json!([
+                "core:event:allow-listen",
+                "core:event:allow-unlisten",
+                "core:window:allow-start-dragging"
+            ])
+        );
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let windows = config["app"]["windows"].as_array().unwrap();
+        assert_eq!(
+            windows
+                .iter()
+                .find(|window| window["label"] == "main")
+                .unwrap()["visible"],
+            false
+        );
+        assert_eq!(
+            windows
+                .iter()
+                .find(|window| window["label"] == "splash")
+                .unwrap()["create"],
+            false
+        );
+    }
+
+    #[test]
+    fn concurrent_second_launch_cannot_be_lost_after_ready_drains_files() {
+        for _ in 0..100 {
+            let latest = Arc::new(Mutex::new(SplashSnapshot::new("1.57.0".into())));
+            let queue = Arc::new(Mutex::new(Vec::new()));
+            let barrier = Arc::new(Barrier::new(2));
+            let incoming = {
+                let latest = Arc::clone(&latest);
+                let queue = Arc::clone(&queue);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    let mut files = vec!["second-launch.dpw".into()];
+                    barrier.wait();
+                    let buffered = buffer_startup_files(&latest, &queue, &mut files).unwrap();
+                    (buffered, files)
+                })
+            };
+            barrier.wait();
+            latest.lock().unwrap().phase = SplashPhase::Ready;
+            let delivered = std::mem::take(&mut *queue.lock().unwrap());
+            let (buffered, immediate) = incoming.join().unwrap();
+            if buffered {
+                assert_eq!(delivered, vec!["second-launch.dpw"]);
+                assert!(immediate.is_empty());
+            } else {
+                assert!(delivered.is_empty());
+                assert_eq!(immediate, vec!["second-launch.dpw"]);
+            }
+            assert!(queue.lock().unwrap().is_empty());
+        }
     }
 }

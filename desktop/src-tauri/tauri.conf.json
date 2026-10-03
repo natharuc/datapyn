@@ -14,12 +14,27 @@
       {
         "label": "main",
         "create": false,
+        "visible": false,
         "title": "DataPyn — Prévia Tauri",
         "width": 1440,
         "height": 940,
         "minWidth": 960,
         "minHeight": 640,
         "backgroundColor": "#101725"
+      },
+      {
+        "label": "splash",
+        "create": false,
+        "url": "splash.html",
+        "title": "DataPyn",
+        "width": 640,
+        "height": 420,
+        "center": true,
+        "decorations": false,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "backgroundColor": "#081018"
       }
     ],
     "security": {

@@ -94,14 +94,14 @@ for (const language of ["sql", "python"]) monaco.languages.registerDocumentForma
   },
 });
 
-interface Props { id: string; code: string; language: Language; height: number; onChange: (code: string) => void; onFocus: () => void; preferences?: EditorPreferences; onCursor?: (line: number, column: number) => void;onFontSizeChange?:(size:number)=>void }
+interface Props { id: string; code: string; language: Language; height: number; onChange: (code: string) => void; onFocus: () => void; preferences?: EditorPreferences; onCursor?: (line: number, column: number) => void;onFontSizeChange?:(size:number)=>void;onReady?:(id:string)=>void }
 
 /** Editor lifetime and model lifetime differ: switching tabs preserves undo and cursor. */
-export const MonacoBlock = memo(function MonacoBlock({ id, code, language, height, onChange, onFocus, preferences, onCursor,onFontSizeChange }: Props) {
+export const MonacoBlock = memo(function MonacoBlock({ id, code, language, height, onChange, onFocus, preferences, onCursor,onFontSizeChange,onReady }: Props) {
   useLocale();
   const container = useRef<HTMLDivElement>(null);
   const documentRevision = useOwnerDocumentRevision(container);
-  const callbacks = useRef({ onChange, onFocus, onCursor,onFontSizeChange }); callbacks.current = { onChange, onFocus, onCursor,onFontSizeChange };
+  const callbacks = useRef({ onChange, onFocus, onCursor,onFontSizeChange,onReady }); callbacks.current = { onChange, onFocus, onCursor,onFontSizeChange,onReady };
   useEffect(() => {
     if (!container.current) return;
     const host = container.current, view = host.ownerDocument.defaultView ?? window;
@@ -138,6 +138,9 @@ export const MonacoBlock = memo(function MonacoBlock({ id, code, language, heigh
       const texts = pendingInsertions.get(id) ?? []; pendingInsertions.delete(id);
       for (const text of texts) insertInEditor(id, text);
     });
+    // Hidden desktop webviews may suspend animation frames. The microtask
+    // follows creation, restored cursor state and the preference effects.
+    queueMicrotask(()=>{if(record.editor === editor)callbacks.current.onReady?.(id);});
     return () => { clearTimeout(viewTimer);selectionView.dispose();scrollView.dispose();captureEditorViewState(id);changed.dispose(); focused.dispose(); cursor.dispose();configuration.dispose(); completionGates.get(id)?.invalidate(); record.viewState = editor.saveViewState(); record.editor = undefined; record.container = undefined; editor.dispose(); };
     // Creating a new widget for a changed code prop discards undo history.
     // The separate effect below synchronizes external edits into the stable model.

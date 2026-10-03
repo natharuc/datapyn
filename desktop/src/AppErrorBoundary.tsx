@@ -2,6 +2,7 @@ import { Component,type ReactNode } from "react";
 import { copySupportReport,saveSupportReport,type IncidentKind } from "./supportDiagnostics";
 import { featureTranslate as t } from "./featureTranslations";
 import "./supportDiagnostics.css";
+import {startupFailed} from "./startupBridge";
 
 interface Props {children:ReactNode;onReload?:()=>void|Promise<void>}
 interface State {failed:boolean;kind:IncidentKind;busy:boolean;message:string}
@@ -10,9 +11,9 @@ export class AppErrorBoundary extends Component<Props,State> {
   static getDerivedStateFromError(){return{failed:true,kind:"react_render"};}
   // Exception messages/stacks can contain SQL, Python, paths or credentials.
   // Reports intentionally retain only the event category.
-  componentDidCatch(){/* No exception text is logged or transmitted. */}
-  private error=()=>this.setState({failed:true,kind:"javascript_error"});
-  private rejection=()=>this.setState({failed:true,kind:"unhandled_rejection"});
+  componentDidCatch(){startupFailed();}
+  private error=()=>{startupFailed();this.setState({failed:true,kind:"javascript_error"});};
+  private rejection=()=>{startupFailed();this.setState({failed:true,kind:"unhandled_rejection"});};
   componentDidMount(){window.addEventListener("error",this.error);window.addEventListener("unhandledrejection",this.rejection);}
   componentWillUnmount(){window.removeEventListener("error",this.error);window.removeEventListener("unhandledrejection",this.rejection);}
   private async report(save:boolean){this.setState({busy:true,message:""});try{const result=save?await saveSupportReport(this.state.kind):await copySupportReport(this.state.kind);if(result)this.setState({message:t(save?"Diagnóstico salvo.":"Diagnóstico copiado.")});}catch{this.setState({message:t("Não foi possível obter o diagnóstico. Tente reabrir o aplicativo.")});}finally{this.setState({busy:false});}}

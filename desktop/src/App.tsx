@@ -36,6 +36,8 @@ import {documentCopySettings,documentExportSettings,mergeConfigurationDefaults,t
 import {Modal} from "./PanelControls";
 import {useOwnerDocumentRevision} from "./useOwnerDocument";
 import {readNotificationFlags,saveNotificationFlags} from "./notificationPreferences";
+import {startupEditorId} from "./splashProtocol";
+import {useStartupSplash} from "./useStartupSplash";
 const DataActions = lazy(()=>import("./DataActions").then(m=>({default:m.DataActions})));
 const VariableInspector = lazy(()=>import("./VariableInspector").then(m=>({default:m.VariableInspector})));
 const ChartPanel = lazy(()=>import("./ChartPanel").then(m=>({default:m.ChartPanel})));
@@ -93,6 +95,11 @@ export function App() {
   const popoutKeyboard=useRef<(event:KeyboardEvent)=>void>();
   const attachPopoutKeyboard=useCallback((target:Window)=>{const handle=(event:KeyboardEvent)=>popoutKeyboard.current?.(event);target.addEventListener("keydown",handle,true);return()=>target.removeEventListener("keydown",handle,true);},[]);
   const [profileLoadError,setProfileLoadError]=useState(""),[profileRetry,setProfileRetry]=useState(0);
+  const [startupLayout,setStartupLayout]=useState<string>(),[startupEditors,setStartupEditors]=useState<ReadonlySet<string>>(()=>new Set());
+  const [startupFilesReady,setStartupFilesReady]=useState(!isDesktop()),[startupFilesError,setStartupFilesError]=useState("");
+  const requiredEditor=profile ? startupEditorId(session.blocks,session.focusedBlockId,session.maximizedBlockId) : undefined;
+  const startupActive=useStartupSplash({runtime:state.runtimeStatus,runtimeError:state.message,profileError:profileLoadError || startupFilesError,profile:Boolean(profile),layout:startupLayout === profile?.active_id,editor:!requiredEditor || startupEditors.has(`${profile?.active_id}:${requiredEditor}`),files:startupFilesReady,onRetry:()=>{setProfileLoadError("");setStartupFilesError("");setStartupFilesReady(false);setProfileRetry(n=>n+1);if(state.runtimeStatus === "unavailable")void workspace.retryRuntime();}});
+  const startupEditorInitialized=useCallback((id:string)=>{if(!startupActive)return;const key=`${profile?.active_id}:${id}`;setStartupEditors(previous=>previous.has(key) ? previous : new Set([...previous,key]));},[profile?.active_id,startupActive]);
   const [closingWorkspace,setClosingWorkspace]=useState(false);
   const editingLocked=switchingProfile || closingWorkspace;
   const workspaceExtras=useRef<Record<string,unknown>>({}),layoutExtras=useRef<Record<string,unknown>>({});
@@ -316,14 +323,18 @@ export function App() {
   },[preferences.sharedDelimiter]);
   useEffect(()=>{
     if (!isDesktop() || !profile) return;
+    setStartupFilesReady(false);
     let disposed=false;const cleanups:Array<()=>void>=[];
     const bind=async()=>{
       const unlisten=await listen<string[]>("datapyn-open-files",event=>{void openFiles(event.payload);});if(disposed)unlisten();else cleanups.push(unlisten);
+      if(disposed)return;
       const drop=await getCurrentWebviewWindow().onDragDropEvent(event=>{if(event.payload.type === "drop") void openFiles(event.payload.paths);});if(disposed)drop();else cleanups.push(drop);
+      if(disposed)return;
       const paths=await invoke<string[]>("startup_files");if(!disposed && paths.length) await openFiles(paths);
-    };void bind().catch(failure=>reportMessage(errorText(failure)));
+      if(!disposed)setStartupFilesReady(true);
+    };void bind().catch(failure=>{if(!disposed){setStartupFilesError(errorText(failure));reportMessage(errorText(failure));}});
     return()=>{disposed=true;cleanups.forEach(clean=>clean());};
-  },[openFiles,profile?.active_id]);
+  },[openFiles,profile?.active_id,profileRetry]);
   const closeSession = useCallback(async (id: string) => {
     const current = workspace.session(id); if (!current) return;
     if (current.busy) throw new Error("Cancele a execução antes de fechar esta aba.");
@@ -452,7 +463,7 @@ export function App() {
     </div>
     {isDesktop() && !profile && <div className="workspace-loading" role="status" aria-live="polite">{profileLoadError || state.runtimeStatus === "unavailable" ? <><span>{profileLoadError || state.message}</span><button className="text-button" onClick={()=>state.runtimeStatus === "unavailable" ? run(workspace.retryRuntime()) : setProfileRetry(n=>n+1)}>{translateUi("Tentar novamente")}</button></> : <><LoaderCircle className="spin" size={22}/><span>{translateUi(state.runtimeStatus === "ready" ? "Restaurando workspace…" : "Iniciando runtime Python…")}</span></>}</div>}
     {state.runtimeStatus === "unavailable" && <div className="runtime-banner"><Activity size={14} /><span>{isDesktop() ? state.message : "Prévia da interface. O runtime Python está disponível no aplicativo desktop."}</span>{isDesktop() && <button className="text-button" onClick={() => run(workspace.retryRuntime())}><RefreshCw size={12} /> {translateUi("Reconectar")}</button>}</div>}
-    <main className="workbench">{(!isDesktop() || profile) && <Suspense fallback={<p className="explorer-empty">{translateUi("Carregando painéis…")}</p>}><DockingWorkbench key={profile?.active_id ?? "startup"} initialLayout={dockLayout} onPopoutReady={attachPopoutKeyboard} onCaptureReady={capture=>{captureLayout.current=capture;}} onLayoutChange={setDockLayout} theme={preferences.theme} leftWidth={preferences.leftWidth} rightWidth={preferences.rightWidth} resultHeight={resultHeight} leftVisible={leftVisible} rightVisible={rightVisible} activeBottom={panel} activeRight={rightPanel} resetRevision={dockReset} onActivate={id=>{if(id === "results" || id === "summary" || id === "output")setPanel(id);if(id === "variables" || id === "pynia")setRightPanel(id);}} panels={{
+    <main className="workbench">{(!isDesktop() || profile) && <Suspense fallback={<p className="explorer-empty">{translateUi("Carregando painéis…")}</p>}><DockingWorkbench key={profile?.active_id ?? "startup"} initialLayout={dockLayout} onInitialized={()=>setStartupLayout(profile?.active_id)} onPopoutReady={attachPopoutKeyboard} onCaptureReady={capture=>{captureLayout.current=capture;}} onLayoutChange={setDockLayout} theme={preferences.theme} leftWidth={preferences.leftWidth} rightWidth={preferences.rightWidth} resultHeight={resultHeight} leftVisible={leftVisible} rightVisible={rightVisible} activeBottom={panel} activeRight={rightPanel} resetRevision={dockReset} onActivate={id=>{if(id === "results" || id === "summary" || id === "output")setPanel(id);if(id === "variables" || id === "pynia")setRightPanel(id);}} panels={{
       connections:<ConnectionsSidebar activeConnectionId={session.savedConnectionId} onConnect={connectSaved} onDisconnect={() => workspace.disconnect(session.id)} onError={reportMessage} disabled={session.busy || !profile || switchingProfile}/>,
       explorer:<ObjectExplorer sessionId={session.id} connectionId={focusedBlock?.connection_id ?? session.savedConnectionId} database={focusedBlock?.database_name ?? session.database} schema={focusedBlock?.schema ?? session.schema} dbType={session.connection?.db_type} connected={preparedSession === `${profile?.active_id}:${session.id}` && Boolean(session.connection || focusedBlock?.connection_id || session.savedConnectionId)} refresh={explorerRefresh} disabled={session.busy} onError={reportMessage}
           onInsert={(code, language = "sql", newBlock = false) => { if (newBlock) { const block = workspace.addBlock(session.id,language,code,session.focusedBlockId); if (focusedBlock?.connection_id) workspace.updateBlock(session.id,block.id,{connection_id:focusedBlock.connection_id,database_name:focusedBlock.database_name,schema:focusedBlock.schema}); requestAnimationFrame(()=>focusEditor(block.id)); } else insertInEditor(session.focusedBlockId,code); }}
@@ -461,7 +472,7 @@ export function App() {
           {session.notice && <div className="session-notice" role="status">{session.notice}</div>}
           <div className="document-heading"><span className="eyebrow">{translateUi("ANÁLISE")}</span><span className="document-title">{session.title}</span><span className="document-subtitle">{translateUi("Blocos independentes. Um namespace Python.")}</span></div>
           <ParameterPanel title={translateUi("Parâmetros compartilhados")} parameters={sharedParameters} enabled={session.extras.shared_parameters_enabled !== false} disabled={session.busy} onEnabled={enabled => workspace.patchSession(session.id,s=>({...s,modified:true,extras:{...s.extras,shared_parameters_enabled:enabled}}))} onChange={parameters => workspace.patchSession(session.id,s=>({...s,modified:true,extras:{...s.extras,shared_parameters:parameters}}))}/>
-          {session.blocks.map((block, index) => <BlockCard locked={editingLocked} key={block.id} block={block} index={index} count={session.blocks.length} session={session} disabled={runDisabled} preferences={preferences} onFontSizeChange={editorFontSize=>setPreferences(p=>({...p,editorFontSize}))} onPickConnection={() => setConnectionPicker(block.id)} onDownload={()=>run(downloadBlock(block.id))}
+          {session.blocks.map((block, index) => <BlockCard locked={editingLocked} forceMount={startupActive && requiredEditor === block.id} onEditorReady={startupEditorInitialized} key={block.id} block={block} index={index} count={session.blocks.length} session={session} disabled={runDisabled} preferences={preferences} onFontSizeChange={editorFontSize=>setPreferences(p=>({...p,editorFontSize}))} onPickConnection={() => setConnectionPicker(block.id)} onDownload={()=>run(downloadBlock(block.id))}
             onRun={() => run(workspace.runBlock(session.id, block.id, selectedCode(block.id)))} />)}
           <div className="add-block-row"><button onClick={() => addBlock("sql")}><Plus size={14} /><span className="sql-color">{translateUi("SQL")}</span></button><button onClick={() => addBlock("python")}><Plus size={14} /><span className="python-color">{translateUi("Python")}</span></button><span>{translateUi("Novo bloco")}<kbd>{shortcuts.addBlock}</kbd></span></div>
         </div>,
@@ -501,7 +512,7 @@ export function App() {
   </div>;
 }
 
-const BlockCard = memo(function BlockCard({ block, index, count, session, disabled, locked, onRun, preferences, onPickConnection, onDownload, onFontSizeChange }: { block: Block; index: number; count: number; session: SessionDocument; disabled: boolean; locked:boolean; onRun: () => void; preferences: Preferences; onPickConnection: () => void; onDownload:()=>void; onFontSizeChange:(size:number)=>void }) {
+const BlockCard = memo(function BlockCard({ block, index, count, session, disabled, locked, onRun, preferences, onPickConnection, onDownload, onFontSizeChange, forceMount, onEditorReady }: { block: Block; index: number; count: number; session: SessionDocument; disabled: boolean; locked:boolean; onRun: () => void; preferences: Preferences; onPickConnection: () => void; onDownload:()=>void; onFontSizeChange:(size:number)=>void;forceMount:boolean;onEditorReady:(id:string)=>void }) {
   const [height, setHeight] = useState(typeof block.height === "number" ? Math.max(130, block.height) : block.language === "sql" ? 210 : 190);
   const catalog = useSyncExternalStore(connections.subscribe, connections.getSnapshot);
   const customConnection = catalog.catalog.connections.find(c => c.id === block.connection_id);
@@ -523,7 +534,7 @@ const BlockCard = memo(function BlockCard({ block, index, count, session, disabl
     </div>
     {block.language === "sql" && <div className="block-context"><button disabled={session.busy} onClick={onPickConnection}><Database size={12}/>{customConnection?.name ?? session.connection?.name ?? translateUi("Conexão da aba")}</button><input aria-label={`Banco do bloco ${index+1}`} placeholder={session.database || translateUi("Banco padrão")} value={block.database_name ?? ""} disabled={session.busy} onChange={e=>workspace.updateBlock(session.id,block.id,{database_name:e.target.value || undefined})}/><input aria-label={`Schema do bloco ${index+1}`} placeholder={session.schema || translateUi("Schema padrão")} value={block.schema ?? ""} disabled={session.busy} onChange={e=>workspace.updateBlock(session.id,block.id,{schema:e.target.value || undefined})}/></div>}
     <div hidden={block.collapsed}>
-    {block.cell_type && block.cell_type !== "code" ? <Suspense fallback={<pre>{block.code}</pre>}><MarkdownBlock code={block.code} raw={block.cell_type === "raw"} onChange={code=>workspace.updateBlock(session.id,block.id,{code})}/></Suspense> : <ViewportEditor id={block.id} code={block.code} language={block.language} height={session.maximizedBlockId === block.id ? Math.max(200,window.innerHeight - 360) : height} preferences={{readOnly:locked,theme:preferences.theme,fontFamily:preferences.editorFont,fontSize:preferences.editorFontSize,wordWrap:preferences.wordWrap,minimap:preferences.minimap,lineNumbers:preferences.lineNumbers,tabSize:preferences.tabSize,autocomplete:preferences.autocomplete,aiAutocomplete:preferences.aiAutocomplete}} onFontSizeChange={onFontSizeChange} onChange={(code) => workspace.updateBlock(session.id, block.id, { code })} onFocus={() => workspace.focusBlock(session.id, block.id)} />}
+    {block.cell_type && block.cell_type !== "code" ? <Suspense fallback={<pre>{block.code}</pre>}><MarkdownBlock code={block.code} raw={block.cell_type === "raw"} onChange={code=>workspace.updateBlock(session.id,block.id,{code})}/></Suspense> : <ViewportEditor forceMount={forceMount} onReady={onEditorReady} id={block.id} code={block.code} language={block.language} height={session.maximizedBlockId === block.id ? Math.max(200,window.innerHeight - 360) : height} preferences={{readOnly:locked,theme:preferences.theme,fontFamily:preferences.editorFont,fontSize:preferences.editorFontSize,wordWrap:preferences.wordWrap,minimap:preferences.minimap,lineNumbers:preferences.lineNumbers,tabSize:preferences.tabSize,autocomplete:preferences.autocomplete,aiAutocomplete:preferences.aiAutocomplete}} onFontSizeChange={onFontSizeChange} onChange={(code) => workspace.updateBlock(session.id, block.id, { code })} onFocus={() => workspace.focusBlock(session.id, block.id)} />}
     <ParameterPanel title={translateUi("Parâmetros SQL")} parameters={(block.sql_parameters ?? []) as ParameterDefinition[]} enabled={block.sql_parameters_enabled !== false} disabled={session.busy} onEnabled={enabled=>workspace.updateBlock(session.id,block.id,{sql_parameters_enabled:enabled})} onChange={parameters=>workspace.updateBlock(session.id,block.id,{sql_parameters:parameters})}/>
     {!block.code.trim() && <div className="block-placeholder" aria-hidden="true">{translateUi(block.language === "sql" ? "Escreva uma consulta SQL…" : "Explore seus dados em Python…")}</div>}
     <div className="block-resizer" onPointerDown={(event) => { event.preventDefault(); const owner=event.currentTarget.ownerDocument.defaultView ?? window; const startY = event.clientY, startHeight = height; let nextHeight = height;
@@ -532,13 +543,14 @@ const BlockCard = memo(function BlockCard({ block, index, count, session, disabl
       owner.addEventListener("pointermove", move); owner.addEventListener("pointerup", up, { once: true }); }} />
     </div>
   </article>;
-}, (before,after)=>before.block === after.block && before.index === after.index && before.count === after.count && before.disabled === after.disabled && before.locked === after.locked && before.preferences === after.preferences && before.session.focusedBlockId === after.session.focusedBlockId && before.session.maximizedBlockId === after.session.maximizedBlockId && before.session.connection === after.session.connection && before.session.database === after.session.database && before.session.schema === after.session.schema && before.session.busy === after.session.busy);
+}, (before,after)=>before.block === after.block && before.index === after.index && before.count === after.count && before.disabled === after.disabled && before.locked === after.locked && before.forceMount === after.forceMount && before.onEditorReady === after.onEditorReady && before.preferences === after.preferences && before.session.focusedBlockId === after.session.focusedBlockId && before.session.maximizedBlockId === after.session.maximizedBlockId && before.session.connection === after.session.connection && before.session.database === after.session.database && before.session.schema === after.session.schema && before.session.busy === after.session.busy);
 
-function ViewportEditor(props:{id:string;code:string;language:"sql"|"python";height:number;preferences:EditorPreferences;onFontSizeChange:(size:number)=>void;onChange:(code:string)=>void;onFocus:()=>void}) {
-  const container=useRef<HTMLDivElement>(null), [visible,setVisible]=useState(false);
+function ViewportEditor({forceMount,...props}:{id:string;code:string;language:"sql"|"python";height:number;preferences:EditorPreferences;onFontSizeChange:(size:number)=>void;onChange:(code:string)=>void;onFocus:()=>void;forceMount:boolean;onReady:(id:string)=>void}) {
+  const container=useRef<HTMLDivElement>(null), [visible,setVisible]=useState(false),[startupPinned,setStartupPinned]=useState(forceMount);
   const documentRevision=useOwnerDocumentRevision(container);
-  useEffect(()=>{const node=container.current;if(!node)return;const Observer=node.ownerDocument.defaultView?.IntersectionObserver ?? IntersectionObserver;const observer=new Observer(([entry])=>setVisible(entry.isIntersecting),{root:node.closest(".editor-area"),rootMargin:"350px"});observer.observe(node);return()=>observer.disconnect();},[documentRevision]);
-  return <div ref={container} style={{height:props.height}}>{visible && <Suspense fallback={<div className="editor-loading">{translateUi("Carregando editor…")}</div>}><MonacoBlock {...props}/></Suspense>}</div>;
+  useEffect(()=>{if(forceMount)setStartupPinned(true);},[forceMount]);
+  useEffect(()=>{const node=container.current;if(!node)return;const Observer=node.ownerDocument.defaultView?.IntersectionObserver ?? IntersectionObserver;const observer=new Observer(([entry])=>{setVisible(entry.isIntersecting);if(entry.isIntersecting)setStartupPinned(false);},{root:node.closest(".editor-area"),rootMargin:"350px"});observer.observe(node);return()=>observer.disconnect();},[documentRevision]);
+  return <div ref={container} style={{height:props.height}}>{(visible || forceMount || startupPinned) && <Suspense fallback={<div className="editor-loading">{translateUi("Carregando editor…")}</div>}><MonacoBlock {...props}/></Suspense>}</div>;
 }
 
 function OutputPanel({ session }: { session: SessionDocument }) {

@@ -26,6 +26,7 @@ export interface DockingWorkbenchProps {
   theme:"dark"|"light"|"system";leftWidth:number;rightWidth:number;resultHeight:number;leftVisible:boolean;rightVisible:boolean;
   activeBottom:"results"|"summary"|"output";activeRight:"variables"|"pynia";onActivate:(id:PanelId)=>void;resetRevision:number;
   onCaptureReady?:(capture:()=>SerializedDockview)=>void;
+  onInitialized?:()=>void;
   onPopoutReady?:(window:Window)=>(()=>void)|void;
 }
 export function DockingWorkbench(props:DockingWorkbenchProps) {
@@ -57,6 +58,7 @@ export function DockingWorkbench(props:DockingWorkbenchProps) {
     disposables.current.push(next.onDidLayoutChange(()=>{if(saveTimer.current)clearTimeout(saveTimer.current);saveTimer.current=setTimeout(()=>current.current.onLayoutChange(next.toJSON()),150);}));
     disposables.current.push(next.onDidActivePanelChange(event=>{if(event.panel)current.current.onActivate(event.panel.id as PanelId);}));
     popouts.current?.update(next.getPopouts().map(entry=>entry.window));
+    current.current.onInitialized?.();
   };
   useEffect(()=>{const a=api.current;if(!a)return;for(const [ids,visible] of [[(["connections","explorer"] as PanelId[]),props.leftVisible],[(["variables","pynia"] as PanelId[]),props.rightVisible]] as const){for(const id of ids){if(visible)add(id);else{const panel=a.getPanel(id);if(panel)a.removePanel(panel);}}}},[props.leftVisible,props.rightVisible]);
   useEffect(()=>{if(!api.current)return;add(props.activeBottom);api.current.getPanel(props.activeBottom)?.api.setActive();},[props.activeBottom]);

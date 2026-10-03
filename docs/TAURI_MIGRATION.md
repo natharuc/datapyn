@@ -142,4 +142,21 @@ Na última rodada do smoke congelado, o supervisor/primeiro kernel iniciou em 11
 
 O executável de validação fica em `desktop/src-tauri/target/release/datapyn-desktop.exe`, com `datapyn-runtime.exe` ao lado. Os dois arquivos devem permanecer juntos. O build não é uma release oficial e não substitui o instalador PyQt.
 
+## Splash nativa e inicialização
+
+A janela `splash` é centralizada, 640×420, sem bordas, com a logo original, fontes Ubuntu locais, versão do build e animações que respeitam redução de movimento. `splash.html` é uma entrada Vite própria: não importa React, Dockview, Monaco ou Plotly. A interface principal nasce oculta; a splash acompanha marcos reais, sem percentuais ou atrasos artificiais:
+
+1. Bootstrap da interface e carregamento do bundle.
+2. Resposta `system.info` do broker Python.
+3. Configurações, conexões e sessões salvas restauradas.
+4. Layout restaurado, primeiro editor utilizável construído com seu estado salvo e listener de arquivos instalado.
+
+Só então o host mostra/foca a janela principal e destrói a splash. Durante a carga, apenas um editor de código elegível é montado antecipadamente, respeitando foco, bloco maximizado e blocos recolhidos; os outros mantêm montagem por viewport. O startup não depende de `requestAnimationFrame` ou `IntersectionObserver` da janela oculta, nem espera todos os kernels para liberar a interface. Restaurar sessões não executa o código salvo.
+
+O host guarda um snapshot com fase/mensagem/versão/tentativa para evitar perder eventos entre janelas. Eventos e respostas antigos não recuam o progresso; `error` exige retry explícito e `ready` é terminal. Falhas de runtime, restauração ou carregamento/renderização da interface ficam na splash com “Tentar novamente” e “Fechar aplicativo”. Erros de bundle/renderização recarregam a interface ao tentar novamente; erros de runtime/restauração repetem a etapa correspondente. Durante o startup, fechar a splash encerra a aplicação sem aguardar uma requisição bloqueada; no Windows, o Job do host encerra seus subprocessos.
+
+Uma segunda instância foca a splash e mantém os arquivos em fila até a interface estar pronta. A fila e a transição para `ready` compartilham a mesma trava; o listener precisa estar registrado antes da publicação de `ready`. A splash tem apenas permissões de escuta de eventos e arraste da janela; comandos de runtime/arquivos conferem a janela e a URL local.
+
+Validação local desta mudança: 152 testes frontend em 25 arquivos, 12 testes Rust, TypeScript/Vite e build nativo Windows. Testes incluem tentativas antigas, respostas fora de ordem, falha fatal antes de React montar, todos os requisitos de readiness, seleção de um editor e disputa entre abertura de arquivos e `ready`. No executável, foram verificados erro real de boot do runtime→correção→retry→main, arquivos enviados por uma segunda instância durante startup, restauração de quatro blocos/foco/cursor e encerramento pela splash sem processos filhos restantes. A aceitação usa diretórios de teste isolados; a versão PyQt e suas configurações permanecem disponíveis para comparação. Prévia visual em desenvolvimento: `/splash.html?preview=workspace` ou `?preview=error` (estática, sem progressão simulada).
+
 Banco externo/autenticação, agentes ACP autenticados, instalações reais de pacotes, SMTP/Telegram, assinatura/atualização publicada, instalador em máquina limpa, Linux/macOS e o roteiro completo em vários monitores continuam como aceites explícitos da matriz. Implementação e teste local não aprovam esses cenários por inferência.
