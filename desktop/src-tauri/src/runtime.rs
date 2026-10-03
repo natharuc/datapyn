@@ -18,7 +18,7 @@ use tokio::sync::oneshot;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 // Match the Python supervisor limit and reject before writing to its pipe.
-const MAX_REQUEST_BYTES: usize = 2 * 1024 * 1024;
+const MAX_REQUEST_BYTES: usize = 24 * 1024 * 1024;
 type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>;
 
 #[derive(Default)]
@@ -71,6 +71,8 @@ fn allowed_method(method: &str) -> bool {
     matches!(
         method,
         "system.info"
+            | "system.activity"
+            | "system.flush_workspace"
             | "session.create"
             | "session.close"
             | "connection.connect"
@@ -78,8 +80,83 @@ fn allowed_method(method: &str) -> bool {
             | "execution.run"
             | "execution.cancel"
             | "result.page"
+            | "result.release"
             | "workspace.read"
             | "workspace.write"
+            | "connections.list"
+            | "connections.save"
+            | "connections.delete"
+            | "connections.clone"
+            | "connections.move"
+            | "connections.reorder"
+            | "connections.import"
+            | "connections.export"
+            | "groups.save"
+            | "groups.delete"
+            | "connection.disconnect"
+            | "explorer.list"
+            | "explorer.details"
+            | "explorer.query"
+            | "explorer.use_database"
+            | "language.complete"
+            | "language.format"
+            | "language.diagnostics"
+            | "parameters.scan"
+            | "connection.test"
+            | "connection.test_cancel"
+            | "connection.idle_timeout"
+            | "data.import"
+            | "variable.inspect"
+            | "variable.delete"
+            | "result.export"
+            | "result.summary"
+            | "result.chart"
+            | "result.chart_export"
+            | "result.artifact_write"
+            | "result.export_table"
+            | "document.read"
+            | "document.script_export"
+            | "packages.list"
+            | "packages.search"
+            | "packages.install"
+            | "packages.update"
+            | "packages.uninstall"
+            | "packages.sources"
+            | "pynia.catalog"
+            | "pynia.state"
+            | "pynia.select_agent"
+            | "pynia.prompt"
+            | "pynia.cancel"
+            | "pynia.clear"
+            | "pynia.config"
+            | "pynia.answer_permission"
+            | "pynia.attach"
+            | "pynia.tool_reply"
+            | "pynia.authenticate"
+            | "pynia.inline"
+            | "pynia.install"
+            | "notifications.settings.get"
+            | "notifications.settings.set"
+            | "notifications.evaluate"
+            | "notifications.send"
+            | "notifications.test"
+            | "snapshot.settings.get"
+            | "snapshot.settings.set"
+            | "snapshot.list"
+            | "snapshot.save"
+            | "snapshot.restore"
+            | "snapshot.delete"
+            | "workspace.profiles.list"
+            | "workspace.profiles.create"
+            | "workspace.profiles.rename"
+            | "workspace.profiles.clone"
+            | "workspace.profiles.delete"
+            | "workspace.profiles.restore"
+            | "workspace.profiles.select"
+            | "workspace.profiles.state"
+            | "workspace.profiles.save"
+            | "diagnostics.info"
+            | "diagnostics.save"
     )
 }
 
@@ -184,7 +261,7 @@ impl RuntimeClient {
         let mut bytes = serde_json::to_vec(&json!({"id":id,"method":method,"params":params}))
             .map_err(|error| error.to_string())?;
         if bytes.len() + 1 > MAX_REQUEST_BYTES {
-            return Err("Runtime request exceeds 2 MiB".into());
+            return Err("Runtime request exceeds 24 MiB".into());
         }
         bytes.push(b'\n');
         let (sender, receiver) = oneshot::channel();

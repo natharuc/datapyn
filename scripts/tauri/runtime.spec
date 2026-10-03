@@ -1,6 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 """Headless onefile runtime; no Qt frontend or GUI Matplotlib backend."""
 from pathlib import Path
+import shutil
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
@@ -37,12 +38,26 @@ hiddenimports = [
     "jinja2",
     "cryptography",
     "keyring",
+    "src.services.pynia.acp.client_transport",
+    "src.services.pynia.acp.activity",
+    "src.services.pynia.acp.mcp_helpers",
+    "src.services.pynia.acp.permission",
+    "src.services.pynia.acp.session_config",
+    "src.services.pynia.acp.turn_context",
+    "src.services.pynia.tools.definitions",
+    "src.services.entity_metadata_service",
 ]
-for package in ("datapyn_runtime", "sqlalchemy.dialects", "mysql.connector", "databricks.sqlalchemy", "keyring.backends"):
+for package in ("datapyn_runtime", "sqlalchemy.dialects", "mysql.connector", "databricks.sqlalchemy", "keyring.backends", "plotly.graph_objs"):
     hiddenimports += collect_submodules(package)
 
 datas = [(str(path), "src/language") for path in (ROOT / "source/src/language").glob("*.json")]
-for package in ("pandas", "polars", "pyarrow", "matplotlib", "plotly", "databricks.sql", "azure.identity"):
+for executable in ("uv", "ruff"):
+    tool_path = shutil.which(executable)
+    if tool_path:
+        datas.append((tool_path, "."))
+    else:
+        raise RuntimeError(f"{executable} is required to build the extensible desktop runtime")
+for package in ("pandas", "polars", "pyarrow", "matplotlib", "plotly", "jedi", "parso", "databricks.sql", "azure.identity"):
     datas += collect_data_files(package)
 
 analysis = Analysis(

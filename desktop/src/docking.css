@@ -1,0 +1,14 @@
+.datapyn-dock {height:100%;width:100%;--dv-background-color:var(--bg);--dv-group-view-background-color:var(--panel);--dv-tabs-and-actions-container-height:30px;--dv-activegroup-visiblepanel-tab-background-color:var(--panel);--dv-activegroup-visiblepanel-tab-color:var(--blue-light);--dv-tab-font-size:11px;--dv-separator-border:var(--border);--dv-sash-color:#3369ff88;}
+.dock-content {height:100%;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;background:var(--panel);}
+.dock-editor>.editor-area {height:100%;min-height:0;}
+.dock-connections .connections-panel,.dock-explorer .object-explorer {height:100%;flex:1;min-height:0;}
+.dock-results>.results-panel {height:100%!important;flex:1;border:0;min-height:0;}
+.dock-output>.output-log {height:100%;flex:1;}
+.dock-variables {overflow:auto;}
+.dock-pynia .pynia-panel {height:100%;min-height:0;}
+.dock-content .entity-info-content {overflow:auto;padding:16px;}
+.dock-content .results-resizer {display:none;}
+.entity-info {width:min(850px,92vw);}.entity-info-content{padding:16px;overflow:auto;max-height:75vh;}.entity-info-content table{width:100%;border-collapse:collapse;}.entity-info-content td,.entity-info-content th{padding:7px;border-bottom:1px solid var(--border);text-align:left;}.entity-info-content pre{white-space:pre-wrap;overflow-wrap:anywhere;}
+.code-block.sql .block-placeholder {top:86px;}
+.tab-context {position:fixed;z-index:600;background:var(--panel);border:1px solid var(--border);box-shadow:0 8px 32px #0005;min-width:180px;padding:4px;display:flex;flex-direction:column;}.tab-context button {text-align:left;padding:8px;}
+.dock-group-actions {display:flex;align-items:center;gap:2px;padding-right:4px;}.dock-group-actions button {display:grid;place-items:center;width:23px;height:23px;}

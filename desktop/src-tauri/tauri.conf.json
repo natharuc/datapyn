@@ -13,6 +13,7 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "DataPyn — Prévia Tauri",
         "width": 1440,
         "height": 940,
@@ -27,7 +28,11 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": false,
     "targets": "all",
     "icon": ["../../source/src/assets/datapyn-logo.ico", "icons/256x256.png"]
+  },
+  "plugins": {
+    "updater": { "pubkey": "", "endpoints": [] }
   }
 }

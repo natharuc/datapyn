@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
 
-from .client import AcpClient
+if TYPE_CHECKING:
+    from .client_transport import AcpTransport as AcpClient
 from .protocol import (
     client_version,
     initialize_params,

@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "overrides": { "dompurify": "^3.4.16" },
+  "overrides": {
+    "dompurify": "^3.4.16"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
@@ -11,22 +13,34 @@
     "test": "vitest run",
     "desktop:dev": "node ../scripts/tauri/dev.mjs",
     "runtime:bundle": "node ../scripts/tauri/runtime.mjs",
-    "desktop:build": "node ../scripts/tauri/build.mjs"
+    "desktop:build": "node ../scripts/tauri/build.mjs",
+    "postinstall": "node scripts/apply-glide-patch.mjs"
   },
   "dependencies": {
-    "@glideapps/glide-data-grid": "^6.0.3",
+    "@glideapps/glide-data-grid": "6.0.3",
     "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/plugin-dialog": "^2.6.0",
+    "@tauri-apps/plugin-notification": "^2.5.1",
+    "@tauri-apps/plugin-opener": "^2.7.0",
+    "@tauri-apps/plugin-process": "^2.4.0",
+    "@tauri-apps/plugin-updater": "^2.13.1",
+    "dockview-react": "^8.3.0",
+    "dompurify": "^3.4.16",
     "lodash": "^4.17.21",
     "lucide-react": "^0.577.0",
     "marked": "^4.3.0",
     "monaco-editor": "^0.57.0",
+    "plotly.js-basic-dist-min": "^4.1.1",
+    "plotly.js-dist-min": "^4.1.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-responsive-carousel": "^3.2.23"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.10.1",
+    "@types/marked": "^4.3.2",
+    "@types/node": "^22.20.5",
+    "@types/plotly.js": "^3.0.14",
     "@types/react": "^18.3.28",
     "@types/react-dom": "^18.3.7",
     "@vitejs/plugin-react": "^6.1.1",

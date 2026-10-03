@@ -106,6 +106,39 @@ describe("Eventos isolados por sessão e execução", () => {
 });
 
 describe("Execução e fila", () => {
+  it("download direto usa a seleção e não persiste o destino como parte do bloco",async()=>{
+    const transport=new FakeTransport(),controller=new WorkspaceController(transport),session=controller.session()!,block=session.blocks[0];
+    controller.updateBlock(session.id,block.id,{code:"SELECT 1; SELECT 2;",connection_id:"other",sql_parameters:[{name:"id",value:42}]});
+    const job=controller.runToFile(session.id,block.id,{path:"C:/temp/export.csv",format:"csv"},"SELECT 2;");
+    await vi.waitFor(()=>expect(transport.executions()).toHaveLength(1));
+    expect(transport.executions()[0].params).toMatchObject({code:"SELECT 2;",connection_id:"other",export:{path:"C:/temp/export.csv",format:"csv"}});
+    transport.finish(0);await job;
+    expect((encodeDocument(controller.session()!).blocks as object[])[0]).not.toHaveProperty("export");
+  });
+  it("timer executa imediatamente e agenda apenas depois da fila, sem sobreposição",async()=>{
+    vi.useFakeTimers();try{
+      const transport=new FakeTransport(),controller=new WorkspaceController(transport),session=controller.session()!;
+      controller.updateBlock(session.id,session.blocks[0].id,{code:"SELECT 1"});
+      const started=controller.startPeriodic(session.id,1);await vi.advanceTimersByTimeAsync(0);
+      expect(transport.executions()).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(5000);expect(transport.executions()).toHaveLength(1);
+      transport.finish(0);await started;await vi.advanceTimersByTimeAsync(999);expect(transport.executions()).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);expect(transport.executions()).toHaveLength(2);
+      controller.stopPeriodic(session.id);transport.finish(1);await vi.advanceTimersByTimeAsync(5000);expect(transport.executions()).toHaveLength(2);
+    }finally{vi.useRealTimers();}
+  });
+  it("restore nativo conserva identidade de sessão e foco por block_key; arquivos externos recebem novo id",()=>{
+    const transport=new FakeTransport(),controller=new WorkspaceController(transport),session=controller.session()!,second=controller.addBlock(session.id,"python","value=42");
+    controller.focusBlock(session.id,second.id);const snapshot=controller.nativeSnapshot();controller.restoreSnapshot(snapshot);
+    const restored=controller.session()!;expect(restored.id).toBe(session.id);expect(restored.blocks.find(b=>b.id === restored.focusedBlockId)?.code).toBe("value=42");
+    expect(decodeDocument(encodeDocument(restored)).id).not.toBe(session.id);
+  });
+  it("eventos de runtime não incrementam a revisão dos documentos nem regravam código",async()=>{
+    const transport=new FakeTransport(),controller=new WorkspaceController(transport),session=controller.session()!;
+    controller.updateBlock(session.id,session.blocks[0].id,{code:"SELECT 1"});const revision=controller.getSnapshot().documentRevision;
+    const job=controller.runAll(session.id);await vi.waitFor(()=>expect(transport.executions()).toHaveLength(1));
+    transport.finish(0);await job;expect(controller.getSnapshot().documentRevision).toBe(revision);
+  });
   it("um evento de conclusão antes do ACK encerra a fila sem aguardar a resposta atrasada", async () => {
     const transport = new FakeTransport(), baseRequest = transport.request.bind(transport);
     let rejectAck!: (error: Error) => void;
@@ -229,6 +262,15 @@ describe("Execução e fila", () => {
     await controller.retryRuntime(); expect(controller.getSnapshot().runtimeStatus).toBe("ready"); expect(transport.subscriptions).toBe(1);
     const secondJob = controller.runAll(session.id); await vi.waitFor(() => expect(transport.executions()).toHaveLength(2));
     transport.finish(1); await secondJob; expect(transport.requests.filter((request) => request.method === "session.create")).toHaveLength(2);
+  });
+  it("fechar um resultado libera seu handle e preserva namespace e outras tabelas", async () => {
+    const transport=new FakeTransport(),controller=new WorkspaceController(transport),session=controller.session()!;
+    const first={result_id:"a",variable_name:"df",columns:[],row_count:1},second={...first,result_id:"b",variable_name:"other"};
+    controller.patchSession(session.id,s=>({...s,results:[first,second],variables:[{name:"df",type:"DataFrame",preview:"one row"}],blocks:s.blocks.map(b=>({...b,results:[first,second]}))}));
+    controller.closeResult(session.id,"a");
+    expect(controller.session()?.results).toEqual([second]);expect(controller.session()?.blocks[0].results).toEqual([second]);
+    expect(controller.session()?.variables[0].name).toBe("df");
+    expect(transport.requests).toContainEqual({method:"result.release",params:{session_id:session.id,result_id:"a"}});
   });
   it("a senha não entra no documento ou rascunho persistido", async () => {
     const transport = new FakeTransport(), saved = new Map<string, string>();

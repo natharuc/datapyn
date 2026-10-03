@@ -5,6 +5,8 @@ Stream SQL result sets directly to CSV or Parquet without materializing full Dat
 from __future__ import annotations
 
 import csv
+import os
+import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, time as dt_time
@@ -144,7 +146,16 @@ def _infer_pa_type(value: Any) -> pa.DataType:
     if isinstance(value, float):
         return pa.float64()
     if isinstance(value, Decimal):
-        return pa.float64()
+        if not value.is_finite():
+            return pa.string()
+        _, digits, exponent = value.as_tuple()
+        scale = max(0, -exponent)
+        precision = max(1, len(digits) + max(0, exponent), scale)
+        if precision <= 38:
+            return pa.decimal128(precision, scale)
+        if precision <= 76:
+            return pa.decimal256(precision, scale)
+        return pa.string()
     if isinstance(value, datetime):
         return pa.timestamp("us")
     if isinstance(value, date):
@@ -163,6 +174,21 @@ def _merge_pa_types(current: pa.DataType, new: pa.DataType) -> pa.DataType:
         return current
     if current.equals(new):
         return current
+    if any(pa.types.is_string(dtype) or pa.types.is_large_string(dtype) for dtype in (current, new)):
+        return pa.string()
+    if pa.types.is_decimal(current) or pa.types.is_decimal(new):
+        if not all(pa.types.is_decimal(dtype) or pa.types.is_integer(dtype) for dtype in (current, new)):
+            # A string preserves every Decimal digit; float64 would silently
+            # round database money/DECIMAL values above IEEE-754 precision.
+            return pa.string()
+        scale = max(dtype.scale if pa.types.is_decimal(dtype) else 0 for dtype in (current, new))
+        integral = max(dtype.precision - dtype.scale if pa.types.is_decimal(dtype) else 19 for dtype in (current, new))
+        precision = max(1, integral + scale)
+        if precision <= 38:
+            return pa.decimal128(precision, scale)
+        if precision <= 76:
+            return pa.decimal256(precision, scale)
+        return pa.string()
     if pa.types.is_integer(current) and pa.types.is_integer(new):
         return pa.int64()
     if pa.types.is_floating(current) or pa.types.is_floating(new):
@@ -177,7 +203,7 @@ def _merge_pa_type(current: pa.DataType, new: pa.DataType) -> pa.DataType:
     return _merge_pa_types(current, new)
 
 
-def _infer_schema(columns: list[str], rows: list) -> pa.Schema:
+def _infer_schema(columns: list[str], rows: list, *, preserve_null: bool = False) -> pa.Schema:
     col_types: list[pa.DataType] = []
     for col_idx in range(len(columns)):
         inferred = pa.null()
@@ -188,7 +214,7 @@ def _infer_schema(columns: list[str], rows: list) -> pa.Schema:
         # which rejects any real value arriving in a later chunk ("Invalid null
         # value"). Promote it to string — the most permissive type — so later
         # non-null values coerce cleanly via the fallback path.
-        if pa.types.is_null(inferred):
+        if pa.types.is_null(inferred) and not preserve_null:
             inferred = pa.string()
         col_types.append(inferred)
     return pa.schema([pa.field(name, dtype) for name, dtype in zip(columns, col_types)])
@@ -211,6 +237,8 @@ def _coerce_value(value: Any, target: pa.DataType) -> Any:
             return float(value)
         except (TypeError, ValueError):
             return None
+    if pa.types.is_decimal(target):
+        return value if isinstance(value, Decimal) else Decimal(str(value))
     if pa.types.is_timestamp(target):
         if isinstance(value, datetime):
             return value
@@ -260,14 +288,21 @@ def _chunk_to_table(columns: list[str], rows: list, schema: pa.Schema | None) ->
     return table, schema
 
 
+class _StreamExportCancelled(Exception):
+    pass
+
+
 class ParquetStreamWriter:
     """Write row chunks as Parquet row groups."""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, is_cancelled: Callable[[], bool] | None = None):
         self.path = Path(path)
         self._writer: pq.ParquetWriter | None = None
         self._schema: pa.Schema | None = None
         self.rows_written = 0
+        self._parquet_path = self.path
+        self._stages: list[Path] = []
+        self._is_cancelled = is_cancelled
 
     def write_header(self, columns: Sequence[str]) -> None:
         self._columns = list(columns)
@@ -275,10 +310,33 @@ class ParquetStreamWriter:
     def write_chunk(self, columns: list[str], rows: list) -> None:
         if not columns:
             return
-        table, self._schema = _chunk_to_table(columns, rows, self._schema)
+        incoming = _infer_schema(columns, rows, preserve_null=self._schema is not None)
+        schema = incoming if self._schema is None else pa.schema([
+            pa.field(name, _merge_pa_type(self._schema.field(name).type, incoming.field(name).type)) for name in columns
+        ])
+        if self._writer is not None and not schema.equals(self._schema):
+            self._writer.close()
+            self._writer = None
+            descriptor, filename = tempfile.mkstemp(prefix=f"{self.path.stem}-upgrade-", suffix=".parquet", dir=self.path.parent)
+            os.close(descriptor)
+            upgraded_path = Path(filename)
+            self._stages.append(upgraded_path)
+            self._writer = pq.ParquetWriter(upgraded_path, schema, compression=PARQUET_COMPRESSION)
+            # Later cursor batches may introduce a larger DECIMAL scale. Keep
+            # earlier digits by rewriting row groups in bounded chunks.
+            with pq.ParquetFile(self._parquet_path) as existing:
+                for batch in existing.iter_batches(batch_size=STREAM_EXPORT_CHUNK_ROWS):
+                    if self._is_cancelled and self._is_cancelled():
+                        raise _StreamExportCancelled()
+                    table = _cast_arrow_table(pa.Table.from_batches([batch]), schema)
+                    _write_parquet_slices(self._writer, table)
+                    _gil_yield()
+            self._parquet_path.unlink(missing_ok=True)
+            self._parquet_path = upgraded_path
+        table, self._schema = _chunk_to_table(columns, rows, schema)
         if self._writer is None:
             self._writer = pq.ParquetWriter(
-                self.path,
+                self._parquet_path,
                 self._schema,
                 compression=PARQUET_COMPRESSION,
             )
@@ -289,9 +347,18 @@ class ParquetStreamWriter:
         if self._writer is not None:
             self._writer.close()
             self._writer = None
+        if self._parquet_path != self.path and self._parquet_path.is_file():
+            os.replace(self._parquet_path, self.path)
+            self._parquet_path = self.path
+        for stage in self._stages:
+            stage.unlink(missing_ok=True)
 
     def abort(self) -> None:
-        self.close()
+        if self._writer is not None:
+            self._writer.close()
+            self._writer = None
+        for stage in self._stages:
+            stage.unlink(missing_ok=True)
         try:
             self.path.unlink(missing_ok=True)
         except OSError:
@@ -517,6 +584,8 @@ def stream_arrow_to_file(
     schema: pa.Schema | None = None
     writer_schema: pa.Schema | None = None
     pq_writer: pq.ParquetWriter | None = None
+    parquet_path = path
+    parquet_stages: list[Path] = []
     csv_file = None
     csv_writer: pacsv.CSVWriter | None = None
     csv_write_opts: pacsv.WriteOptions | None = None
@@ -553,6 +622,8 @@ def stream_arrow_to_file(
                 pass
             csv_file = None
         _abort_stream_path(path)
+        for staged in parquet_stages:
+            _abort_stream_path(staged)
 
     try:
         while True:
@@ -575,15 +646,31 @@ def stream_arrow_to_file(
             ):
                 pq_writer.close()
                 pq_writer = None
-                existing = pq.read_table(path)
-                upgraded = _cast_arrow_table(existing, schema)
                 write_schema = _sanitize_schema_for_parquet(schema)
+                descriptor, upgraded_name = tempfile.mkstemp(
+                    prefix=f"{path.stem}-upgrade-", suffix=".parquet", dir=path.parent
+                )
+                os.close(descriptor)
+                upgraded_path = Path(upgraded_name)
+                parquet_stages.append(upgraded_path)
                 pq_writer = pq.ParquetWriter(
-                    path,
+                    upgraded_path,
                     write_schema,
                     compression=PARQUET_COMPRESSION,
                 )
-                _write_parquet_slices(pq_writer, upgraded)
+                # A type arriving late must never load the entire earlier
+                # download into memory. Rewrite existing row groups in bounded
+                # batches and keep writing to that stage until the final close.
+                with pq.ParquetFile(parquet_path) as existing:
+                    for batch in existing.iter_batches(batch_size=STREAM_ARROW_CHUNK_ROWS):
+                        if is_cancelled and is_cancelled():
+                            _abort()
+                            return -1
+                        upgraded = _cast_arrow_table(pa.Table.from_batches([batch]), write_schema)
+                        _write_parquet_slices(pq_writer, upgraded)
+                        _gil_yield()
+                parquet_path.unlink(missing_ok=True)
+                parquet_path = upgraded_path
                 writer_schema = write_schema
                 target_schema = write_schema
 
@@ -596,7 +683,7 @@ def stream_arrow_to_file(
                     target_schema = write_schema
                     cast_table = _cast_arrow_table(table, target_schema)
                     pq_writer = pq.ParquetWriter(
-                        path,
+                        parquet_path,
                         target_schema,
                         compression=PARQUET_COMPRESSION,
                     )
@@ -635,6 +722,9 @@ def stream_arrow_to_file(
                 csv_file.close()
         elif export_format == "parquet" and pq_writer is not None:
             pq_writer.close()
+            pq_writer = None
+            if parquet_path != path:
+                os.replace(parquet_path, path)
         elif export_format == "csv" and csv_writer is not None:
             csv_writer.close()
             if csv_file is not None:
@@ -684,7 +774,7 @@ def stream_result_set_to_file(
             writer.abort()
             raise
     else:
-        pq_writer = ParquetStreamWriter(path)
+        pq_writer = ParquetStreamWriter(path, is_cancelled=is_cancelled)
         if columns:
             pq_writer.write_header(columns)
         rows_written = 0
@@ -705,6 +795,9 @@ def stream_result_set_to_file(
                 pq_writer.write_chunk(columns, [])
             pq_writer.close()
             return rows_written
+        except _StreamExportCancelled:
+            pq_writer.abort()
+            return -1
         except Exception:
             pq_writer.abort()
             raise

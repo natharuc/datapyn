@@ -6,6 +6,7 @@ import ast
 import base64
 from collections import OrderedDict
 import io
+import json
 import os
 from pathlib import Path
 import sys
@@ -18,6 +19,9 @@ from . import database
 from .values import describe_variables, preview, scalar
 from .stdio import isolate_kernel_output
 from .process_group import initialize_kernel_group, exit_kernel_and_children
+from .language import namespace_snapshot
+from .desktop_services import enable_user_packages
+from .rich_outputs import RichOutputs
 
 MAX_OUTPUT_BYTES = 256 * 1024
 MAX_PAGE_ROWS = 1000
@@ -111,6 +115,22 @@ class ResultStore:
         self.pd = pd
         self.pl = pl
         self.frames: OrderedDict[str, object] = OrderedDict()
+        self.descriptors = OrderedDict()
+        self.views = OrderedDict()
+        self.view_bytes = 0
+
+    def invalidate_views(self):
+        self.views.clear()
+        self.view_bytes = 0
+
+    def release(self, result_id):
+        released = self.frames.pop(result_id, None) is not None
+        self.descriptors.pop(result_id, None)
+        for key in list(self.views):
+            if key[0] == result_id:
+                _view, size = self.views.pop(key)
+                self.view_bytes -= size
+        return {"result_id": result_id, "released": released}
 
     def is_frame(self, value):
         return isinstance(value, (self.pd.DataFrame, self.pl.DataFrame, self.pd.Series, self.pl.Series))
@@ -125,13 +145,20 @@ class ResultStore:
         result_id = uuid.uuid4().hex
         self.frames[result_id] = value
         while len(self.frames) > MAX_RESULT_HANDLES:
-            self.frames.popitem(last=False)
-        return {
+            identifier, _frame = self.frames.popitem(last=False)
+            self.descriptors.pop(identifier, None)
+            for key in list(self.views):
+                if key[0] == identifier:
+                    _view, size = self.views.pop(key)
+                    self.view_bytes -= size
+        descriptor = {
             "result_id": result_id,
             "variable_name": variable_name,
             "columns": [{"name": str(column), "dtype": str(dtype)} for column, dtype in zip(value.columns, value.dtypes)],
             "row_count": len(value),
         }
+        self.descriptors[result_id] = descriptor
+        return descriptor
 
     @staticmethod
     def column_label(frame, wire_name):
@@ -145,54 +172,39 @@ class ResultStore:
             raise ValueError(f"Ambiguous column name: {wire_name}; duplicate names cannot be sorted or filtered by name")
         return matches[0]
 
-    def page(self, params: dict):
+    def view(self, params: dict):
         result_id = params["result_id"]
         if result_id not in self.frames:
             raise KeyError("Result is unavailable; it may have been released or the kernel restarted")
         frame = self.frames[result_id]
+        filter_spec = params.get("filter") or {}
+        sort = params.get("sort") or {}
+        if not filter_spec and not sort:
+            return frame
+        key = (result_id, json.dumps({"filter": filter_spec, "sort": sort}, sort_keys=True, allow_nan=False))
+        if key in self.views:
+            self.views.move_to_end(key)
+            return self.views[key][0]
+        from .frame_view import apply_view
+        frame = apply_view(frame, params)
+        size = int(frame.memory_usage(index=True, deep=False).sum())
+        max_bytes = 256 * 1024 * 1024
+        if size <= max_bytes:
+            while self.views and (len(self.views) >= 4 or self.view_bytes + size > max_bytes):
+                _old_key, (_old_frame, old_size) = self.views.popitem(last=False)
+                self.view_bytes -= old_size
+            self.views[key] = (frame, size)
+            self.view_bytes += size
+        return frame
+
+    def page(self, params: dict):
         offset = params.get("offset", 0)
         limit = params.get("limit", 100)
         if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
             raise ValueError("offset must be a non-negative integer")
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_PAGE_ROWS:
             raise ValueError("limit must be between 1 and 1000")
-        filter_spec = params.get("filter") or {}
-        if filter_spec:
-            if not isinstance(filter_spec, dict):
-                raise ValueError("filter must be an object")
-            if "text" in filter_spec:
-                text = str(filter_spec["text"])
-                if len(text) > 1000:
-                    raise ValueError("filter text exceeds 1000 characters")
-                mask = self.pd.Series(False, index=frame.index)
-                for index in range(len(frame.columns)):
-                    mask |= frame.iloc[:, index].astype("string").str.contains(text, case=False, regex=False, na=False)
-                frame = frame.loc[mask]
-            elif "column" in filter_spec:
-                column = self.column_label(frame, filter_spec["column"])
-                series = frame[column]
-                operator = filter_spec.get("operator", "contains")
-                value = filter_spec.get("value", "")
-                if operator == "contains":
-                    mask = series.astype("string").str.contains(str(value), case=False, regex=False, na=False)
-                elif operator == "equals":
-                    mask = series.isna() if value is None else series.eq(value)
-                elif operator == "gt":
-                    mask = series.gt(value)
-                elif operator == "lt":
-                    mask = series.lt(value)
-                else:
-                    raise ValueError(f"Unsupported filter operator: {operator}")
-                frame = frame.loc[mask]
-        sort = params.get("sort") or {}
-        if sort:
-            if not isinstance(sort, dict):
-                raise ValueError("sort must be an object")
-            column = self.column_label(frame, sort.get("column"))
-            direction = sort.get("direction", "asc")
-            if direction not in {"asc", "desc"}:
-                raise ValueError("sort direction must be asc or desc")
-            frame = frame.sort_values(column, ascending=direction == "asc", kind="mergesort", na_position="last")
+        frame = self.view(params)
         rows = [[scalar(value) for value in row] for row in frame.iloc[offset : offset + limit].itertuples(index=False, name=None)]
         return {
             "columns": [{"name": str(column), "dtype": str(dtype)} for column, dtype in zip(frame.columns, frame.dtypes)],
@@ -246,7 +258,7 @@ def _watch_parent():
         exit_kernel_and_children()
 
 
-def kernel_main(session_id: str, commands, events):
+def kernel_main(session_id: str, commands, events, idle_timeout=300):
     initialize_kernel_group()
     # C extensions, os.write() and child subprocesses must never inherit the
     # NDJSON protocol descriptors. Python print() is streamed separately below.
@@ -264,17 +276,85 @@ def kernel_main(session_id: str, commands, events):
     def emit(event, payload):
         send({"event": event, "payload": payload})
 
+    enable_user_packages()
     import numpy as np
     import pandas as pd
     import polars as pl
 
     namespace = {"pd": pd, "np": np, "pl": pl}
     store = ResultStore(pd, pl)
+    pool = database.ConnectorPool(idle_timeout)
+    rich_capture = RichOutputs()
+    namespace.setdefault("display", rich_capture.display)
     connector = None
+    context_key = "default"
+    editor_contexts = {}
+    snapshot_dirty = False
+
+    def autosave():
+        nonlocal snapshot_dirty
+        if not snapshot_dirty:
+            return
+        # Namespace access and Parquet serialization remain on the interpreter
+        # thread, after pending commands have drained. Failed saves retry only
+        # after another successful mutation, rather than on every idle tick.
+        snapshot_dirty = False
+        try:
+            from .variable_snapshot import save
+            saved = save({"session_id": session_id}, namespace, store)
+            if saved.get("reason") != "disabled":
+                event = "snapshot.saved" if saved.get("saved") else "snapshot.warning"
+                emit(event, {"session_id": session_id, **saved})
+        except Exception as exc:
+            emit("snapshot.warning", {"session_id": session_id, "saved": False, "error": f"{type(exc).__name__}: {exc}"})
+
+    def activate(params, *, default=False):
+        nonlocal connector, context_key
+        connector = pool.activate(params, default=default)
+        context_key = "|".join(str(params.get(key) or "") for key in ("connection_id", "database", "schema")) or "default"
+        namespace.update({
+            "db_engine": connector.engine, "db_type": connector.db_type,
+            "db_database": connector.connection_params.get("database", ""),
+            "db_host": connector.connection_params.get("host", ""),
+            "db_username": connector.connection_params.get("username", ""),
+            "db_schema": pool.explorer().context()["schema"],
+        })
+        return connector
+
+    def publish_context(params=None, *, metadata=False):
+        key = context_key
+        context = {"key": key, "variables": namespace_snapshot(namespace), "connection_id": pool.active_key[0] if pool.active_key else None}
+        if metadata and connector is not None:
+            schema = pool.explorer().completion_schema((params or {}).get("code", ""))
+            context.update({"schema": schema, "database": schema.get("database", ""),
+                            "schema_name": schema.get("current_schema", ""),
+                            "schema_complete": bool((params or {}).get("code")),
+                            "version": time.monotonic_ns()})
+            editor_contexts[key] = schema
+        send({"language_context": context})
+
     send({"ready": True})
+    try:
+        from .variable_snapshot import settings_get, restore
+        settings = settings_get()
+        if settings["enabled"] and settings["restore_on_startup"]:
+            restored = restore({"session_id": session_id}, namespace, store)
+            emit("namespace.changed", {"session_id": session_id, **restored})
+            publish_context()
+    except Exception as exc:
+        emit("snapshot.error", {"session_id": session_id, "error": str(exc)})
     try:
         while True:
             try:
+                if not commands.poll(1):
+                    autosave()
+                    closed = pool.reap_idle()
+                    if closed:
+                        connector = pool.active
+                        if connector is None:
+                            namespace.pop("db_engine", None)
+                        emit("connection.idle_closed", {"session_id": session_id, "connection_ids": closed})
+                    continue
                 job = commands.recv()
             except EOFError:
                 return
@@ -288,25 +368,56 @@ def kernel_main(session_id: str, commands, events):
                 started = time.perf_counter()
                 emit("execution.started", {"session_id": session_id, "execution_id": execution_id})
                 capture = OutputCapture(emit, session_id, execution_id)
+                from src.core.parameter_settings import use_shared_parameter_delimiter
+                delimiter_context = use_shared_parameter_delimiter(params.get("shared_delimiter", "{{name}}"))
+                delimiter_context.__enter__()
                 old_stdout, old_stderr = sys.stdout, sys.stderr
                 sys.stdout, sys.stderr = CapturedStream(capture, "stdout"), CapturedStream(capture, "stderr")
-                results, rich_outputs, error = [], [], None
+                results, rich_outputs, error, download_result = [], [], None, None
+                rich_capture.begin()
                 try:
                     before = {name: id(value) for name, value in namespace.items() if store.is_frame(value)}
+                    if params.get("connection_id") or params.get("_connection_config") or pool.default_config is not None:
+                        activate(params)
                     if params["language"] == "sql":
                         if connector is None:
                             raise ConnectionError("Connect this session to a database first")
-                        value = connector.execute_query(params["code"], parameters=params.get("parameters"))
-                        values = value if isinstance(value, list) else [value]
-                        for index, frame in enumerate(values):
-                            name = params.get("variable_name") or "df"
-                            if index:
-                                name = f"{name}{index}"
-                            namespace[name] = frame
-                            if store.is_frame(frame):
-                                results.append(store.register(frame, name))
+                        parameters = params.get("parameters")
+                        if parameters is None:
+                            parameters = (params.get("sql_parameters") or []) + (params.get("shared_parameters") or [])
+                        if params.get("export"):
+                            from .stream_export import run as stream_download
+                            download = params["export"]
+                            last_progress = {}
+                            def progress(update):
+                                now = time.monotonic()
+                                key = update["file_index"]
+                                if key not in last_progress or now - last_progress[key] >= 0.1:
+                                    last_progress[key] = now
+                                    emit("execution.export_progress", {"session_id": session_id,
+                                        "execution_id": execution_id, **update})
+                            download_result = stream_download(
+                                connector, params["code"], path=download["path"],
+                                export_format=download["format"], parameters=parameters or None,
+                                options=download["options"], on_progress=progress,
+                            )
+                        else:
+                            value = connector.execute_query(params["code"], parameters=parameters or None)
+                            values = value if isinstance(value, list) else [value]
+                            for index, frame in enumerate(values):
+                                name = params.get("variable_name") or "df"
+                                if index:
+                                    name = f"{name}{index}"
+                                namespace[name] = frame
+                                if store.is_frame(frame):
+                                    results.append(store.register(frame, name))
                     else:
-                        value = execute_python(params["code"], namespace, f"<datapyn:{execution_id}>")
+                        enable_user_packages()
+                        code = params["code"]
+                        if params.get("shared_parameters"):
+                            from src.utils.sql_parameter_service import prepare_python_code_with_shared_parameters
+                            code = prepare_python_code_with_shared_parameters(code, params["shared_parameters"])
+                        value = execute_python(code, namespace, f"<datapyn:{execution_id}>")
                         name = params.get("variable_name")
                         if value is None:
                             changed = [(key, val) for key, val in namespace.items() if store.is_frame(val) and before.get(key) != id(val)]
@@ -318,13 +429,19 @@ def kernel_main(session_id: str, commands, events):
                             namespace[name] = value
                             results.append(store.register(value, name))
                         elif value is not None:
-                            print(preview(value, limit=8192))
-                    rich_outputs = capture_figures()
+                            if not rich_capture.capture(value):
+                                print(preview(value, limit=8192))
+                    for output in capture_figures():
+                        rich_capture.add(output)
+                    rich_outputs = rich_capture.outputs
                 except BaseException:
                     error = traceback.format_exc()[-32_768:]
                 finally:
+                    delimiter_context.__exit__(None, None, None)
                     sys.stdout, sys.stderr = old_stdout, old_stderr
                     capture.close()
+                    store.invalidate_views()
+                    pool.touch_active()
                 payload = {
                     "session_id": session_id,
                     "execution_id": execution_id,
@@ -337,33 +454,97 @@ def kernel_main(session_id: str, commands, events):
                     payload["error"] = error
                 if rich_outputs:
                     payload["rich_outputs"] = rich_outputs
+                if download_result is not None:
+                    payload["export"] = download_result
+                # A failed block may have partially changed a frame in place.
+                # Keep the previous durable generation until a later success.
+                snapshot_dirty = error is None
                 send({"event": "execution.finished", "payload": payload, "job_id": job_id})
+                publish_context()
                 continue
             try:
                 if method == "connection.connect":
-                    new_connector = database.connect(params["config"])
-                    if connector is not None:
-                        connector.disconnect()
-                    connector = new_connector
-                    namespace.update({
-                        "db_engine": connector.engine,
-                        "db_type": connector.db_type,
-                        "db_database": connector.connection_params.get("database", ""),
-                        "db_host": connector.connection_params.get("host", ""),
-                        "db_username": connector.connection_params.get("username", ""),
-                    })
-                    result = {"status": "connected", "db_type": connector.db_type}
+                    activate(params, default=True)
+                    safe_config = {key: value for key, value in (pool.default_config or {}).items()
+                                   if key not in {"password", "token", "access_token", "client_secret"}}
+                    result = {"status": "connected", "connection_id": params.get("connection_id"), "config": safe_config, **pool.explorer().context()}
+                    publish_context()
+                elif method == "connection.disconnect":
+                    pool.disconnect(params.get("connection_id"))
+                    connector = pool.active
+                    if connector is None:
+                        for name in ("db_engine", "db_type", "db_database", "db_host", "db_username", "db_schema"):
+                            namespace.pop(name, None)
+                    result = {"status": "disconnected", "connection_id": params.get("connection_id")}
+                elif method == "connection.idle_timeout":
+                    pool.idle_timeout = params["seconds"]
+                    result = {"seconds": pool.idle_timeout}
                 elif method == "schema.get":
+                    activate(params)
                     result = database.schema(connector)
                 elif method == "result.page":
                     result = store.page(params)
+                elif method == "result.release":
+                    result = store.release(params["result_id"])
+                elif method == "namespace.snapshot":
+                    result = {"variables": describe_variables(namespace), "results": list(store.descriptors.values())}
+                    emit("namespace.changed", {"session_id": session_id, **result})
+                elif method == "result.artifact_write":
+                    result = rich_capture.write(params)
+                elif method.startswith("explorer."):
+                    routed = dict(params)
+                    node = params.get("node") or {}
+                    if node.get("database"):
+                        routed.setdefault("database", node["database"])
+                    activate(routed, default=method == "explorer.use_database")
+                    if method == "explorer.use_database":
+                        result = pool.explorer().context()
+                    elif method == "explorer.snapshot":
+                        result = pool.explorer().completion_schema()
+                    else:
+                        result = pool.explorer().dispatch(method, params)
+                elif method == "language.context":
+                    try:
+                        activate(params)
+                        publish_context(params, metadata=True)
+                    except BaseException:
+                        key = "|".join(str(params.get(key) or "") for key in ("connection_id", "database", "schema")) or "default"
+                        send({"language_context": {"key": key, "variables": namespace_snapshot(namespace)}})
+                    result = {"status": "updated"}
+                elif method in {"data.import", "variable.inspect", "variable.delete", "result.export", "result.summary", "result.chart", "result.chart_export", "result.export_table", "document.read", "document.script_export"}:
+                    from .data_tools import dispatch as data_dispatch
+                    if method == "result.export_table":
+                        activate(params)
+                    if method == "variable.inspect" and params.get("variable_name") == "__namespace__":
+                        result = {"variables": describe_variables(namespace)}
+                    else:
+                        result = data_dispatch(method, params, namespace, store, connector=connector)
+                    if method in {"data.import", "variable.delete"}:
+                        snapshot_dirty = True
+                        store.invalidate_views()
+                        publish_context()
+                elif method.startswith("notifications."):
+                    from .notifications import dispatch as notification_dispatch, prepare
+                    if method == "notifications.send":
+                        send({"job_id": job_id, "notification_delivery": prepare(params, namespace, store)})
+                        continue
+                    result = notification_dispatch(method, params, namespace, store)
+                elif method.startswith("snapshot."):
+                    from .variable_snapshot import dispatch as snapshot_dispatch
+                    result = snapshot_dispatch(method, params, namespace, store)
+                    if method == "snapshot.save":
+                        snapshot_dirty = False
+                    if method == "snapshot.restore":
+                        snapshot_dirty = False
+                        store.invalidate_views()
+                        emit("namespace.changed", {"session_id": session_id, **result})
+                        publish_context()
                 else:
                     raise ValueError(f"Unknown kernel method: {method}")
                 send({"job_id": job_id, "result": result})
             except BaseException as exc:
                 send({"job_id": job_id, "error": {"code": "operation_failed", "message": f"{type(exc).__name__}: {exc}"}})
     finally:
-        if connector is not None:
-            connector.disconnect()
+        pool.disconnect()
         commands.close()
         events.close()

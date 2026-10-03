@@ -16,13 +16,15 @@ def scalar(value: Any) -> str | int | float | bool | None:
     if value is None:
         return None
     if isinstance(value, bool):
-        return value
+        return bool(value)
     if isinstance(value, int):
-        return value if abs(value) <= JS_SAFE_INTEGER else str(value)
+        return int(value) if abs(value) <= JS_SAFE_INTEGER else str(value)
     if isinstance(value, float):
-        return value if math.isfinite(value) else None
+        # NumPy float64 subclasses float. Returning it unchanged makes the
+        # broker import NumPy while unpickling a supposedly plain DTO.
+        return float(value) if math.isfinite(value) else None
     if isinstance(value, str):
-        return value
+        return str(value)
     if isinstance(value, Decimal):
         return str(value)
     if isinstance(value, (datetime, date, time)):
@@ -63,7 +65,7 @@ def preview(value: Any, limit: int = 240) -> str:
 def describe_variables(namespace: dict) -> list[dict]:
     variables = []
     for name, value in list(namespace.items()):
-        if name.startswith("_") or name in {"pd", "np", "pl", "plt"} or isinstance(value, ModuleType):
+        if name.startswith("_") or name in {"pd", "np", "pl", "plt", "display"} or isinstance(value, ModuleType):
             continue
         variables.append({"name": name, "type": type(value).__name__, "preview": preview(value)})
         if len(variables) >= 200:

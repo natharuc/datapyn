@@ -1,5 +1,13 @@
-"""Pynia consolidated tools for native DataPyn agent integration."""
+"""Lazy compatibility exports; pure protocols do not load a desktop frontend."""
+from importlib import import_module
 
-from src.services.pynia.tools.registry import PyniaToolRegistry
+_EXPORTS = {'PyniaToolRegistry': ('.registry', 'PyniaToolRegistry')}
+__all__ = list(_EXPORTS)
 
-__all__ = ["PyniaToolRegistry"]
+def __getattr__(name):
+    if name not in _EXPORTS:
+        raise AttributeError(name)
+    module, attribute = _EXPORTS[name]
+    value = getattr(import_module(module, __name__), attribute)
+    globals()[name] = value
+    return value

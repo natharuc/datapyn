@@ -1,0 +1,94 @@
+{
+  "version": "6.0.3",
+  "patch_sha256": "1291849586939eeb1db80be119346a3c059d1926356d463f38da9d2fbea5b7cb",
+  "files": {
+    "dist/dts/data-editor/data-editor.d.ts": {
+      "original": "00be99de9e143bdd448e1010e94e028f144b3e7189a8f2fbf8144aa1b193bfb2",
+      "patched": "201120b94cbaeb6ab8c7767d8bf2a21761b4b00d9bddcfe1ee3e808e1ec970df"
+    },
+    "dist/esm/cells/drilldown-cell.js": {
+      "original": "0e2c8ed88d938a2bd712b7e086da2e5758c6c2be814a24bc9f5cfb57d8a0e3a8",
+      "patched": "d0a97a899f6d1666cf51013bc2341e378716b4769b28b7b075ce1c2a504e0940"
+    },
+    "dist/esm/common/owner-document.js": {
+      "original": null,
+      "patched": "3a373366d7fbc95f93837d3ccf2e7e5f6ef971da5a4bc2b3e830f8887e148a73"
+    },
+    "dist/esm/common/resize-detector.js": {
+      "original": "7d6e759f17c62cce30342192508cde70423a374ae79dbbc6a45ec8b09a419409",
+      "patched": "db571e0fdc31e0e822a4c4a363a422e17e7a6b08a5b8388e43891144632e5832"
+    },
+    "dist/esm/common/utils.js": {
+      "original": "47e753e32eeb6dfb3dabd30604344b0d8fcfcbf4491378bb26fbb39d20ca876f",
+      "patched": "2626ffe0be6833b79b1adc62fc4286c213dfdbc1065523998e646eae5c20bbf6"
+    },
+    "dist/esm/data-editor/copy-paste.js": {
+      "original": "17430faf7f3ef927fcf83a141f67f98da113feacdb0eff4c4a56030326b5bc73",
+      "patched": "fc2a15a431af175030090e8cb85b10bf5db91258f27efa7f03b11df3575e2f8b"
+    },
+    "dist/esm/data-editor/data-editor-fns.js": {
+      "original": "b8a3af47f700f82bc92db78d264b08c8fead48679327f6c72f86780faff59af5",
+      "patched": "078fe782e646446b852bb78a287f7860e451ea9b7ddad5e5aff29656f7382c93"
+    },
+    "dist/esm/data-editor/data-editor.js": {
+      "original": "57de5121719c24da7364a0fe40152952b7f101af510a274dcc560f08775704ee",
+      "patched": "01149b5a18a753a21e9eaebedfbcb8ee2c9dbc28eb57287033d7cacd963b9b36"
+    },
+    "dist/esm/data-editor/use-autoscroll.js": {
+      "original": "0c92336a80e3b672719da2ab9069bf1a77fc52127bf51737317d45b7584b5b24",
+      "patched": "8a880399ea4acaa489bc9aa480383321a98eb8bb584654c20a6d7689a3dfe6a1"
+    },
+    "dist/esm/data-editor/use-column-sizer.js": {
+      "original": "7973e03c66afb36df5889154ca58be8ccb24d9fa5e6e164a7d2aa41e0237f538",
+      "patched": "5682caab2ffc85033d825cbe607acca92a41834c65b76a209f4547edf4931c77"
+    },
+    "dist/esm/internal/click-outside-container/click-outside-container.js": {
+      "original": "002fbd15147e3cf88772555538a67e6e8448c0aa3b4b724cd0d83c27e26cc23c",
+      "patched": "8c54eae8c3fa6ad39fee2eb8304dd75c6fac861573b07bc79b5ae7a38692c3b9"
+    },
+    "dist/esm/internal/data-grid-overlay-editor/data-grid-overlay-editor.js": {
+      "original": "b55db35ce9c6eea367c5dc17366483af701857964f4faf60a1b6bbceffb4515e",
+      "patched": "044e35cf34228984b198b73f1016242dc5345c7e869fb1d81bd8fca8bc05f7c4"
+    },
+    "dist/esm/internal/data-grid-overlay-editor/use-stay-on-screen.js": {
+      "original": "4426bc45ccb9c8a9eaac153d73227f2dc82d5146cdbee78dd5e6a7f95065f605",
+      "patched": "311e8a32e004a449089f5ff6bb31539174a1d85bad8eee65503950794c56a100"
+    },
+    "dist/esm/internal/data-grid-search/data-grid-search.js": {
+      "original": "cbe0ebf8bdd919e87618610077f3b757c233c542775c7b3649211deeac04e6f4",
+      "patched": "e62c995c87cff5bf5a4a59e7aa6923f9827aeb4f35ecb47d78987ffdccfd5a50"
+    },
+    "dist/esm/internal/data-grid/animation-manager.js": {
+      "original": "dd8306ff659b2f29cc3a85c73a3ae842eb96db440dd378eb843db63db00db910",
+      "patched": "b6778772d3d19c5fc9a90aa114e434ab979c87c4cfe4fcf57effbcc8dc1e75dd"
+    },
+    "dist/esm/internal/data-grid/data-grid-sprites.js": {
+      "original": "129f8cccabf7715cb2c06ba0d77977917e19ae63277d758f0a85b767d6a806c2",
+      "patched": "06f6b8eb9a5c7c343d9f62407e077be25f4715b98de6096fdfa082bd46b6b08d"
+    },
+    "dist/esm/internal/data-grid/data-grid.js": {
+      "original": "97ecf8204f26b6a23e400a65554e100cfb511539398951ef8708b657f4b1693e",
+      "patched": "39cb0b8f216b5bd60c3bd7b6041e1f77b3062a1f34a6b34985a0454db1e1c33c"
+    },
+    "dist/esm/internal/data-grid/render/data-grid-render.js": {
+      "original": "9f00bb5d708b06f1b9e74f3783cd1418ee781fd12ba51aa63065511e5c4537fc",
+      "patched": "2c0dd00f63082983eac49aae97a39d2ff11a9b8f3599c5e811c3100a2b0647b4"
+    },
+    "dist/esm/internal/data-grid/use-animation-queue.js": {
+      "original": "1ac0013559a978c83831545f24121be17b969e5478a31101cd46dddb98caa3d0",
+      "patched": "22044b70438bf3eff36239b19b6d0bc3d3c0f28fa13f67902a84c168ac6e32b5"
+    },
+    "dist/esm/internal/markdown-div/markdown-div.js": {
+      "original": "87040b736acafa60c064920e74c8a53d68d239f5bb6b23b6dc8f7b88f0e348b0",
+      "patched": "16a1433520770190f353a4f4aa329754bd29d49b1bc0236576fb1ee63d44d4ee"
+    },
+    "dist/esm/internal/scrolling-data-grid/infinite-scroller.js": {
+      "original": "04d46c3e3ebc7e29fc2a6e1001d272295fc82dca4b900be5ca06e2f6d5c642a6",
+      "patched": "727272d4ea5aca3cfe0c4028686b867734240f949bb0a5a247eec3db77c1009d"
+    },
+    "dist/esm/internal/scrolling-data-grid/use-kinetic-scroll.js": {
+      "original": "a04089d1788737f0a53d1f429325696ae494c37cf939a6fe927c10c9f995ed14",
+      "patched": "7f8bb1ed40368f62ad36ff1b8b3429ba47522778f7318020e28b1123589f48d8"
+    }
+  }
+}

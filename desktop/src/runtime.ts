@@ -8,18 +8,22 @@ export interface ResultRef { result_id: string; variable_name: string; columns: 
 export interface Variable { name: string; type: string; preview: string }
 export interface ResultPage { columns: Column[]; rows: Primitive[][]; total_rows: number; offset: number }
 export interface RuntimeInfo { protocol_version: number; python_version: string; capabilities: Record<string, unknown> | string[] }
+export type RichOutput = {artifact_id?:string;type:"image";data:string;mime:string}|{artifact_id?:string;type:"html";data:string}|{artifact_id?:string;type:"json"|"plotly";data:unknown};
 export interface ExecutionFinished {
   session_id: string; execution_id: string; status: "succeeded" | "failed" | "cancelled";
   duration_ms: number; error?: string; results: ResultRef[]; variables: Variable[];
-  rich_outputs?: Array<{ type: "image"; data: string; mime: string }>;
+  rich_outputs?: RichOutput[];
+  export?: {files:Array<{path:string;rows:number;columns:number;size_bytes:number}>;total_rows:number;cancelled:boolean;errors:string[]};
 }
 export type RuntimeEvent =
   | { event: "execution.started"; payload: { session_id: string; execution_id: string } }
   | { event: "execution.output"; payload: { session_id: string; execution_id: string; stream: string; text: string } }
+  | { event: "execution.export_progress"; payload: {session_id:string;execution_id:string;path:string;rows:number;size_bytes:number;total_rows:number} }
   | { event: "execution.finished"; payload: ExecutionFinished }
   | { event: "session.ready"; payload: { session_id: string } }
   | { event: "session.error"; payload: { session_id: string; error: string } }
   | { event: "session.reset"; payload: { session_id: string; reason?: string } }
+  | { event: "namespace.changed"; payload: {session_id:string;variables:Variable[];results:ResultRef[]} }
   | { event: "backend.exited"; payload: { message: string } };
 
 export function isRuntimeEvent(value: unknown): value is RuntimeEvent {
@@ -30,9 +34,11 @@ export function isRuntimeEvent(value: unknown): value is RuntimeEvent {
   if (typeof payload.session_id !== "string") return false;
   if (event === "session.ready" || event === "session.reset") return true;
   if (event === "session.error") return typeof payload.error === "string";
+  if (event === "namespace.changed") return Array.isArray(payload.variables) && Array.isArray(payload.results);
   if (typeof payload.execution_id !== "string") return false;
   if (event === "execution.started") return true;
   if (event === "execution.output") return typeof payload.stream === "string" && typeof payload.text === "string";
+  if (event === "execution.export_progress") return typeof payload.path === "string" && typeof payload.rows === "number";
   return event === "execution.finished" && ["succeeded", "failed", "cancelled"].includes(String(payload.status));
 }
 

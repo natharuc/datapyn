@@ -3,6 +3,23 @@
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
+from contextvars import ContextVar
+
+_delimiter_override: ContextVar[str | None] = ContextVar("datapyn_parameter_delimiter", default=None)
+
+
+@contextmanager
+def use_shared_parameter_delimiter(template: str):
+    """Select a delimiter for one request without changing other kernels or threads."""
+    resolved = _resolve_stored_delimiter(template)
+    if parse_delimiter_template(resolved) is None:
+        raise ValueError("Delimiter must contain exactly one 'name' with opening and closing tokens")
+    token = _delimiter_override.set(resolved)
+    try:
+        yield
+    finally:
+        _delimiter_override.reset(token)
 
 DEFAULT_SHARED_PARAMETER_DELIMITER = "{{name}}"
 
@@ -34,6 +51,9 @@ def _resolve_stored_delimiter(value: str) -> str:
 
 def get_shared_parameter_delimiter() -> str:
     """Return the configured shared parameter delimiter template (e.g. ``{{name}}``)."""
+    override = _delimiter_override.get()
+    if override is not None:
+        return override
     # Headless kernels receive settings explicitly, without registry access.
     explicit = os.environ.get("DATAPYN_SHARED_PARAMETER_DELIMITER")
     if explicit is not None:

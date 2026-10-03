@@ -6,7 +6,7 @@ from typing import Any
 
 import pandas as pd
 
-from src.services.visualization import resolve_palette
+from .chart_style import resolve_palette
 
 
 def resolve_df_column(df: pd.DataFrame, column_name: str):
@@ -71,7 +71,9 @@ def prepare_chart_data(df: pd.DataFrame, config: dict) -> tuple[pd.DataFrame, li
         raise ValueError(S.visualization.chart_no_y_column)
 
     group_column = resolve_df_column(df, config.get("group_by", ""))
-    work = df.copy()
+    # Charting three columns of a wide result must not copy every unused column.
+    source_columns = [column for column in [x_column, *y_columns, group_column] if column is not None]
+    work = df.loc[:, list(dict.fromkeys(source_columns))].copy()
     if x_column is None:
         work["__datapyn_x__"] = [str(index) for index in work.index]
         x_key = "__datapyn_x__"

@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 import time
+import tempfile
 
 import pytest
 
@@ -20,6 +21,9 @@ ROOT = Path(__file__).resolve().parents[1]
 class Client:
     def __init__(self):
         env = dict(os.environ, PYTHONPATH=str(ROOT / "source"), PYTHONIOENCODING="utf-8")
+        self.state_directory = tempfile.TemporaryDirectory(prefix="datapyn-runtime-test-")
+        env.setdefault("DATAPYN_RUNTIME_STATE_PATH", self.state_directory.name)
+        env.setdefault("DATAPYN_WORKSPACE_PATH", env["DATAPYN_RUNTIME_STATE_PATH"])
         env.pop("DATAPYN_RUNTIME_TRACE", None)
         self.process = subprocess.Popen(
             [sys.executable, "-u", "-m", "datapyn_runtime"], cwd=ROOT, env=env,
@@ -124,6 +128,7 @@ class Client:
         self.reader.join(timeout=2)
         for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
             stream.close()
+        self.state_directory.cleanup()
 
 
 @pytest.fixture

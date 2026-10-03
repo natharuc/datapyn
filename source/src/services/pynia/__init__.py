@@ -1,18 +1,13 @@
-"""
-Pynia — DataPyn's ACP client. Talks to installed coding agents
-(Claude, Cursor, GitHub Copilot, Codex) and exposes IDE tools over MCP.
-"""
+"""Lazy compatibility exports; pure protocols do not load a desktop frontend."""
+from importlib import import_module
 
-from .acp.host import PyniaAcpHost
-from .acp.catalog import AGENT_IDS, AgentId, get_agent, list_agents
-from .settings import get_pynia_settings, reset_pynia_settings
+_EXPORTS = {'PyniaAcpHost': ('.acp.host', 'PyniaAcpHost'), 'AGENT_IDS': ('.acp.catalog', 'AGENT_IDS'), 'AgentId': ('.acp.catalog', 'AgentId'), 'get_agent': ('.acp.catalog', 'get_agent'), 'list_agents': ('.acp.catalog', 'list_agents'), 'get_pynia_settings': ('.settings', 'get_pynia_settings'), 'reset_pynia_settings': ('.settings', 'reset_pynia_settings')}
+__all__ = list(_EXPORTS)
 
-__all__ = [
-    "PyniaAcpHost",
-    "AGENT_IDS",
-    "AgentId",
-    "get_agent",
-    "list_agents",
-    "get_pynia_settings",
-    "reset_pynia_settings",
-]
+def __getattr__(name):
+    if name not in _EXPORTS:
+        raise AttributeError(name)
+    module, attribute = _EXPORTS[name]
+    value = getattr(import_module(module, __name__), attribute)
+    globals()[name] = value
+    return value

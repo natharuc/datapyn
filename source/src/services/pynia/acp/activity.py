@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from src.services.pynia.acp.mcp_host import normalize_mcp_tool_name
+from .mcp_helpers import normalize_mcp_tool_name
 
 _MAX_THINKING_CHARS = 8_000
 

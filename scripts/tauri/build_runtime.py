@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -55,7 +56,14 @@ def main() -> int:
     suffix = ".exe" if sys.platform == "win32" else ""
     built = output_root / "dist" / f"datapyn-runtime{suffix}"
     if args.smoke:
-        subprocess.run([sys.executable, str(ROOT / "scripts/tauri/smoke_runtime.py"), "--executable", str(built)], cwd=ROOT, env=env, check=True)
+        with tempfile.TemporaryDirectory(prefix="datapyn-frozen-smoke-") as temporary:
+            smoke_env = {**env, "DATAPYN_RUNTIME_STATE_PATH": temporary,
+                         "DATAPYN_WORKSPACE_PATH": temporary,
+                         "DATAPYN_RUNTIME_DATA_DIR": str(Path(temporary) / "packages"),
+                         "DATAPYN_SNAPSHOT_ROOT": str(Path(temporary) / "snapshots")}
+            for script in ("smoke_runtime.py", "smoke_parity.py"):
+                subprocess.run([sys.executable, str(ROOT / "scripts/tauri" / script), "--executable", str(built)],
+                               cwd=ROOT, env=smoke_env, check=True)
     destination = ROOT / "desktop/src-tauri/binaries" / f"datapyn-runtime-{target}{suffix}"
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(built, destination)

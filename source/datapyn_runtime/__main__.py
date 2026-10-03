@@ -11,7 +11,7 @@ import threading
 from .supervisor import Supervisor
 from .stdio import detach_child_stdin
 
-MAX_REQUEST_BYTES = 2 * 1024 * 1024
+MAX_REQUEST_BYTES = 24 * 1024 * 1024
 
 
 class ProtocolWriter:
@@ -63,6 +63,9 @@ class ProtocolWriter:
 
 def main():
     multiprocessing.freeze_support()
+    if "--mcp-stdio" in sys.argv[1:]:
+        from .mcp_stdio import main as mcp_main
+        return mcp_main()
     child_stdin = detach_child_stdin()
     # Windows stdio defaults must not corrupt Unicode protocol data.
     if hasattr(sys.stdout, "reconfigure"):
@@ -77,7 +80,7 @@ def main():
             if len(raw) > MAX_REQUEST_BYTES:
                 while raw and not raw.endswith(b"\n"):
                     raw = sys.stdin.buffer.readline(MAX_REQUEST_BYTES + 1)
-                writer.emit({"id": None, "error": {"code": "request_too_large", "message": "Request exceeds 2 MiB"}})
+                writer.emit({"id": None, "error": {"code": "request_too_large", "message": "Request exceeds 24 MiB"}})
                 continue
             try:
                 request = json.loads(raw.decode("utf-8"))

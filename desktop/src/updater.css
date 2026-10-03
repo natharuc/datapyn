@@ -1,0 +1,15 @@
+.update-dialog { width: min(560px, calc(100vw - 36px)); }
+.update-identity { display: flex; align-items: center; gap: 14px; padding: 22px 24px; border-bottom: 1px solid var(--border); }
+.update-mark { display: grid; place-items: center; width: 54px; height: 54px; color: var(--blue-light); background: color-mix(in srgb, var(--blue) 12%, transparent); border: 1px solid color-mix(in srgb, var(--blue) 30%, transparent); border-radius: 12px; }
+.update-identity strong { font-size: 19px; letter-spacing: -.03em; }
+.update-identity p { color: var(--muted); font-size: 12px; margin: 5px 0 0; }
+.update-version { margin-left: auto; color: var(--muted); font-family: var(--editor-font); font-size: 12px; }
+.update-content { padding: 22px 24px; min-height: 132px; max-height: 55vh; overflow: auto; }
+.update-content h3 { margin: 0 0 9px; font-size: 15px; font-weight: 600; }
+.update-content p { color: var(--muted); line-height: 1.55; font-size: 13px; margin: 8px 0; }
+.update-status { display: flex; align-items: center; gap: 10px; }
+.update-status svg { color: var(--blue-light); flex-shrink: 0; }
+.update-notes { white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; font-size: 12px; line-height: 1.65; border-left: 2px solid var(--border); padding: 4px 0 4px 14px; margin: 18px 0 0; }
+.update-download { margin-top: 20px; }
+.update-download progress { width: 100%; height: 7px; accent-color: var(--blue); }
+.update-download p { font-size: 12px; font-variant-numeric: tabular-nums; }

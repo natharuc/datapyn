@@ -1,0 +1,276 @@
+# DataPyn: inventário de comportamento e paridade Tauri
+
+Inventário do código em `codex/tauri-migration`, revisto em 3 de outubro de 2026. O PyQt é a referência funcional; trocar a tecnologia não autoriza remover atalhos, isolamento entre abas, estados, formatos ou formas de execução. Esta matriz separa presença no código de validação em um banco externo. Foram inventariados 114 comportamentos e os atalhos completos. Status refletem implementação real e testes; aceite externo/nativo permanece explícito.
+
+**Implementado** significa código real integrado e evidência abaixo; não significa que todo driver/gesto foi exercitado em produção. **Parcial** identifica distribuição/aceite incompleto. **Diferença explícita** registra comportamento da nova arquitetura. Referências `[CAT]`, `[RUN]` etc apontam ao índice de código/testes. Evidências PyQt são relativas a `source/src/` e linhas verificadas no legado. Botão sem ação não conta como paridade.
+
+## Conexões e namespaces
+
+| ID | Comportamento a preservar | Evidência PyQt | Tauri / aceite |
+|---|---|---|---|
+| C01 | Cadastrar, editar, duplicar, excluir e conectar por nome + grupo | `ui/dialogs/connections_manager_dialog.py:664,727,786,832,864`; `core/connection_ref.py` | Implementado: CRUD/duplicate/UUID por grupo; nomes repetidos e round-trip testados [CAT]. |
+| C02 | Criar, renomear, mover conexões entre grupos; arrastar na árvore | `ui/dialogs/connections_manager_dialog.py:401,573,591` | Implementado: grupos aninhados/rename/move/reorder/drag/drop e persistência [CAT]. Gesto nativo precisa de aceite. |
+| C03 | Cor por grupo e por conexão, refletida nas abas/blocos/resultados | `ui/dialogs/connections_manager_dialog.py:638`; `ui/dialogs/connection_edit_dialog.py:586`; `ui/components/session_tabs.py:272`; `ui/components/results_viewer.py:2531` | Implementado: cor explícita/herdada em grupos/conexões e contexto de blocos [CAT/UI]. Aceite de contraste/DPI pendente. |
+| C04 | Importar/exportar JSON de conexões, aceitar formatos plano e agrupado | `ui/dialogs/connection_import_export_dialog.py:36,84,111` | Implementado: JSON explícito plano/agrupado; export sem secrets por padrão [CAT]. Não importa QSettings privado automaticamente. |
+| C05 | MySQL, MariaDB, PostgreSQL, SQL Server, Databricks e SQLite | `database/database_connector.py`; `ui/dialogs/connection_edit_dialog.py:155` | Implementado: drivers reais do legado + SQLite SQLAlchemy [DB]. SQLite exercitado; bancos/auth remotos aguardam aceite externo. |
+| C06 | Testar conexão sem bloquear a UI; cancelar teste | `ui/dialogs/connection_edit_dialog.py:613,655` | Implementado: testar alterações não salvas em processo separado, cancelar sem reset da sessão [CAT/DB]; regressões reais. |
+| C07 | SQL Server: senha, Windows Auth e Microsoft Entra; driver ODBC e cache de auth | `ui/dialogs/connection_edit_dialog.py:491,525`; `database/database_connector.py` | Implementado: auth/ODBC/cache do driver existente [DB/CAT]. Windows/Entra/password remoto não exercitados. |
+| C08 | Databricks: host, HTTP path, token/OAuth, catálogo e schema | `ui/dialogs/connection_edit_dialog.py:428`; `database/namespace.py` | Implementado: PAT/OAuth explícitos, HTTP path, catálogo/schema separados [CAT/DB]. Browser/cache real do connector; login externo pendente. |
+| C09 | Conexão padrão da sessão e sobrescrita por bloco SQL | `editors/code_block.py:1585,1589,2060`; `database/block_connector_pool.py` | Implementado: pool por conexão/database/schema e override por bloco [DB/UI]. Duas engines/namespace SQLite isolados testados. |
+| C10 | Database por bloco; PostgreSQL schema/search_path; Databricks catálogo/schema | `editors/code_block.py:1613,1695,1720,1730,1748,1806` | Implementado: contexto/metadados explícitos por bloco e namespace [DB/EXP/UI]. Search_path/Databricks remoto precisam de aceite. |
+| C11 | Pickers pesquisáveis para conexões e databases/schemas | `editors/code_block.py:216,327,666`; `ui/dialogs/connection_picker_dialog.py` | Implementado: pickers pesquisáveis e teclado sobre catálogo/metadados carregados [CAT/UI]. |
+| C12 | Arrastar conexão/database/schema para bloco, criando contexto explícito | `editors/code_block.py:1589,1769,1822`; `editors/block_editor.py:1502` | Implementado: MIME conexão/schema e drop no bloco [CAT/EXP/UI]. Gesto nativo precisa de aceite. |
+| C13 | Desconectar e adormecer conectores ociosos; reabrir sem perder código | `core/session.py:338,347`; `core/connection_settings.py:7`; `database/block_connector_pool.py` | Implementado: default300s/configurável/zero desliga, reconnect lazy, protege execução e SQLite in-memory [DB]; regressão real. |
+| C14 | `db_engine`, `db_type`, `db_database`, `db_host`, `db_username` no Python | `core/session.py:127`; `services/python_execution_service.py` | Implementado: engine SQLAlchemy real e db_* no namespace Python [DB/RUN]. Engine nunca passa para JS. |
+
+## Object Explorer e metadados
+
+| ID | Comportamento | Evidência PyQt | Tauri / aceite |
+|---|---|---|---|
+| O01 | Árvore servidor/database/schema/tabela/coluna com tipos | `ui/components/object_explorer_panel.py:837,933,1055,1128,1364` | Implementado: árvore virtual completa com tipos/rotinas/dialeto [EXP]. SQLite real e rotinas SQL Server testados. |
+| O02 | Expansão carrega databases, schemas, tabelas e colunas sob demanda | `ui/components/object_explorer_panel.py:1455,1495,1529,1556,1640` | Implementado: RPC/cache por nível/namespace; tabela não carrega todas as colunas [EXP]; lazy calls testadas. |
+| O03 | Buscar objetos, atualizar schema, manter estado de expansão | `ui/components/object_explorer_panel.py:436,460,1343`; `ui/main_window/_schema.py` | Implementado: busca/refresh recarregam apenas ramos abertos com IDs estáveis e stale guards [EXP]; reloadExpanded testado. |
+| O04 | Duplo clique/inserir/arrastar nome corretamente qualificado e escapado | `ui/components/object_explorer_panel.py:542,568,1678,1691,1718` | Implementado: inserir/duplo clique/drop e quoting por partes/dialeto [EXP/EDIT]. Nomes especiais/cursor testados; gesto nativo pendente. |
+| O05 | Gerar SELECT limitado, COUNT e SELECT com todas as colunas | `ui/components/object_explorer_panel.py:1845,1890,1903` | Implementado: SELECT limitado/COUNT/allcols, TOP/LIMIT e row limit validado [EXP]; testes por dialeto. |
+| O06 | Copiar nome simples ou qualificado | `ui/components/object_explorer_panel.py:1862,1866` | Implementado: copiar nome simples/qualificado sem executar [EXP]; quoting testado. |
+| O07 | Gerar CREATE TABLE e DROP/CREATE a partir de metadados | `ui/components/object_explorer_panel.py:801,822,1876,1881` | Implementado com limite: DDL nativo ou fallback marcado definition_is_generated [EXP]. Fallback não garante todos os constraints/storage originais. |
+| O08 | Entity info sob cursor, colunas, PK/FK/índices/propriedades | `services/entity_metadata_service.py`; `ui/dialogs/entity_info_dialog.py`; Alt+F1 | Implementado: Alt+F1 entidade sob cursor e scope por bloco, PK/FK/índices/colunas/propriedades [EXP/UI]. Driver externo exige aceite. |
+| O09 | Cross-database schema e throttling para servidor remoto | `services/cross_database_schema.py`; `tests/test_cross_database_schema_throttle.py` | Implementado: cache/contexto por database/schema; colunas referenciadas lazy, throttling/guards [EXP/EDIT]. |
+
+## Editor, foco e blocos
+
+| ID | Comportamento | Evidência PyQt | Tauri / aceite |
+|---|---|---|---|
+| E01 | Monaco SQL/Python, syntax highlighting, modelo/undo por bloco | `editors/monaco/monaco_editor.py`; `editors/code_block.py:1568` | Implementado: Monaco/assets/workers locais, modelos/undo/view state estáveis mesmo fora da viewport [EDIT]. |
+| E02 | Adicionar, remover, duplicar, renomear e reordenar blocos | `editors/block_editor.py:872,981,1410,1566`; `editors/code_block.py:2480` | Implementado: add/remove/duplicate/rename/reorder por ID e persistência [UI/DOC]; controllers/DPW testados. |
+| E03 | Nome do bloco SQL determina variável do DataFrame | `editors/block_editor.py:503`; `editors/code_block.py:2480` | Implementado: nome SQL determina variável e script; nomes/resultsets estáveis [RUN/DOC]. Reexecutar atualiza resultado da variável. |
+| E04 | Ativar/desativar blocos; executar todos ignora inativos | `editors/block_editor.py:598`; `editors/code_block.py:2480` | Implementado: active persiste; runAll ignora inativos/markdown/raw [RUN/DOC]. |
+| E05 | Altura por bloco, redimensionamento e maximizar/restaurar bloco | `editors/code_block.py:1234,2626`; `editors/block_editor.py:1036,1074` | Implementado: resize/height DPW/collapse/maximize/restore [UI/DOC]. Pointer/scroll nativo precisam de aceite. |
+| E06 | Preferência maximizar primeiro bloco ao abrir | `editors/block_editor.py:1025`; `ui/dialogs/settings_dialog.py:829` | Implementado: maximizeFirstBlock opt-in defaultfalse ao abrir/importar [UI/PREF]; isolado por profile. |
+| E07 | Último bloco focado continua alvo ao clicar toolbar/painéis | `editors/block_editor.py:1113,1164`; `editors/code_block.py:1217` | Implementado: último foco/seleção reversa/cursor/scroll por bloco e toolbar [EDIT/RUN]; regressões de foco/seleção. |
+| E08 | Foco explícito bloco + linha/coluna; cabeçalho fixo do bloco visível | `editors/block_editor.py:388,1141`; `services/pynia/focus_context.py` | Implementado: foco/inserção pendentes fora da viewport, linha/coluna por ID e cabeçalho visível [EDIT/UI]. |
+| E09 | Ctrl+F busca, Ctrl+H substitui, formatar SQL/Python | `ui/main_window/_sessions.py`; `services/code_formatter_service.py` | Implementado: find/replace Monaco, SQL formatter legado e Ruff empacotado [EDIT]; frozen Windows/Unix testado. |
+| E10 | Duplicar/cortar/apagar linha, lowercase/uppercase, undo/redo | `core/shortcut_manager.py:53`; Monaco | Implementado: comandos de linha/caixa/undo/redo e remapeamento [EDIT/PREF]. Tabela de atalhos abaixo. |
+| E11 | SQL autocomplete: keywords, tabela/coluna/alias/contexto do dialeto | `services/sql_autocomplete_service.py`; `editors/monaco/monaco_sql_completions.py`; `editors/completion_context.py` | Implementado: aliases/CTEs/schema lazy/dialeto e request generation guards [EDIT/EXP]; parser legado testado. |
+| E12 | Python autocomplete: imports, builtins, variáveis, membros/DataFrame columns | `services/jedi_completer.py`; `editors/monaco/monaco_completion_service.py` | Implementado: Jedi separado com tipos imutáveis/imports/preamble/namespace [EDIT]; responde durante execução real. |
+| E13 | Pynia ghost text, Ctrl+. forçar, Tab aceitar, circuito de falhas | `editors/monaco/inline_completion_service.py`; `services/pynia/completion.py`; `services/ai_autocomplete_circuit_breaker.py` | Implementado: ACP ghost opt-in, Ctrl+. força inline quando ligado, Tab aceita; circuito/cancel [AI/EDIT]. Fake ACP real/dispatch testados; vendor externo pendente. |
+| E14 | Validação sintática SQL por dialeto e Python, diagnostics | `services/syntax_validator.py`; `services/sql_schema_validator.py` | Implementado: syntax/schema SQL/Python e markers/debounce750ms/stale guards [EDIT]. Não bloqueia edição. |
+| E15 | Conexões e parâmetros no cabeçalho do bloco; bloqueio durante execução | `editors/code_block.py:1182,1857`; `editors/block_editor.py:719` | Implementado: conexão/database/schema/params no bloco e busy real [UI/RUN/PARAM]. |
+
+## Execução, parâmetros e resultados
+
+| ID | Comportamento | Evidência PyQt | Tauri / aceite |
+|---|---|---|---|
+| X01 | F5 executa seleção se houver, caso contrário bloco focado | `editors/block_editor.py:453,1383`; `ui/main_window/_execution.py` | Implementado: F5/Ctrl+Enter usa seleção preservada do bloco focado, senão inteiro [RUN/EDIT]; regressões de seleção/toolbar. |
+| X02 | Shift+Enter executa e avança foco; Ctrl+F5 executa ativos em ordem | `editors/block_editor.py:475,598` | Implementado: Shift+Enter avança ID; Ctrl+F5 fila de ativos sequencial, para no erro [RUN]; ordem/erro/foco testados. |
+| X03 | SQL retorna múltiplos resultsets e nomes estáveis | `ui/main_window/_workers.py`; `tests/test_execution_multi_result.py` | Implementado: multi-resultsets/names e abas por resultado [RUN/DB]; SQLite real, drivers produção reutilizados. |
+| X04 | Python namespace persistente por sessão; pandas/numpy/Polars | `services/python_execution_service.py`; `core/session.py:118` | Implementado: processo/namespace persistente por sessão com pandas/numpy/Polars [RUN]; stdio concorrente real. |
+| X05 | Última expressão Python e DataFrame alterado são exibidos | `services/python_execution_service.py`; `tests/test_new_features.py` | Implementado: última expressão AST/frames alterados/display múltiplo rico [RUN/RICH]; preserva compound statements. |
+| X06 | Cancelar execução sem travar editor nem outra sessão | `ui/components/session_widget.py`; `ui/main_window/_workers.py` | Diferença explícita: kill do grupo de processos mantém UI/outras sessões; perde namespace/conectores só do kernel afetado [RUN]. Windows tree-kill real testado. |
+| X07 | Status por bloco, tempo decorrido, fila e erro com traceback | `editors/code_block.py:2460`; `ui/components/output_panel.py`; `ui/components/session_widget.py` | Implementado: status/elapsed/fila/traceback/output limitados por execução/bloco [RUN/UI]; não recria Monaco por output. |
+| X08 | Download direto da consulta para CSV/Parquet com progresso/cancelar | `editors/code_block.py:1274`; `editors/block_editor.py:524`; `database/query_stream_exporter.py` | Implementado: CSV/Parquet chunks5000/binds/contexto/multisets/progresso/cancel [STREAM/RUN]. Journal recupera original após os._exit no commit. |
+| X09 | Timer por aba executa todos imediatamente e encadeia após conclusão | `ui/components/session_widget.py:3648,3663,3674`; `tests/test_periodic_timer.py` | Implementado: timer inicia fila imediatamente e agenda só após término; stop/cancel/close desarmam [RUN]; relógio/fila testados. |
+| P01 | SQL `@name` local e delimitador `{{name}}` compartilhado | `utils/sql_parameter_service.py:263,341,945`; `core/parameter_settings.py` | Implementado: scanner legado/@local/shared delimiter; ignora literais/comentários [PARAM]; SQL binds/Python safe testados. |
+| P02 | Tipos text/integer/decimal/boolean/date/datetime/uuid | `utils/sql_parameter_service.py:41,374` | Implementado: sete tipos/conversão antes do driver [PARAM]; fixtures tipadas e binds SQL reais. |
+| P03 | Campo valor/choice/multi_choice; IN expande binds seguros | `utils/sql_parameter_service.py:42,945`; `editors/sql_parameters_panel.py` | Implementado: value/choice/multichoice/required, IN com binds [PARAM/UI]. Sem interpolar valores como SQL. |
+| P04 | Inferir tipo por nome/schema, labels/opções/ordem, required | `utils/sql_parameter_service.py:374`; `editors/sql_parameters_panel.py` | Implementado: inferência nome/schema, label/options/order/manual override [PARAM]; serviço puro/painel React. |
+| P05 | Default empty/null/today/now e valores compartilhados em SQL/Python | `utils/sql_parameter_service.py:43`; `core/session.py:183`; `editors/block_editor.py:238` | Implementado: empty/null/today/now/shared SQL/Python/DPW flags [PARAM/DOC]; preserva tipos dos literais. |
+| P06 | Habilitar/desabilitar parâmetros por bloco e sessão; scanner automático | `editors/code_block.py:1857,2102`; `core/session.py:195` | Implementado: flags local/shared por bloco/sessão, scan debounce e ID estável [PARAM/DOC]. |
+| R01 | Grade virtual, seleção retangular/múltipla/linha/coluna; copiar | `ui/components/results_viewer.py:5403,5435,5578,5641` | Implementado: grade virtual paginada/retângulos múltiplos/linhas/colunas/scope exato [GRID/DATA]. Disjuntos não inventam células. |
+| R02 | Copiar com cabeçalhos Ctrl+Shift+C, CSV/Excel/JSON/SQL para clipboard | `ui/components/results_viewer.py:5142,5195,5223,5251,6167` | Implementado: Ctrl+Shift+C/texto/ExcelHTML/JSON/INSERT, quoting e bigint/Decimal [GRID]. Limite200k células/16MiB; original versus visual. |
+| R03 | Sort estável por cabeçalho, asc/desc/limpar | `ui/components/results_viewer.py:5689,5703,5711` | Implementado: sort stable asc/desc/clear antes da página, view cache [GRID/VIEW]; reaproveita páginas/export. |
+| R04 | Filtros por coluna numeric/text/date/bool e chips removíveis | `ui/components/results_viewer.py:4116,4505,5825` | Implementado: texto global AND múltiplos filtros tipados/chips [GRID/VIEW];10testes numeric/Decimal/bool/date/timezone/null. |
+| R05 | Limite de visualização configurável; exportação inclui todos os dados | `ui/components/results_viewer.py:4103,4640`; `ui/dialogs/settings_dialog.py:737` | Implementado: limite100 default configurável10–1M; export completo da view independente [GRID/PREF/DATA]. |
+| R06 | Número/currency/percent/data/hora/custom por coluna | `ui/components/results_viewer.py:1112,2136,5719,6035` | Implementado: numeric/currency/percent/custom0–8/prefix/suffix/date/datetime persistidos [GRID/DOC]. Wall-clock/bigint preservados. |
+| R07 | Fonte da grade e zoom Ctrl+wheel | `ui/components/results_viewer.py:2798,2821` | Implementado: font/family independente, Consolas12px=9pt Qt, Ctrl+wheel7–32 persistido [GRID/PREF]. Gesto nativo precisa de aceite. |
+| R08 | Fechar abas de resultados/limpar tudo/selecionar resultado ativo | `ui/components/results_viewer.py:3074,5041` | Implementado: abas/ativo/close/clear e release handles/views sem apagar variável Python [RUN/UI]; regressões backend. |
+| R09 | Exportar arquivo CSV/XLSX/JSON/SQL inserts/Parquet, seleção ou completo | `ui/components/results_viewer.py:5142,5195,5223,5251`; `utils/sql_insert_generator.py` | Implementado: CSV/XLSX write_only/JSON/SQL/Parquet, view/seleção exata/atomic replace [DATA]. Round-trips reais/SQL quoting/Excel texto seguro. |
+| R10 | CSV delimitador/decimal/encoding/header/open-folder persistidos | `ui/components/results_viewer.py:890,996,4623` | Implementado: ;/comma/tab/pipe/decimal/encoding/header/reveal e persistência DPW/profile [DATA/UI]. Reveal após sucesso. |
+| R11 | Exportar DataFrame para tabela ativa, append/replace/fail e batches | `ui/dialogs/export_to_table_dialog.py:35,373` | Implementado: SQLAlchemy begin/to_sql/fail/append/replace/chunks [DATA]; SQLite real, tipos/drivers remotos precisam de aceite. |
+| R12 | Imagens Matplotlib múltiplas e salvar imagem | `ui/components/results_viewer.py:4671,4718,6221` | Implementado: múltiplas Matplotlib/PIL e native atomic artifact_write [RICH]; PNG real/handle sem round-trip completo. |
+| R13 | HTML rico e árvore JSON, além de imagem/tabela/texto | `ui/components/results_viewer.py:4803,4867,4963` | Implementado: HTML iframe sandbox/JSON árvore limitada/Plotly/display local [RICH]; limita payload/ciclos/scripts externos. |
+| R14 | Summarize acompanha seleção: count/null/distinct/top/sum/min/max/mean/median/std | `ui/components/summarize_stats.py`; `ui/components/results_viewer.py:5498` | Implementado: Summary dockável acompanha scope/debounce300ms/active/coalescing/stale guards [DATA/SUM]. Dtypes/Decimal/bigint/string numérica sem perda de precisão; distintos/texto100k rotulados/max200colunas. |
+| R15 | Totais combinados da seleção: células, numéricos, soma/média/min/max/mediana/CV | `ui/components/summarize_stats.py:277` | Implementado:contagem de células exatas/overlap deduplicado e estatísticas globais; Decimal/bigint sem float/overflow [SUM].8regressões específicas. |
+| R16 | Zoom Summarize85/100/115/130; abrir formato da coluna direto no resumo | `ui/components/summarize_panel.py:37,145,699` | Implementado:zoom independente e ação abre diálogo real da grade por coluna/id/revision [SUM/GRID/UI]. |
+
+## Variáveis e gráficos
+
+| ID | Comportamento | Evidência PyQt | Tauri / aceite |
+|---|---|---|---|
+| V01 | Lista nome/tipo/preview; filtro tipo DataFrame/coleções/scalars | `ui/components/variables_panel.py:53,96,223` | Implementado: nomes/tipos/previews/filtros DataFrame/collections/scalars [VARS]; inspeção paginada sem executar descriptors. |
+| V02 | Inserir nome no editor; abrir detalhe por duplo clique; copiar nome/valor | `ui/components/variables_panel.py:393,403,416`; `ui/dialogs/variable_detail_dialog.py:89` | Implementado: inserir no cursor/duplo clique/detalhe/copiar nome/valor [VARS/EDIT]; collections100/página. |
+| V03 | Remover variável, ver DataFrame/Series em grade sem serializar inteiro | `ui/components/variables_panel.py:416`; `ui/dialogs/variable_detail_dialog.py` | Implementado: delete protegido/grade por opaque handle pandas+Polars/Series [VARS/DATA]; atualiza namespace/autocomplete/views. |
+| V04 | Salvar/restaurar variáveis DataFrame em Parquet; storage bytes/inventory/limite | `core/session_result_storage.py:363,381,465`; `ui/dialogs/settings_dialog.py:1156`; `ui/components/variables_panel.py:59` | Implementado opt-in: Parquet50MiB/inventory/manual+autosave após fila e close/restore sessão estável [CACHE].4regressões stdio reais; defaultoff não escreve. |
+| G01 | Bar/line/scatter/area/pie interativos Plotly, zoom/hover/PNG | `services/visualization/plotly_charts.py:113,230`; `ui/components/results_viewer.py:3205` | Implementado:5Plotlytypes locais/hover/zoom/preview coalescida/PNG nativo [CHART]. MCP Agg Qt-free;5PNGs reais testados. |
+| G02 | X, várias Y, group/pivot; sum/mean/min/max/count/median | `services/visualization/chart_data.py:67`; `ui/components/results_viewer.py:1669,1696` | Implementado: X/multiY/group/pivot/6agregações engine legado [CHART]; copia apenas colunas selecionadas. |
+| G03 | Null zero/drop/keep, sort X/Y, percent normalization, grouped/stacked | `services/visualization/chart_data.py:67`; `ui/components/results_viewer.py:1736` | Implementado: null zero/drop/keep/sort/normalize/grouped/stacked/percent [CHART]; limites do engine original. |
+| G04 | Cores/paletas/custom, título/eixos, legend/grid/labels, markers/lines | `ui/components/results_viewer.py:1775,1820,1891`; `services/visualization/plotly_charts.py` | Implementado: paletas/custom/title/labels/axes/background/text/grid/legend/horizontal/width/dash/markers/opacities [CHART]; JSON/style tests. |
+| G05 | Múltiplas visualizações por sessão; editar/apagar; fontes DataFrames distintas | `ui/components/results_viewer.py:3186,3220,3256,3346`; `core/session_manager.py` | Implementado: CRUD/rename multi-tabs/sources/configs DPW [CHART/UI/DOC]. Reabrir fonte exige execução ou snapshot opt-in. |
+| G06 | Exportar gráfico HTML autocontido, PNG/JPG/JPEG; restaurar ao reabrir | `ui/components/results_viewer.py:3275,3395` | Implementado: HTML offline/semCDN,PNG/JPG/JPEG/JSON atomic artifacts/UI/MCP e config restoration [CHART/AI]. |
+| G07 | Fonte/títulos/ticks/margens/legenda/hover/labels das visualizações | `services/visualization/plotly_charts.py:35,48,123` | Implementado:Segoe/Roboto/Helvetica/Arial12px com fallbackUbuntu local; título16/ticks11, margens56/24/56ou32/72; hover e legend preservados [CHART]. PNG/JPEG headless declara Agg. |
+
+## Arquivos, sessões e preferências
+
+| ID | Comportamento | Evidência PyQt | Tauri / aceite |
+|---|---|---|---|
+| F01 | Abrir .sql/.py/.ipynb/.dpw; encoding UTF8/chardet/latin1 | `services/file_import_service.py:19,73,177`; `ui/main_window/_file_io.py:146` | Implementado:sql/py/ipynb/dpw UTF8sig/chardet/multidocument/extras unknown [DATA/DOC]. |
+| F02 | Notebook células code/markdown/raw; preservar ordem/metadados | `services/file_import_service.py:177`; `tests/test_jupyter_import.py` | Implementado:code/markdown/raw/células vazias/ordem/metadata round-trip [DATA/DOC]. Markdown/raw nunca executam Python. |
+| F03 | Importar CSV/JSON/XLS/XLSX, nome normalizado e bloco Python gerado | `services/file_import_service.py:132,160`; `ui/dialogs/file_import_dialog.py` | Implementado:CSV/TSV/JSON/XLS/XLSX/Parquet/name normalization/bloco leitor com opções reais [DATA/UI]; Windows path/aspas testados. |
+| F04 | Drag/drop arquivos na tela/editor e múltiplos arquivos na inicialização | `editors/block_editor.py:1416,1447`; `collect_startup_file_paths`; `services/single_instance.py` | Implementado:Tauri drop/startup args/second-instance/múltiplos arquivos [UI/NATIVE]. Associações/gestos precisam de aceite instalado. |
+| F05 | Salvar/Salvar como, indicador modificado e confirmação fechar | `ui/main_window/_file_io.py`; `ui/main_window/_sessions.py`; `tests/test_file_management_feedback.py` | Implementado:save/saveAs/dirty/close guard/DPW/scripts/notebooks [DOC/UI]. Edição durante save mantém modificado. |
+| F06 | Exportar análise mista como script Python com SQL via engine e sem senha | `ui/main_window/_file_io.py:756,799`; `tests/test_export_script.py` | Implementado:script misto SQLAlchemy/binds/block names/DATAPYN_DATABASE_URL [DATA]; nenhuma senha/url real incorporada. |
+| F07 | Recent files, limpar lista, abrir localização do arquivo | `core/recent_files_manager.py`; `ui/main_window/_file_io.py:60`; `ui/components/session_tabs.py:154` | Implementado:20recentes/clear/open/reveal [UI]. Não importa histórico privado PyQt automaticamente. |
+| S01 | Nova aba/sessão, ativar/fechar/renomear/duplicar/fechar outras/todas | `ui/components/session_tabs.py:91,166,173,183,224`; `ui/main_window/_sessions.py` | Implementado:create/active/close/rename/duplicate/others/all/tabcontext [DOC/UI]; kernel fecha sem órfãos. |
+| S02 | Autosave de sessões ao editar, restore startup e conexão lazy | `services/session_autosave_service.py:63,74,79`; `core/session_manager.py` | Implementado:native drafts500ms/serial/profile/fallback/restore/lazyconnect [DOC/PROFILE]; não grava profile antigo com estado novo. |
+| S03 | .dpw v1: blocos, alturas, nomes, keys, conexões, params, notificações, charts, views | `core/session.py:441`; `core/session_manager.py`; `editors/code_block.py:2480` | Implementado:DPWv1 extras/keys/heights/names/contexts/params/notifications/charts/views/multidocument [DOC]; unknown fields preservados. |
+| S04 | Workspaces isolam conexões/atalhos/configs/sessões/resultados; criar/remover/duplicar/switch | `core/workspace_service.py:118,137,171,198`; `ui/dialogs/settings_dialog.py:1408,1653,1726` | Implementado:profiles UUID/create/rename/clone/select/archive/restore/snapshots/credentials opt-in [PROFILE]; switch busy guard e recovery testados. |
+| L01 | Esquerda Conexões/Object Explorer; centro editor e Results/Summarize/Output; direita Variables/Pynia | `ui/main_window/_layout.py:631` | Implementado:8painéis dockáveis/layout canônico esquerdo/centro/direito/contexto ativo [DOCK]. |
+| L02 | Mostrar/ocultar painéis, resize, drag docking/floating, salvar layout, restaurar/reset completo | `ui/main_window/_layout.py:332,473,489,729`; `ui/docking` | Implementado:tabs/groups/dock/resize/float/pop-out local/hide/capture/persist/reset [DOCK/NATIVE]. Windows pop-out Variables/Pynia smoke real; multi-monitor/gestos restantes precisam de aceite. |
+| L03 | Ubuntu UI empacotada; Monaco13px JetBrains/Cascadia/Fira/Consolas/Courier; UbuntuMono Qt/output; fallback offline | `design_system/font_manager.py:149`; `editors/monaco/monaco_editor.py:167` | Implementado:UbuntuUI/UbuntuMono fallback locais; Monaco13px JetBrains/Cascadia/Fira/Consolas com fallbackUbuntuMono local [PREF/EDIT]. GradeConsolas12px=9pt; prefs fonts/sizes. |
+| L04 | Zoom editor Ctrl+wheel, grid independente, reset/layout defaults | `editors/monaco/monaco_editor.py:797,814`; `ui/components/results_viewer.py:2821` | Implementado:Ctrl+wheel editor8–32/grid7–32 independentes/reset fontes/layout [EDIT/GRID/PREF]; modelos/cursor/undo estáveis. |
+| L05 | pt-BR/en-US e pesquisa de settings, shortcuts edit/save/reset/conflicts | `language`; `ui/dialogs/settings_dialog.py:453,701,844,1894`; `core/shortcut_manager.py:24` | Implementado:pt/en reativo/pesquisa bilíngue sem acento/shortcuts edit/save/reset/conflicts [PREF/I18N]; nomes/templates não traduzidos. |
+| L06 | Modal mantém foco/Tab/Escape na janela ativa e restaura foco ao fechar | `ui/dialogs/variable_detail_dialog.py`; `ui/dialogs/export_to_table_dialog.py`; comportamento QDialog | Implementado:Modal/DataModal portais no documento focado; foco/Tab/Escape/restore/pagehide/unload locais [UI/DOCK]. Aceite de diálogo nativo completo pendente. |
+
+## Pynia, packages, notificações e distribuição
+
+| ID | Comportamento | Evidência PyQt | Tauri / aceite |
+|---|---|---|---|
+| A01 | Chat por aba, histórico/contexto isolado, streaming markdown/código/cancelar | `services/pynia/acp/service.py`; `ui/components/pynia_chat_panel.py:252,368,401` | Implementado:ACP real subprocesso por sessão/stream/history/Markdown/code/stop/resume [AI]. Fake ACP stdio real; vendor externo pendente. |
+| A02 | Adapters Claude/Codex/Copilot/Cursor, detecção/instalação/login/modelos/modos | `services/pynia/acp/catalog.py`; `agents/*`; `ui/dialogs/pynia_settings_page.py`; `services/pynia/acp/installer.py` | Implementado:4adapters/catalog/detect/install/auth/models/modes legados/processos separados [AI]. Login/install/vendors não exercitados externamente. |
+| A03 | Permissões ACP com opções e resposta humana, thinking/tool activity | `services/pynia/acp/permission.py`; `services/pynia/acp/activity.py`; `ui/components/pynia_chat_panel.py:406,412,422` | Implementado:permissions/options/questions/resposta humana/thinking/tool call_id [AI]; sem autoaprovação, fixture real verifica answer/cancel. |
+| A04 | Anexos, @ referências blocos/variáveis/seleção/schema e focused-context | `services/pynia/acp/attachments.py`; `services/pynia/acp/turn_context.py`; `services/pynia/focus_context.py`; `services/pynia/block_summary.py` | Implementado:4anexos4MiB/image/files/clipboard/@references/small focused context [AI/UI]; contexto por sessão. |
+| A05 | MCP stdio do DataPyn e dispatch de ferramentas no host | `services/pynia/acp/mcp_host.py`; `services/pynia/acp/mcp_stdio.py`; `services/pynia/tools/dispatch.py` | Implementado:MCP stdio/loopback autenticado/token efêmero/Qt-free bridge [AI]; socket/host testes reais. |
+| A06 | `datapyn_snapshot`, `datapyn_inspect`, `datapyn_query`, `datapyn_run` | `services/pynia/tools/definitions.py:26,51,103,129` | Implementado:snapshot/inspect/query/run namespace/schema/SQL/Python real/páginas [AI/RUN]; definições legadas reutilizadas. |
+| A07 | `datapyn_edit`, `datapyn_blocks`, `datapyn_database` | `services/pynia/tools/definitions.py:156,214,235` | Implementado:edit/blocks/database/line/selection/wholeblock/backup/undo/focus/rename/create/duplicate/context [AI/EDIT]; proteção wholeblock/busy testada. |
+| A08 | `datapyn_chart`, `datapyn_notify` | `services/pynia/tools/definitions.py:263,304` | Implementado:charts CRUD/rename/artifact exports e notify toast(title/message/success) [AI/CHART/NOTIFY]; export real atômico. |
+| A09 | Pool ACP tab/agent e inline completion; hooks LSP legados são no-op | `services/pynia/acp/pool.py`; `editors/block_editor.py:235`; `editors/code_block.py:1420`; `services/pynia/completion.py` | Implementado:pool ACP tab/agent e inline em sessão própria [AI]. Hooks LSP PyQt são no-op235/1420; não há servidor LSP perdido. |
+| K01 | Listar packages versão/update, pesquisar PyPI, instalar versão/update/uninstall | `services/package_manager_service.py:349,371,542,581,706`; `ui/dialogs/package_manager_dialog.py` | Implementado:list/version/PyPI/search/install/update/uninstall/progress/cancel isolatedenv [PKG]. Commands mockados; instalação real externa pendente. |
+| K02 | Sources extras autenticadas, ambiente/appdata venv, uv/pip, refresh imports | `services/package_manager_service.py:72,138,261,303,329`; `ui/dialogs/package_manager_dialog.py:568` | Implementado:venv preview extensível/uv-pip/extras keyring/kernel imports [PKG]. Baseline frozen separado; pacote extra instalado precisa de smoke. |
+| N01 | Notifications sucesso/erro/som; title/message templates queue/vars/results | `ui/components/session_widget.py:2835`; `ui/dialogs/settings_dialog.py:942`; `ui/components/toast_notification.py` | Implementado:callback após fila/toast/native/som/title/message/context/results [NOTIFY/UI]. Captura kernel+envio separado não prende SQL. |
+| N02 | Config por aba com regras condicionais, canais e placeholders | `ui/components/session_widget.py:410,431,465,494`; `ui/dialogs/tab_notification_dialog.py` | Implementado:DPW notification_config/ordered8operators/color/suppress/channels/safe placeholders [NOTIFY/DOC]. Preview nunca envia rede. |
+| N03 | Telegram e email SMTP TLS/SSL, secrets keyring, enviar teste | `services/notification_delivery_service.py:92,151,188,242`; `ui/dialogs/settings_dialog.py:1308` | Implementado:Telegram/SMTPSTARTTLS/SSL/keyring isolado/teste explícito [NOTIFY]. Nenhuma mensagem real enviada; transportes mockados. |
+| D01 | Auto-update GitHub releases, notificar/download/progresso/instalar/restart | `services/auto_update_service.py`; `services/in_app_update.py`; `services/windows_installer.py` | Parcial operacional:updater oficial check/download/progress/install/relaunch/save-before-install [DIST]. Canal sem chave/endpoint/release própria; signed update externo pendente. |
+| D02 | About versão/licenças; splash; single instance e arquivos associados | `ui/dialogs/about_dialog.py`; `ui/splash_screen.py`; `services/single_instance.py`; installer | Parcial de aceite:About/version/license/links/startup loading/single-instance/args [SUPPORT/NATIVE]. Associações/instalador/máquina limpa pendentes; splash PyQt não é janela própria. |
+| D03 | Crash guard/report com logs; suporte/links | `core/crash_guard.py`; `services/crash_reporter_service.py`; `ui/dialogs/crash_report_dialog.py` | Implementado com mudança:crash boundary/reopen/copy/save allowlist diagnostic [SUPPORT]. Não exporta exception/stack/code/data/privatepaths/credentials. |
+
+## Contratos de compatibilidade e performance
+
+- O arquivo `.dpw` deve conservar campos adicionais. Identidade estável é `block_key`/id, nunca índice visual. `is_active`, `height`, `block_name`, `connection_name/group`, `database_name`, `sql_parameters/enabled` precisam ser restaurados como comportamento.
+- Ubuntu UI/UbuntuMono fallback são locais. Monaco legado usa JetBrains Mono/Cascadia Code/Fira Code/Consolas/Courier New13px, faixa8–32. GradeConsolas12px CSS equivale9pt Qt, zoom7–32. Layout canônico agrupa os painéis por esquerda/base/direita, e cada painel depende da sessão ativa. Trocar a aba não recria todos os modelos ou resultados.
+- `db_engine` permanece um objeto SQLAlchemy real no Python. Strings grandes, bigint/Decimal/date/null via RPC precisam preservar precisão; resultados/páginas/gráficos devem ter limites explícitos. Não transferir DataFrame inteiro para JS.
+- Executar todos é fila sequencial. Busy/error/cancel aplicam à sessão/bloco correto. Cancelamento forte reinicia somente esse kernel e deixa clara a perda de namespace. Timers encadeiam ao término e não sobrepõem jobs.
+- Schema carrega por nível e namespace; autocomplete usa contexto da sessão/bloco e descarta respostas antigas. Sort/filtros operam sobre a fonte inteira antes da página. Exportação considera o mesmo view/scope; seleção descontínua não inclui linhas extras.
+- CSV/JSON/SQL usam escrita em chunks; XLSX `write_only`; Parquet usa compressão compartilhada `snappy`. Escrita de arquivo é atômica. Exportar tabela usa binds/quoting e batches; comportamento `replace` exige escolha explícita.
+- Plotly local é carregado sob demanda; agregação limita120 pontos barras,500 linhas/scatter/area,24 pie como o engine original. Distintos/texto em dados grandes informam quando usam amostra; totais/medianas/CV numéricos são exatos e calculados no kernel. Resumo inteiro é escolha explícita, oculto não agenda novos jobs.
+- Execução e IO ficam fora da UI. Performance deve ser medida com vários blocos,10M linhas/sort/export,árvore remota e sessões concorrentes; build passar não demonstra latência ou memória iguais/melhores.
+
+## Aceite antes de substituir PyQt
+
+1. Completar cada linha pendente com implementação real e evidência de teste; não contar uma categoria inteira como migrada por ter infraestrutura.
+2. Fixtures `.dpw` atuais com vários blocos, duas conexões com mesmo nome, parâmetros locais/compartilhados, charts/notifications/views; abrir/salvar/reabrir sem perda.
+3. Roteiro nativo de teclado/foco, atalhos remapeados, selection/F5/ShiftEnter/CtrlF5, reorder/maximize/resize, timers/cancel, conexão/schema por bloco, grid/export/clipboard/inspect.
+4. Smoke SQLite e testes por driver real para SQL Server Entra/Windows/password, PostgreSQL schemas, MySQL/MariaDB e Databricks catálogo/schema/OAuth. Falta de credenciais significa não validado, nunca aprovado por mock.
+5. Ambiente instalado/frozen com packages extras, agentes ACP reais e permission flow; máquina limpa, restart/second-instance/associação arquivos e update com assinatura.
+
+As funcionalidades têm implementação rastreável. A substituição do PyQt depende dos aceites nativos/externos abaixo; build/testes locais não equivalem a autenticação em produção ou publicação assinada.
+
+## Evidências da implementação integrada
+
+| Ref. | Código Tauri/Python sem Qt | Validação e limites |
+|---|---|---|
+| CAT | `desktop/src/ConnectionsSidebar.tsx`, `ConnectionDialog.tsx`, `connections.ts:15`; `source/datapyn_runtime/connection_catalog.py` | `connections.test.ts`, `runtime_tests/test_connection_catalog.py`; async/cancel reais em `test_backend_parity.py:318` |
+| DB | `source/datapyn_runtime/database.py:14,141,244`; `source/src/database/database_connector.py` reutilizado | `runtime_tests/test_backend_parity.py:129,198,274`; `test_runtime.py:166`; sem conexão remota de produção |
+| EXP | `desktop/src/ObjectExplorer.tsx`, `explorer.ts:8`; `source/datapyn_runtime/explorer.py` | `explorer.test.ts`, `sqlIdentifier.test.ts`; `runtime_tests/test_backend_parity.py:27,48,57,68,86` |
+| EDIT | `desktop/src/MonacoBlock.tsx:99`, `editorRegistry.ts`, `editorLanguage.ts`; `source/datapyn_runtime/language.py:95` | `editorRegistry.test.ts`, `editorLanguage.test.ts`; `test_backend_parity.py:110,121,169,214`; formatter frozen em `test_rich_outputs.py:37` |
+| UI | `desktop/src/App.tsx`, `ParameterPanel.tsx`, `EntityInfoDialog.tsx`, `PanelControls.tsx`, `DataActions.tsx`; callbacks do controller | `workspace.test.ts`, `documentWindows.test.ts`; integração root dos pickers/fontes/cores/menus/resultados/modais; gestos nativos restantes precisam de aceite |
+| RUN | `desktop/src/workspace.ts`, `App.tsx`; `source/datapyn_runtime/kernel.py`, `supervisor.py`, `process_group.py` | `workspace.test.ts`; `runtime_tests/test_runtime.py` usa broker stdio real: filas, sessões concorrentes, crash/restart, kill e subprocessos Windows |
+| PARAM | `desktop/src/ParameterPanel.tsx`; `source/datapyn_runtime/language.py`; scanner/binds legado em `source/src/utils/sql_parameter_service.py` | `runtime_tests/test_backend_parity.py:169,229`; regressões específicas do legado |
+| GRID | `desktop/src/ResultGrid.tsx:28`, `gridSelection.ts`, `gridClipboard.ts`, `gridFormat.ts` | `gridSelection.test.ts`, `gridClipboard.test.ts`, `gridFormat.test.ts`, `glideOwnerDocument.test.ts`, `glidePatch.test.ts`; Glide6.0.3 patch22arquivos SHA256/version guard,6testes foreign-realm/3installer; precisão/páginas em `runtime_tests/test_runtime.py:187` |
+| VIEW | `source/datapyn_runtime/frame_view.py`; `ResultStore.view` em `kernel.py`; `data_tools.py:83` | `runtime_tests/test_frame_view.py`: 10 testes; `test_backend_parity.py:145` comprova reutilização e invalidação da view |
+| DATA | `desktop/src/DataActions.tsx`, `exportSettings.ts`, `importCode.ts`; `source/datapyn_runtime/data_tools.py:185,268,336,462,495` | `runtime_tests/test_data_tools.py`: 31 testes reais de arquivos/tabela/notebook/scripts/seleção/delete+descriptors; `importCode.test.ts` |
+| STREAM | `source/datapyn_runtime/stream_export.py:66,132,232`; `source/src/database/query_stream_exporter.py` reescreve schema em chunks | `runtime_tests/test_stream_export.py`: 20 testes; `test_stream_decimal.py`:5testes Decimal128/256/bigint/misto/chunksNULL/upgradebounded/cancel; `tests/test_query_stream_exporter.py`: 22; integração/multi/fail/cancel em `test_backend_parity.py:241,262,298` |
+| RICH | `desktop/src/RichResults.tsx`; `source/datapyn_runtime/rich_outputs.py` | `runtime_tests/test_rich_outputs.py`: JSON/ciclos/limites, HTML/Plotly/PNG/display múltiplo e artifact_write real |
+| SUM | `desktop/src/SummaryPanel.tsx`; `source/datapyn_runtime/summary_stats.py`; `data_tools.py:336` | `test_summary_stats.py`:8testes de Decimal/string/overflow/totais/CV/seleção/amostragem; `test_data_tools.py:50` não inclui células fora da seleção |
+| VARS | `desktop/src/VariableInspector.tsx`; `source/datapyn_runtime/data_tools.py:213,240` | Inspeção/collections/delete/proteções em `runtime_tests/test_data_tools.py`; snapshots imutáveis não invocam properties |
+| CACHE | `desktop/src/VariableSnapshotPanel.tsx`; `source/datapyn_runtime/variable_snapshot.py:117,172`; autosave `kernel.py:294`; flush `supervisor.py:436` | `test_notifications_snapshots.py`: 28 testes; `test_snapshot_runtime.py`: 4 regressões reais de Parquet/restart/close/import/delete/default off |
+| CHART | `desktop/src/ChartPanel.tsx`; `data_tools.py:342`; `chart_artifacts.py:161`; engine `source/src/services/visualization/chart_data.py` | `runtime_tests/test_chart_artifacts.py`: 17 testes reais:PNG5tipos/JPG/JPEGRGB/transparência/layoutfonts/nullkeep/HTMLoffline/JSON/Qt-free/atomicidade |
+| DOC | `desktop/src/workspace.ts:69,82`, `nativeDrafts.ts`; `source/datapyn_runtime/workspace.py`; `data_tools.py:462,495` | `workspace.test.ts`, `nativeDrafts.test.ts`, `runtime_tests/test_data_tools.py`: células vazias, extras DPW e scripts com binds |
+| PROFILE | `desktop/src/WorkspaceManagerDialog.tsx`, `nativeDrafts.ts`; `source/datapyn_runtime/profiles.py:97,143,232` | `runtime_tests/test_profiles.py`: 14 testes; switch/busy no broker `test_backend_parity.py:354,366` |
+| DOCK | `desktop/src/DockingWorkbench.tsx`, `docking.css`, `desktop/public/popout.html` | Janela Windows real `/popout.html` mostrou Variables/Pynia e contexto do mesmo bloco; multi-monitor e demais gestos precisam de aceite |
+| PREF | `desktop/src/preferences.ts`, `SettingsDialog.tsx`, `shortcuts.ts` | `shortcuts.test.ts`, `workspace.test.ts`; persistência em profile; defaults confrontados com o legado |
+| I18N | `desktop/src/i18n.ts`, `i18nEnglish.json`, `featureTranslations.ts`, `featureEnglish.json` | `i18n.test.ts`, `featureTranslations.test.ts`: locale reativo, busca e interpolação única de nomes/paths |
+| AI | `desktop/src/PyniaPanel.tsx`, `pynia.ts`, `pyniaTools.ts`, `pyniaEdits.ts`; `source/datapyn_runtime/pynia.py`, `pynia_mcp.py`, `mcp_stdio.py` | `pynia.test.ts`, `pyniaTools.test.ts`, `pyniaEdits.test.ts`; `runtime_tests/test_pynia_runtime.py`: 5 testes de ACP stdio e MCP autenticado |
+| PKG | `desktop/src/PackageManagerDialog.tsx`; `source/datapyn_runtime/desktop_services.py:50` | `runtime_tests/test_desktop_services.py`: sem instalação automática, extras/keyring, processos/cancel/ambiente; instalação externa não executada |
+| NOTIFY | `desktop/src/NotificationsDialog.tsx`; `source/datapyn_runtime/notifications.py:162,186,255,278` | `runtime_tests/test_notifications_snapshots.py`: regras/templates/secrets/profile capturado e transportes mockados; sem envio real |
+| SUPPORT | `desktop/src/AboutDialog.tsx`, `AppErrorBoundary.tsx`, `supportDiagnostics.ts`; `source/datapyn_runtime/diagnostics.py` | `runtime_tests/test_diagnostics.py`: 4 testes de allowlist e escrita atômica; MIT evidenciado pelo README/about legado/`scripts/license.rtf` |
+| NATIVE | `desktop/src-tauri/src/lib.rs`, `runtime.rs`, capabilities e `tauri.conf.json`; eventos em `App.tsx` | Cargo/permissões/popup URL; frozen/instalador e eventos nativos dependem do smoke de distribuição |
+| DIST | `desktop/src/updater.ts`, `UpdateDialog.tsx`; `desktop/src-tauri/src/lib.rs:78`; `docs/TAURI_DISTRIBUTION.md`; `tauri-signed.yml` | `updater.test.ts`: 4 regressões; canal sem publicação nem chave/endpoint configurado |
+
+## Atalhos e contexto exatos
+
+A referência é `source/src/core/shortcut_manager.py:18`; o contrato Tauri está em `desktop/src/shortcuts.ts:15`. Todos os comandos abaixo são editáveis e o profile conserva a configuração. Conflitos aparecem antes de salvar. Monaco também conserva undo/redo, navegação/seleção, Ctrl+Space e Tab para inline. Escape é a adição explícita para cancelar a sessão ativa.
+
+| Comando legado → Tauri | Padrão | Contexto |
+|---|---|---|
+| execute_sql → run | F5; Ctrl+Enter alias | Seleção ou bloco com último foco |
+| execute_all → runAll | Ctrl+F5 | Fila dos blocos ativos |
+| execute_block_advance → runAdvance | Shift+Return/Enter | Executa e avança foco |
+| clear_results → clearResults | Ctrl+Shift+L | Sessão ativa; libera resultados |
+| open_file → open | Ctrl+O | File chooser múltiplo |
+| save_file → save | Ctrl+S | Arquivo e formato atuais |
+| save_as → saveAs | Ctrl+Shift+S | Escolher destino |
+| export_script → exportScript | Ctrl+Shift+E | Script misto sem senha |
+| new_tab → newTab | Ctrl+T | Nova análise |
+| new_session → newSession | Ctrl+N | Nova análise |
+| close_tab → closeSession | Ctrl+W | Aba ativa, confirma se modificada |
+| add_block → addBlock | Ctrl+Shift+B | Bloco após o foco |
+| find → find | Ctrl+F | Monaco em foco |
+| replace → replace | Ctrl+H | Monaco em foco |
+| format_code → formatCode | Ctrl+Shift+F | Dialeto/contexto do bloco |
+| show_entity_info → entityInfo | Alt+F1 | Entidade SQL sob cursor/seleção |
+| force_autocomplete → autocomplete | Ctrl+. | Ghost ACP quando ligado; sugestão local quando desligado |
+| manage_connections → manageConnections | Ctrl+Shift+M | Catálogo |
+| new_connection → newConnection | Ctrl+Shift+D | Cadastrar conexão |
+| reload_schema → reloadSchema | Ctrl+Shift+T | Explorer do contexto atual |
+| settings → settings | Ctrl+, | Preferências/atalhos |
+| copy_with_headers → copyHeaders | Ctrl+Shift+C | Grade de resultados |
+| exit_app → exit | Ctrl+Q | Close guard/flush |
+| restore_view → restoreView | Ctrl+Shift+R | Restaurar painéis/fontes |
+| reset_layout → resetLayout | Ctrl+Shift+Alt+R | Layout canônico |
+| editor_newline → editorNewline | Vazio por padrão | Remapeável para comando Monaco |
+| editor_duplicate_line → editorDuplicateLine | Ctrl+D | Duplicar linha |
+| editor_cut_line → editorCutLine | Ctrl+L | Recortar linha |
+| editor_transpose_line → editorTransposeLine | Vazio por padrão | Remapeável para comando Monaco |
+| editor_lowercase → editorLowercase | Ctrl+U | Seleção minúscula |
+| editor_uppercase → editorUppercase | Ctrl+Shift+U | Seleção maiúscula |
+| editor_delete_line → editorDeleteLine | Ctrl+Shift+K | Apagar linha |
+| cancel | Escape | Só a execução da sessão ativa |
+
+## Defaults, persistência e compatibilidade
+
+- `.dpw` conserva extras desconhecidos, `version`, `block_key`, `is_active`, `height`, `block_name`, contexto por bloco, parâmetros e flags compartilhadas/locais, `notification_config`, `result_view_state`/column formats/charts, notebook metadata e campos adicionais. DataFrames não entram no JSON; cache Parquet é opt-in.
+- Native profile state conserva `{documents:[{title,filePath,modified,sessionId,document}],activeIndex,preferences,shortcuts,layout,...extras}`. Debounce de 500ms captura estado imutável; gravação serial respeita profile. Switch fecha kernels/ACP antigos, rejeita busy/installs e troca catálogo/keyring/cache.
+- Preview usa `DATAPYN_RUNTIME_STATE_PATH`/`DATAPYN_WORKSPACE_PATH`, default `~/.datapyn-tauri-preview`. Cache usa appdata preview e hash do workspace. Credenciais ficam no keyring. Importar JSON legado é explícito; não lê a pasta privada PyQt automaticamente.
+- Gráfico Plotly preserva Segoe/Roboto/Helvetica/Arial12, títulos16/ticks11, margens e legenda do legado; fallbackUbuntu é local. PNG/JPEG do MCP usa Agg; JPEG aplaina transparência com a cor de fundo configurada.
+- Resumo tem zoom85/100/115/130, formato por coluna e totais combinados. Somente células selecionadas contam, inclusive regiões disjuntas; dados Decimal/bigint permanecem exatos, distintos usam no máximo100k valores e são rotulados quando amostrados.
+- Editor 13px, tabs 4, wrap false, minimap false, lineNumbers true, autocomplete local true, ACP inline false e maximizeFirstBlock false. Grade Consolas 12px, limite 100; Ubuntu UI 12px; temas dark/light/system. Fontes/tamanhos são configuráveis por profile.
+- Idle 300s; zero desliga. SQLite in-memory não adormece. Timer 1–86400s executa imediatamente e agenda após a fila terminar. Cancel forte reinicia só o kernel afetado e invalida seus handles/namespace: diferença em relação ao cancel cooperativo PyQt.
+- Snapshot default disabled, restore_on_startup true, limite 50MiB. Sucesso/import/delete marca o namespace para save serial quando a fila esvazia; fechamento idle também faz flush. Tipo incompatível/limite gera aviso sem apagar geração válida. Não usa pickle.
+- CSV default `;`, decimal `.`, UTF8BOM, headers e abrir pasta true; comma/tab/pipe também disponíveis. Clipboard default tab/nulo vazio; formatos visuais para Excel/texto e originais para JSON/INSERT.
+- Profiles adicionais são UUID e exclusão é archive recuperável. Duplicar credenciais exige opção explícita. Packages usam um ambiente extensível preview compartilhado entre profiles, como o ambiente global legado.
+
+## Pontos fortes e limites observados
+
+O legado tem serviços SQL/parâmetros/metadados/visualização/ACP reutilizáveis, testes de comportamento e `.dpw` extensível. Esses contratos foram preservados. O acoplamento entre widget, thread/event loop e namespace de execução dificulta isolamento e recuperação de falhas. A migração separa supervisor, kernel por sessão, linguagem, IO e ACP da UI React.
+
+Resultados permanecem no Python como handles opacos; páginas de 200 e caches limitados na UI, views de 4 entradas/256MiB no runtime. A seleção usa o mesmo filtro/sort da grade; células fora das regiões selecionadas ficam vazias no arquivo e não entram nas estatísticas. Streaming não materializa DataFrame completo. Schema/completion são lazy/contextuais. Preview/summary coalescem requests e não continuam trabalhando quando ocultos. Monaco/Plotly e workers são locais e carregados sob demanda.
+
+O ganho de latência/memória com 10 milhões de linhas e servidor remoto ainda precisa ser medido. Sort exige view ordenada em memória; resumo numérico exato pode varrer colunas, porém roda fora da UI. HTML standalone inclui Plotly completo e fica grande; bundles Monaco/Plotly são pesados mas lazy. PNG do MCP usa Agg com renderer informado no retorno e pode diferir visualmente do Plotly. Cursor/Arrow Parquet agora alargam Decimal128→256 ou string sem float, em reescrita por batches5000 e cancel recuperável;5round-trips multichunk verificam precisão. Drivers remotos continuam exigindo aceite. DDL gerado não promete todos os constraints/storage originais.
+
+## Aceites ainda abertos
+
+1. Teclado/foco/reorder/resize/maximize, DPI/fontes/temas/zoom, clipboard HTML/Excel real, árvore drag/drop e Dockview entre monitores. O pop-out Windows já teve smoke real, mas isso não substitui o roteiro completo.
+2. SQL Server password/Windows/Entra+ODBC, PostgreSQL schemas/search_path, MySQL/MariaDB, Databricks PAT/OAuth/catalog/schema e DDL real. Fixtures/SQLite não aprovam autenticação externa.
+3. Quatro agentes ACP autenticados, instalação/login/modelos/modes, permission/question flow e autocomplete real. Nenhuma autenticação externa foi iniciada pelos testes.
+4. Frozen/instalador/máquina limpa, imports do ambiente extensível/uv/pip, ícone/associações/second-instance/startup e updater assinado. Canal depende de chave/endpoint/release próprios; nada foi publicado.
+5. Benchmarks comparáveis PyQt/Tauri com várias sessões/blocos, 10 milhões de linhas/sort/export, consulta remota longa/cancel e memória/latência. Testes locais verificam comportamento, não provam melhor performance por si só.
