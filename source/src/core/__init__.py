@@ -1,8 +1,22 @@
-from .results_manager import ResultsManager
-from .shortcut_manager import ShortcutManager
-from .workspace_manager import WorkspaceManager
-from .theme_manager import ThemeManager
-from .session import Session
-from .session_manager import SessionManager
+"""Core exports loaded on demand so pure data modules do not import Qt."""
 
-__all__ = ["ResultsManager", "ShortcutManager", "WorkspaceManager", "ThemeManager", "Session", "SessionManager"]
+from importlib import import_module
+
+_EXPORTS = {
+    "ResultsManager": ".results_manager",
+    "ShortcutManager": ".shortcut_manager",
+    "WorkspaceManager": ".workspace_manager",
+    "ThemeManager": ".theme_manager",
+    "Session": ".session",
+    "SessionManager": ".session_manager",
+}
+__all__ = list(_EXPORTS)
+
+
+def __getattr__(name):
+    module = _EXPORTS.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(module, __name__), name)
+    globals()[name] = value
+    return value

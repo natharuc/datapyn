@@ -1,0 +1,107 @@
+name: DataPyn Desktop - Tauri migration
+
+on:
+  pull_request:
+    paths:
+      - "desktop/**"
+      - "source/datapyn_runtime/**"
+      - "source/src/database/**"
+      - "source/src/core/__init__.py"
+      - "source/src/core/parameter_settings.py"
+      - "source/src/core/session_result_storage.py"
+      - "source/src/utils/**"
+      - "source/src/services/__init__.py"
+      - "scripts/tauri/**"
+      - "runtime_tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/tauri.yml"
+  workflow_dispatch:
+    inputs:
+      installers:
+        description: "Generate unsigned migration installers in addition to validation builds"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tauri-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Desktop (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v3
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "desktop/src-tauri -> target"
+      - name: Linux native dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf unixodbc-dev libmariadb-dev
+      - name: Python dependencies
+        run: uv sync --dev --frozen
+      - name: Frontend dependencies
+        working-directory: desktop
+        run: npm ci
+      - name: Frontend tests and build
+        working-directory: desktop
+        run: |
+          npm test
+          npm run build
+      - name: Runtime tests
+        run: uv run pytest -c runtime_tests/pytest.ini runtime_tests -q
+      - name: Runtime smoke (source)
+        run: uv run python scripts/tauri/smoke_runtime.py
+      - name: Rust formatting and check
+        working-directory: desktop/src-tauri
+        run: |
+          cargo fmt --check
+          cargo check --locked
+          cargo test --locked
+      - name: Native build with frozen-runtime smoke
+        if: github.event_name != 'workflow_dispatch' || inputs.installers == false
+        working-directory: desktop
+        run: npm run desktop:build -- --no-bundle
+      - name: Migration installers with frozen-runtime smoke
+        if: github.event_name == 'workflow_dispatch' && inputs.installers == true
+        working-directory: desktop
+        run: npm run desktop:build
+      - name: Preserve validation artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: datapyn-tauri-migration-${{ matrix.os }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            desktop/src-tauri/binaries/datapyn-runtime-*
+            desktop/src-tauri/target/release/datapyn-desktop
+            desktop/src-tauri/target/release/datapyn-desktop.exe
+            desktop/src-tauri/target/release/datapyn-runtime
+            desktop/src-tauri/target/release/datapyn-runtime.exe
+            desktop/src-tauri/target/release/bundle/

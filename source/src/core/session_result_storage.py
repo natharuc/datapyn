@@ -19,6 +19,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 from PyQt6.QtCore import QSettings
 
+from src.utils.data_formats import PARQUET_COMPRESSION
+
 logger = logging.getLogger(__name__)
 
 SETTINGS_ORG = "DataPyn"
@@ -28,7 +30,6 @@ KEY_MAX_SIZE_MB = "session_results/max_size_mb"
 
 DEFAULT_MAX_SIZE_MB = 50
 MANIFEST_NAME = "manifest.json"
-PARQUET_COMPRESSION = "snappy"
 SKIP_VARIABLE_NAMES = frozenset({"pd", "np", "plt"})
 
 ResultItem = Tuple[str, pd.DataFrame]

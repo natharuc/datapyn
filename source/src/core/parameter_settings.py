@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PyQt6.QtCore import QSettings
+import os
 
 DEFAULT_SHARED_PARAMETER_DELIMITER = "{{name}}"
 
@@ -34,6 +34,12 @@ def _resolve_stored_delimiter(value: str) -> str:
 
 def get_shared_parameter_delimiter() -> str:
     """Return the configured shared parameter delimiter template (e.g. ``{{name}}``)."""
+    # Headless kernels receive settings explicitly, without registry access.
+    explicit = os.environ.get("DATAPYN_SHARED_PARAMETER_DELIMITER")
+    if explicit is not None:
+        return _resolve_stored_delimiter(explicit)
+    from PyQt6.QtCore import QSettings
+
     stored = QSettings("DataPyn", "DataPyn").value(
         "parameters/shared_delimiter",
         DEFAULT_SHARED_PARAMETER_DELIMITER,
@@ -54,5 +60,7 @@ def get_shared_parameter_delimiter_tokens() -> tuple[str, str]:
 
 def set_shared_parameter_delimiter(template: str) -> None:
     """Persist the shared parameter delimiter template."""
+    from PyQt6.QtCore import QSettings
+
     resolved = _resolve_stored_delimiter(template)
     QSettings("DataPyn", "DataPyn").setValue("parameters/shared_delimiter", resolved)

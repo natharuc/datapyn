@@ -1,32 +1,30 @@
-"""
-Services - Camada de servicos (logica de negocio)
+"""Service exports loaded on demand for both desktop hosts."""
 
-Separa completamente regras de negocio da UI.
-Cada servico e responsavel por uma area funcional.
-"""
+from importlib import import_module
 
-from .query_service import QueryService, QueryResult
-from .python_execution_service import PythonExecutionService, PythonExecutionResult
-from .connection_service import ConnectionService, ConnectionConfig
-from .session_lifecycle_service import SessionLifecycleService
-from .panel_manager import PanelManager, PanelSet
-from .file_import_service import FileImportService
-from .package_manager_service import PackageManagerService, PackageInfo, PackageOperationResult
-from .auto_update_service import AutoUpdateService
+_EXPORTS = {
+    "QueryService": ".query_service",
+    "QueryResult": ".query_service",
+    "PythonExecutionService": ".python_execution_service",
+    "PythonExecutionResult": ".python_execution_service",
+    "ConnectionService": ".connection_service",
+    "ConnectionConfig": ".connection_service",
+    "SessionLifecycleService": ".session_lifecycle_service",
+    "PanelManager": ".panel_manager",
+    "PanelSet": ".panel_manager",
+    "FileImportService": ".file_import_service",
+    "PackageManagerService": ".package_manager_service",
+    "PackageInfo": ".package_manager_service",
+    "PackageOperationResult": ".package_manager_service",
+    "AutoUpdateService": ".auto_update_service",
+}
+__all__ = list(_EXPORTS)
 
-__all__ = [
-    "QueryService",
-    "QueryResult",
-    "PythonExecutionService",
-    "PythonExecutionResult",
-    "ConnectionService",
-    "ConnectionConfig",
-    "SessionLifecycleService",
-    "PanelManager",
-    "PanelSet",
-    "FileImportService",
-    "PackageManagerService",
-    "PackageInfo",
-    "PackageOperationResult",
-    "AutoUpdateService",
-]
+
+def __getattr__(name):
+    module = _EXPORTS.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(module, __name__), name)
+    globals()[name] = value
+    return value

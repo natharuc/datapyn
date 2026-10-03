@@ -226,9 +226,7 @@ def _get_sqlserver_entra_cache_name(host: str) -> str:
 
 def _get_sqlserver_auth_record_path(host: str) -> Path:
     """Get the persisted AuthenticationRecord path for a SQL Server host."""
-    from src.core.workspace_service import get_workspace_service
-
-    config_dir = get_workspace_service().get_config_dir("oauth_cache")
+    config_dir = _get_oauth_cache_dir()
     return config_dir / f"{_get_sqlserver_entra_cache_name(host)}_auth_record.json"
 
 
@@ -362,6 +360,18 @@ def get_connector_switch_chip_value(connector) -> str:
     return get_connector_database_context(connector)
 
 
+def _get_oauth_cache_dir() -> Path:
+    """Use explicit workspace settings in headless kernels and Qt in the legacy UI."""
+    explicit_workspace = os.environ.get("DATAPYN_WORKSPACE_PATH")
+    if explicit_workspace:
+        config_dir = Path(explicit_workspace) / "oauth_cache"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        return config_dir
+    from src.core.workspace_service import get_workspace_service
+
+    return get_workspace_service().get_config_dir("oauth_cache")
+
+
 def _get_oauth_token_cache_path(host: str) -> Path:
     """Get path for OAuth token cache file.
     
@@ -369,9 +379,7 @@ def _get_oauth_token_cache_path(host: str) -> Path:
     """
     # Use a safe filename derived from the host
     safe_host = host.replace(".", "_").replace(":", "_").replace("/", "_")
-    # Use WorkspaceService for path (supports workspace switching)
-    from src.core.workspace_service import get_workspace_service
-    config_dir = get_workspace_service().get_config_dir("oauth_cache")
+    config_dir = _get_oauth_cache_dir()
     return config_dir / f"databricks_{safe_host}.json"
 
 

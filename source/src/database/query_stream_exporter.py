@@ -16,7 +16,7 @@ import pyarrow as pa
 import pyarrow.csv as pacsv
 import pyarrow.parquet as pq
 
-from src.core.session_result_storage import PARQUET_COMPRESSION
+from src.utils.data_formats import PARQUET_COMPRESSION
 
 STREAM_EXPORT_CHUNK_ROWS = 5_000
 STREAM_ARROW_CHUNK_ROWS = 5_000
