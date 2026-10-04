@@ -132,17 +132,22 @@ def save(params, namespace, store):
             if isinstance(value, store.pd.Series):
                 frame, kind = value.to_frame(), "pandas_series"
             elif isinstance(value, store.pl.Series):
-                frame, kind = value.to_frame().to_pandas(), "polars_series"
+                frame, kind = value.to_frame(), "polars_series"
             elif isinstance(value, store.pl.DataFrame):
-                frame, kind = value.to_pandas(), "polars_frame"
+                frame, kind = value, "polars_frame"
             else:
                 frame, kind = value, "pandas_frame"
-            if int(frame.memory_usage(deep=False).sum()) > max_bytes * 10:
+            native = kind.startswith("polars_")
+            memory_size = frame.estimated_size() if native else int(frame.memory_usage(deep=False).sum())
+            if memory_size > max_bytes * 10:
                 skipped.append({"name": name, "reason": "memory_limit"})
                 continue
             file = generation / f"frame-{index:06d}.parquet"
             try:
-                frame.to_parquet(file, index=True, compression=PARQUET_COMPRESSION)
+                if native:
+                    frame.write_parquet(file, compression=PARQUET_COMPRESSION)
+                else:
+                    frame.to_parquet(file, index=True, compression=PARQUET_COMPRESSION)
             except Exception:
                 file.unlink(missing_ok=True)
                 skipped.append({"name": name, "reason": "unsupported_parquet_type"})
@@ -152,8 +157,9 @@ def save(params, namespace, store):
             if size_bytes > max_bytes:
                 return {"saved": False, "reason": "size_limit", "size_bytes": size_bytes, "variables": [], "skipped": skipped}
             items.append({"name": name, "file": file.name, "kind": kind, "row_count": len(frame), "size_bytes": file_size,
+                          "storage": "polars" if native else "pandas",
                           "series_name": value.name if kind == "pandas_series" else None})
-        manifest = {"version": 1, "session_id": params["session_id"], "workspace": str(_workspace()), "saved_at": time.time(),
+        manifest = {"version": 2, "session_id": params["session_id"], "workspace": str(_workspace()), "saved_at": time.time(),
                     "variables": items, "size_bytes": size_bytes}
         (generation / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
         with atomic_destination(session / "current.json") as temporary:
@@ -167,6 +173,34 @@ def save(params, namespace, store):
         active = json.loads(pointer.read_text()).get("generation") if pointer.is_file() else None
         if active != generation.name:
             _safe_remove(generation, session)
+
+
+def _pandas_frame(table, pd):
+    import pyarrow as arrow
+    frame = table.to_pandas(integer_object_nulls=True)
+    metadata = table.schema.pandas_metadata or {}
+    columns = {item["field_name"]: item for item in metadata.get("columns", [])}
+    index_columns = metadata.get("index_columns", [])
+    repaired = {}
+    for level, field in enumerate(index_columns):
+        if not isinstance(field, str):
+            continue
+        column = table[field]
+        if arrow.types.is_integer(column.type) and column.null_count:
+            # Arrow's index reconstruction separately infers float64 from
+            # nullable ints, even when data columns use integer_object_nulls.
+            values = column.to_pandas(integer_object_nulls=True)
+            dtype = columns.get(field, {}).get("numpy_type", "object")
+            if dtype not in {"Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64"} and not dtype.endswith("[pyarrow]"):
+                dtype = object
+            repaired[level] = pd.Index(values, dtype=dtype, name=frame.index.names[level])
+    if repaired:
+        if len(index_columns) == 1:
+            frame.index = repaired[0]
+        else:
+            levels = [repaired.get(level, frame.index.get_level_values(level)) for level in range(len(index_columns))]
+            frame.index = pd.MultiIndex.from_arrays(levels, names=frame.index.names)
+    return frame
 
 
 def restore(params, namespace, store):
@@ -191,15 +225,27 @@ def restore(params, namespace, store):
         if name in namespace and not params.get("overwrite", False):
             skipped.append(name)
             continue
-        value = store.pd.read_parquet(file)
         kind = item.get("kind", "pandas_frame")
+        if item.get("storage") == "polars":
+            if kind not in {"polars_frame", "polars_series"}:
+                raise ValueError("Invalid native snapshot kind")
+            value = store.pl.read_parquet(file)
+        else:
+            # Nullable object integers become float64 in read_parquet's default
+            # conversion, rounding values above 2**53 before paging can see them.
+            # Arrow keeps the exact integers while preserving pandas index/dtype
+            # metadata. Legacy Polars files were written through pandas as well.
+            import pyarrow.parquet as parquet
+            table = parquet.read_table(file)
+            if kind.startswith("polars_"):
+                value = store.pl.from_pandas(table.to_pandas(types_mapper=store.pd.ArrowDtype))
+            else:
+                value = _pandas_frame(table, store.pd)
         if kind == "pandas_series":
             value = value.iloc[:, 0]
             value.name = item.get("series_name")
-        elif kind == "polars_frame":
-            value = store.pl.from_pandas(value)
         elif kind == "polars_series":
-            value = store.pl.from_pandas(value).to_series()
+            value = value.to_series()
         prepared.append((name, value))
     for name, value in prepared:
         namespace[name] = value
