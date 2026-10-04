@@ -14,18 +14,41 @@ class _SupersededCompletion(Exception):
     pass
 
 
-def _editor_main(connection):
-    initialize_kernel_group()
-    isolate_kernel_output()
-    from .kernel import _watch_parent
-    threading.Thread(target=_watch_parent, name="editor-parent-watch", daemon=True).start()
+class CompletionWorkerExitedError(ConnectionError):
+    """An owned interpreter stopped without completing its protocol response."""
+
+
+def _worker_exited_error(process, stage):
+    # A pipe can report EOF slightly before multiprocessing refreshes exitcode.
+    # Join only briefly: control requests must stay responsive after a crash.
     try:
+        process.join(timeout=0.1)
+        exitcode = process.exitcode
+    except ValueError:
+        exitcode = None  # Concurrent runtime shutdown already closed Process.
+    code = "unknown" if exitcode is None else str(exitcode)
+    if exitcode is not None and (exitcode < -255 or exitcode > 255):
+        code = f"0x{exitcode & 0xffffffff:08X}"
+    return CompletionWorkerExitedError(
+        f"Python autocomplete service stopped unexpectedly during {stage} "
+        f"(exit code {code}); request autocomplete again to start a fresh worker"
+    )
+
+
+def _editor_main(connection):
+    stage = "initialization"
+    try:
+        initialize_kernel_group()
+        isolate_kernel_output()
+        from .kernel import _watch_parent
+        threading.Thread(target=_watch_parent, name="editor-parent-watch", daemon=True).start()
         from .language import initialize_completion_worker, dispatch
         from .desktop_services import enable_user_packages
         initialize_completion_worker()
         connection.send({"ready": True})
         while True:
             request = connection.recv()
+            stage = "inference"
             try:
                 enable_user_packages()
                 result = dispatch("language.complete", request["params"], request["context"])
@@ -34,8 +57,11 @@ def _editor_main(connection):
                 connection.send({"error": {"code": "operation_failed", "message": f"{type(exc).__name__}: {exc}"}})
     except EOFError:
         pass
-    except Exception as exc:
-        connection.send({"error": {"code": "editor_unavailable", "message": f"{type(exc).__name__}: {exc}"}})
+    except BaseException as exc:
+        try:
+            connection.send({"error": {"code": "editor_unavailable", "message": f"Python autocomplete {stage}: {type(exc).__name__}: {exc}"}})
+        except (OSError, EOFError):
+            pass  # The supervisor already closed its end during shutdown.
     finally:
         connection.close()
 
@@ -99,6 +125,11 @@ class CompletionProcess:
             except _SupersededCompletion:
                 self._stop()
                 return {"result": {"items": [], "superseded": True}}
+            except (CompletionWorkerExitedError, BrokenPipeError) as exc:
+                if isinstance(exc, BrokenPipeError):
+                    exc = _worker_exited_error(process, "inference" if self.ready else "initialization")
+                self._stop()
+                return {"error": {"code": "editor_unavailable", "message": str(exc)}}
             except BaseException:
                 self._stop()
                 raise
@@ -123,9 +154,14 @@ class CompletionProcess:
             if superseded is not None and superseded():
                 raise _SupersededCompletion()
             if connection.poll(min(0.05, max(0, deadline - time.monotonic()))):
-                return connection.recv()
+                try:
+                    return connection.recv()
+                except EOFError as exc:
+                    if self.closed.is_set():
+                        raise RuntimeError("Runtime is closing") from exc
+                    raise _worker_exited_error(process, "inference" if self.ready else "initialization") from exc
             if not process.is_alive():
-                raise ConnectionError("Python completion worker exited unexpectedly")
+                raise _worker_exited_error(process, "inference" if self.ready else "initialization")
         if self.closed.is_set():
             raise RuntimeError("Runtime is closing")
         raise TimeoutError("Python completion exceeded its 12-second limit")

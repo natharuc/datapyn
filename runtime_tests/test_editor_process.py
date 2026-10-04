@@ -1,6 +1,7 @@
 """Frozen-style persistent completion without executing the runtime as Python."""
 
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -64,3 +65,51 @@ def test_frozen_jedi_script_selects_embedded_interpreter_explicitly(monkeypatch)
     monkeypatch.setattr(jedi, "Script", Script)
     assert language._python_complete("df.", 1, 3, {}) == []
     assert isinstance(captured["environment"], jedi.InterpreterEnvironment)
+
+
+@pytest.mark.parametrize("ready,broken_write,exitcode,expected", [
+    (False, False, 75, "initialization (exit code 75)"),
+    (True, False, -1073741819, "inference (exit code 0xC0000005)"),
+    (True, True, 9, "inference (exit code 9)"),
+    (True, False, 0, "inference (exit code 0)"),
+])
+def test_unexpected_worker_exit_reports_stage_and_native_code_without_retry(monkeypatch, ready, broken_write, exitcode, expected):
+    worker = CompletionProcess(threading.Event())
+    worker.ready = ready
+    joins, starts, stops = [], [], []
+    process = SimpleNamespace(join=lambda **options: joins.append(options), exitcode=exitcode)
+    def receive():
+        raise EOFError
+    def send(request):
+        if broken_write:
+            raise BrokenPipeError
+    pipe = SimpleNamespace(poll=lambda timeout: True, recv=receive, send=send)
+    def start():
+        starts.append(True)
+        return process, pipe
+    monkeypatch.setattr(worker, "_start", start)
+    monkeypatch.setattr(worker, "_stop", lambda: stops.append(True))
+    response = worker.request({"code": "df."}, {})
+    assert response["error"]["code"] == "editor_unavailable"
+    assert expected in response["error"]["message"]
+    assert "EOFError" not in response["error"]["message"]
+    assert len(starts) == len(stops) == 1, "A failed request must not silently retry"
+    assert joins == [{"timeout": 0.1}]
+    # A later, explicit user request can initialize a new interpreter normally.
+    worker.ready = False
+    messages = iter([{"ready": True}, {"result": {"items": [{"label": "columns"}]}}])
+    pipe.recv = lambda: next(messages)
+    pipe.send = lambda request: None
+    assert worker.request({"code": "df."}, {})["result"]["items"] == [{"label": "columns"}]
+    assert len(starts) == 2 and len(stops) == 1
+
+
+def test_editor_reports_bootstrap_failure_before_stdio_and_imports(monkeypatch):
+    import datapyn_runtime.editor_process as editor
+    def fail():
+        raise RuntimeError("owned bootstrap failed")
+    monkeypatch.setattr(editor, "initialize_kernel_group", fail)
+    messages, closed = [], []
+    editor._editor_main(SimpleNamespace(send=messages.append, close=lambda: closed.append(True)))
+    assert closed == [True]
+    assert messages == [{"error": {"code": "editor_unavailable", "message": "Python autocomplete initialization: RuntimeError: owned bootstrap failed"}}]
