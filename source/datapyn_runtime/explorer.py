@@ -276,29 +276,95 @@ class ObjectExplorer:
         schema = context["schema"]
         schemas = self._cached(("schemas", context["database"]), lambda: self.schemas(context["database"]))
         requested_schemas = [schema]
-        import re
+        from .sql_context import metadata_signature
+        references, prefixes, routines = metadata_signature(code)
+        referenced_names = {part for path in references + prefixes for part in path}
         for candidate in schemas:
-            if candidate != schema and re.search(r"(?i)(?<![\w])(?:\[|`|\")?" + re.escape(candidate) + r"(?:\]|`|\")?\s*\.", code or ""):
+            if candidate != schema and candidate.casefold() in referenced_names:
                 requested_schemas.append(candidate)
         tables = []
         for candidate in requested_schemas[:8]:
             tables.extend(self._cached(("completion_tables", candidate), lambda candidate=candidate: self.objects(candidate, "table") + self.objects(candidate, "view")))
         # Fetch columns only for relations actually referenced by the document.
         for table in tables:
-            if code and re.search(r"(?i)(?<![\w])" + re.escape(table["name"]) + r"(?![\w])", code):
+            if table["name"].casefold() in referenced_names:
                 self.columns(table["name"], table["schema"])
-        catalog = context["database"] if self.db_type == "databricks" else ""
+        catalog = context["database"] if self.db_type in {"databricks", "sqlserver"} else ""
         result = {**context, "current_schema": schema, "databases": self._cached(("databases",), self.databases),
                   "schemas": schemas,
                   "tables": [{"name": t["name"], "schema": t["schema"], "catalog": catalog, "key": ".".join(part for part in (catalog, t["schema"], t["name"]) if part), "type": t["kind"].upper()} for t in tables],
                   "columns": {".".join(part for part in (catalog, s, name) if part): columns for (s, name), columns in self.column_cache.items()},
                   "routines": [], "metadata_loaded": True}
-        if re.search(r"(?i)\b(?:EXEC|EXECUTE|CALL)\s", code or ""):
+        if routines:
             for candidate in requested_schemas[:8]:
                 for kind in ("procedure", "function"):
                     for routine in self._cached(("routines", candidate, kind), lambda candidate=candidate, kind=kind: self.objects(candidate, kind)):
                         result["routines"].append({"name": routine["name"], "schema": candidate, "type": kind.upper()})
+        if self.db_type in {"databricks", "sqlserver"}:
+            self._foreign_completion_namespaces(result, references, prefixes)
         return result
+
+    def _foreign_completion_namespaces(self, result, references, prefixes):
+        """Load only explicitly typed catalogs/schemas, never switch a session."""
+        current = result["database"]
+        catalogs = {str(name).casefold(): str(name) for name in result["databases"]}
+        targets = set()
+        catalog_schemas = {current: list(result["schemas"])}
+        for path in references + prefixes:
+            if not path or path[0] not in catalogs:
+                continue
+            catalog = catalogs[path[0]]
+            if catalog.casefold() == current.casefold():
+                continue
+            def load_schemas(catalog=catalog):
+                if self.db_type == "databricks":
+                    rows = self._records(f"SHOW SCHEMAS IN {quote(self.db_type, catalog)}")
+                    return [str(next(iter(row.values()))) for row in rows][:5000]
+                rows = self._records(f"SELECT name FROM {quote(self.db_type, catalog)}.sys.schemas WHERE name NOT IN ('sys', 'INFORMATION_SCHEMA') ORDER BY name")
+                return [str(row["name"]) for row in rows][:5000]
+            try:
+                catalog_schemas[catalog] = self._cached(("completion_schemas", catalog), load_schemas)
+            except Exception:
+                # A BROWSE-only catalog can have names but no metadata access;
+                # keep the usable current snapshot and retry after cache expiry.
+                continue
+            if len(path) >= 2:
+                resolved_schema = next((schema for schema in catalog_schemas[catalog] if schema.casefold() == path[1]), None)
+                if resolved_schema:
+                    targets.add((catalog, resolved_schema))
+        result["catalog_schemas"] = catalog_schemas
+        existing = {table["key"].casefold() for table in result["tables"]}
+        for catalog, schema in sorted(targets)[:8]:
+            if catalog.casefold() == current.casefold() and schema.casefold() == result["current_schema"].casefold():
+                continue
+            def load_tables(catalog=catalog, schema=schema):
+                if self.db_type == "databricks":
+                    rows = self._records(f"SHOW TABLES IN {quote(self.db_type, catalog, schema)}")
+                    return [{"name": str(row["tablename"]), "kind": "TABLE"} for row in rows if row.get("tablename")][:10000]
+                rows = self._records(f"SELECT TABLE_NAME AS name, TABLE_TYPE AS kind FROM {quote(self.db_type, catalog)}.INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA={literal(schema)} ORDER BY TABLE_NAME")
+                return [{"name": str(row["name"]), "kind": "VIEW" if row.get("kind") == "VIEW" else "TABLE"} for row in rows][:10000]
+            try:
+                tables = self._cached(("completion_tables", catalog, schema), load_tables)
+            except Exception:
+                continue
+            for table in tables:
+                name = table["name"]
+                key = ".".join((catalog, schema, name))
+                if key.casefold() not in existing:
+                    result["tables"].append({"name": name, "schema": schema, "catalog": catalog, "database": catalog, "key": key, "type": table["kind"]})
+                    existing.add(key.casefold())
+                if not any(path[:2] == (catalog.casefold(), schema.casefold()) and len(path) >= 3 and path[2] == name.casefold() for path in references + prefixes):
+                    continue
+                def load_columns(catalog=catalog, schema=schema, name=name):
+                    if self.db_type == "databricks":
+                        rows = self._records(f"SHOW COLUMNS IN {quote(self.db_type, catalog, schema, name)}")
+                        return [{"name": str(row.get("col_name") or next(iter(row.values()))), "type": ""} for row in rows]
+                    rows = self._records(f"SELECT COLUMN_NAME AS name, DATA_TYPE AS type FROM {quote(self.db_type, catalog)}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA={literal(schema)} AND TABLE_NAME={literal(name)} ORDER BY ORDINAL_POSITION")
+                    return [{"name": str(row["name"]), "type": str(row["type"])} for row in rows]
+                try:
+                    result["columns"][key] = self._cached(("completion_columns", catalog, schema, name), load_columns)
+                except Exception:
+                    continue
 
     def dispatch(self, method, params):
         if method == "explorer.list":

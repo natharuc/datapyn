@@ -21,10 +21,11 @@ import "monaco-editor/editor/contrib/dropOrPasteInto/browser/copyPasteContributi
 import EditorWorker from "monaco-editor/editor/editor.worker.js?worker";
 import { runtime, type Language } from "./runtime";
 import {translate as t,useLocale} from "./i18n";
-import { models, contexts, completionGates, contextVersions, diagnosticRefreshers, editorPreferences, pendingInsertions, consumePendingFocus, markEditorFocused, wasEditorFocused, insertInEditor, takeRestoredEditorViewState,captureEditorViewState,type EditorPreferences } from "./editorRegistry";
+import { models, getCompletionContext, completionGates, inlineGates, contextVersions, diagnosticRefreshers, editorPreferences, pendingInsertions, consumePendingFocus, markEditorFocused, wasEditorFocused, insertInEditor, takeRestoredEditorViewState,captureEditorViewState,consumeManualSuggestions,triggerLocalSuggestions,type EditorPreferences } from "./editorRegistry";
 export { selectedCode, focusEditor, editorAction, getRegisteredEditor, formatEditor, forceAutocomplete, transformEditorSelection, insertInEditor, replaceEditorCode, disposeModel, setCompletionContext } from "./editorRegistry";
 export type { EditorPreferences } from "./editorRegistry";
-import { LanguageRequestGate, languageParams, mergeCompletions, type LanguageCompletion, type LanguageMarker } from "./editorLanguage";
+import { InlineRequestGate, LanguageRequestGate, languageParams, mergeCompletions, type LanguageCompletion, type LanguageMarker } from "./editorLanguage";
+import { completionSite, completionInsertion, escapePythonString, filterCompletions, localCompletions, pythonSymbols } from "./editorCompletions";
 import { useOwnerDocumentRevision } from "./useOwnerDocument";
 
 (globalThis as typeof globalThis & { MonacoEnvironment: monaco.Environment }).MonacoEnvironment = { getWorker: () => new EditorWorker() };
@@ -47,48 +48,70 @@ const completionKinds: Record<string, monaco.languages.CompletionItemKind> = {
   keyword: monaco.languages.CompletionItemKind.Keyword, function: monaco.languages.CompletionItemKind.Function,
   method: monaco.languages.CompletionItemKind.Method, module: monaco.languages.CompletionItemKind.Module,
   property: monaco.languages.CompletionItemKind.Property, snippet: monaco.languages.CompletionItemKind.Snippet,
+  database: monaco.languages.CompletionItemKind.Module, schema: monaco.languages.CompletionItemKind.Module,
+  routine: monaco.languages.CompletionItemKind.Function, constant: monaco.languages.CompletionItemKind.Constant,
+  statement: monaco.languages.CompletionItemKind.Keyword, param: monaco.languages.CompletionItemKind.Variable,
 };
-const sqlKeywords = ["SELECT", "FROM", "WHERE", "AND", "OR", "NOT", "IN", "BETWEEN", "LIKE", "IS", "NULL", "JOIN", "INNER JOIN", "LEFT JOIN", "ON", "AS", "ORDER BY", "GROUP BY", "HAVING", "LIMIT", "DISTINCT", "INSERT INTO", "VALUES", "UPDATE", "SET", "DELETE", "CREATE TABLE", "DROP TABLE", "ALTER TABLE", "COUNT", "SUM", "AVG", "MIN", "MAX", "CASE", "WHEN", "THEN", "ELSE", "END"];
-const pythonKeywords = ["def", "class", "if", "elif", "else", "for", "while", "return", "import", "from", "as", "try", "except", "finally", "with", "lambda", "yield", "True", "False", "None"];
+const symbolCache = new WeakMap<monaco.editor.ITextModel, { version: number; firstLine: number; items: LanguageCompletion[] }>();
 for (const language of ["sql", "python"]) monaco.languages.registerCompletionItemProvider(language, {
-  triggerCharacters: [".", ...(language === "sql" ? [" "] : [])],
-  async provideCompletionItems(model, position, _trigger, token) {
-    const id = model.uri.path.split("/").at(-1) ?? "", context = contexts.get(id);
-    if (editorPreferences.get(id)?.autocomplete === false) return { suggestions: [] };
-    const word = model.getWordUntilPosition(position), range = { startLineNumber: position.lineNumber, endLineNumber: position.lineNumber, startColumn: word.startColumn, endColumn: word.endColumn };
-    const entries: LanguageCompletion[] = language === "python" ? context?.variables.map((variable) => ({ label: variable.name, kind: "variable", detail: variable.type })) ?? [] : context?.tables.map((table) => ({ label: table, kind: "class", detail: t("Tabela da conexão") })) ?? [];
-    entries.push(...(language === "sql" ? sqlKeywords : pythonKeywords).map((label) => ({ label, kind: "keyword" })));
+  triggerCharacters: [".", ...(language === "sql" ? [" ", ",", "(", "=", "@", "#", "[", '"', "`"] : ['"', "'"])],
+  provideCompletionItems(model, position, _trigger, token) {
+    const id = model.uri.path.split("/").at(-1) ?? "", context = getCompletionContext(id);
+    const manual = consumeManualSuggestions(id);
+    if ((editorPreferences.get(id)?.autocomplete === false && !manual) || token.isCancellationRequested || model.isDisposed()) return { suggestions: [] };
+    const site = completionSite(language as Language, model.getLineContent(position.lineNumber), position.column);
+    if (site.blocked) { completionGates.get(id)?.cancel(); return { suggestions: [] }; }
+    // Scan a bounded window only when suggestions are requested, never on each model change.
+    const firstLine = Math.max(1, position.lineNumber - 200), lastLine = Math.min(model.getLineCount(), position.lineNumber + 200);
+    const before = model.getValueInRange({ startLineNumber: firstLine, startColumn: 1, endLineNumber: position.lineNumber, endColumn: position.column }).slice(-32_768);
+    const source = model.getValueInRange({ startLineNumber: firstLine, startColumn: 1, endLineNumber: lastLine, endColumn: model.getLineMaxColumn(lastLine) }).slice(0, 64_000);
+    let symbols = symbolCache.get(model);
+    if (language === "python" && (!symbols || symbols.version !== model.getVersionId() || symbols.firstLine !== firstLine)) { symbols = { version: model.getVersionId(), firstLine, items: pythonSymbols(source) }; symbolCache.set(model, symbols); }
+    const entries = localCompletions(language as Language, site, context, before, symbols?.items, source);
     const version = model.getVersionId(), contextVersion = contextVersions.get(id), gate = completionGates.get(id) ?? new LanguageRequestGate(); completionGates.set(id, gate);
-    let remote: LanguageCompletion[] = [];
-    try {
-      remote = await gate.complete(runtime, { ...languageParams(context, { language: language as Language, code: model.getValue(), line: position.lineNumber, column: position.column }), block_id: id }, () => !token.isCancellationRequested && !model.isDisposed() && model.getVersionId() === version && contextVersions.get(id) === contextVersion);
-    } catch { /* Offline editing still has keywords and the last known schema. */ }
-    if (token.isCancellationRequested || model.isDisposed() || model.getVersionId() !== version || contextVersions.get(id) !== contextVersion) return { suggestions: [] };
-    return { suggestions: mergeCompletions(remote, entries).map((entry) => ({ label: entry.label, kind: completionKinds[(entry.kind ?? "variable").toLowerCase()] ?? monaco.languages.CompletionItemKind.Text, detail: entry.detail, documentation: entry.documentation, insertText: entry.insert_text ?? entry.insertText ?? entry.label, insertTextRules: entry.kind === "snippet" ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : undefined, range })) };
+    const record = models.get(id), editor = record?.editor, intent = record?.completionIntent, navigation = record?.completionNavigation;
+    if (record) record.completionQuery = { version, line: position.lineNumber, column: position.column, intent, navigation };
+    const valid = () => !model.isDisposed() && model.getVersionId() === version && contextVersions.get(id) === contextVersion && models.get(id)?.editor === editor && editor?.hasTextFocus() === true && record?.completionIntent === intent && editor.getPosition()?.equals(position) === true;
+    const remote = model.getValueLength() > 500_000 ? [] : gate.suggest(runtime, `${language}:${version}:${contextVersion}:${position.lineNumber}:${position.column}`,
+      () => ({ ...languageParams(context, { language: language as Language, code: model.getValue(), line: position.lineNumber, column: position.column }), block_id: id }), valid,
+      () => { if (valid() && record?.completionNavigation === navigation) triggerLocalSuggestions(id); }, manual ? 0 : 120);
+    const contextualRemote = site.stringColumn ? remote.filter(entry => ["field", "column"].includes(entry.kind ?? "")) : site.member ? remote.filter(entry => !["keyword", "snippet", ...(language === "sql" ? ["variable"] : [])].includes(entry.kind ?? "")) : remote;
+    const items = mergeCompletions(filterCompletions(contextualRemote, site.prefix, language as Language), entries, language as Language);
+    return { incomplete: true, suggestions: items.map((entry) => {
+      const startColumn = entry.start_column ?? site.startColumn, endColumn = entry.end_column ?? site.endColumn;
+      const insert = { startLineNumber: position.lineNumber, endLineNumber: position.lineNumber, startColumn, endColumn: position.column };
+      const replace = { ...insert, endColumn: Math.max(position.column, endColumn) };
+      return { label: entry.label, kind: completionKinds[(entry.kind ?? "variable").toLowerCase()] ?? monaco.languages.CompletionItemKind.Text,
+        detail: entry.detail, documentation: entry.documentation, filterText: site.stringColumn ? escapePythonString(entry.filterText ?? entry.label, site.quote ?? '"') : site.quote && language === "sql" ? `${site.quote}${entry.filterText ?? entry.label}` : entry.filterText,
+        sortText: entry.sortText ?? `${site.member ? "0" : "1"}:${entry.label}`,
+        insertText: completionInsertion(entry, site, language as Language),
+        insertTextRules: entry.kind === "snippet" && entry.is_snippet !== false ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : undefined,
+        range: { insert, replace } };
+    }) };
   },
 });
 for (const language of ["sql", "python"]) monaco.languages.registerInlineCompletionsProvider(language, {
   async provideInlineCompletions(model, position, completion, token) {
-    const id = model.uri.path.split("/").at(-1) ?? "", context = contexts.get(id);
+    const id = model.uri.path.split("/").at(-1) ?? "", context = getCompletionContext(id);
     if (!editorPreferences.get(id)?.aiAutocomplete || !context?.sessionId) return { items: [] };
     const version = model.getVersionId(), contextVersion = contextVersions.get(id);
-    if (completion.triggerKind !== monaco.languages.InlineCompletionTriggerKind.Explicit) await new Promise((resolve) => setTimeout(resolve, 350));
-    const valid = () => !token.isCancellationRequested && !model.isDisposed() && model.getVersionId() === version && contextVersions.get(id) === contextVersion;
-    if (!valid()) return { items: [] };
-    const text = model.getValue(), offset = model.getOffsetAt(position), prefix = text.slice(Math.max(0, offset - 2000), offset), suffix = text.slice(offset, offset + 500);
-    const body = `Continue ${language} code at <CURSOR>. Output only raw text to insert, without Markdown fences, explanation or repeating the existing code. Preserve indentation.\nContext: ${JSON.stringify({ variables: context.variables.slice(0, 80), tables: context.tables.slice(0, 80), database: context.database, schema: context.schema }).slice(0, 2000)}\n${prefix}<CURSOR>${suffix}`;
-    try {
-      const { text: insertText } = await runtime.request<{ text: string }>("pynia.inline", { session_id: context.sessionId, body, timeout: 8, block_id: id });
-      if (!valid() || !insertText) return { items: [] };
-      return { items: [{ insertText, range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column) }] };
-    } catch { return { items: [] }; }
+    const record=models.get(id),editor=record?.editor,intent=record?.completionIntent;
+    const valid = () => !token.isCancellationRequested && !model.isDisposed() && model.getVersionId() === version && contextVersions.get(id) === contextVersion && models.get(id)?.editor===editor && editor?.hasTextFocus()===true && record?.completionIntent===intent && editor.getPosition()?.equals(position)===true;
+    const gate=inlineGates.get(id)??new InlineRequestGate();inlineGates.set(id,gate);
+    const insertText=await gate.complete(runtime,`${language}:${version}:${contextVersion}:${position.lineNumber}:${position.column}`,()=>{
+      const offset=model.getOffsetAt(position),start=model.getPositionAt(Math.max(0,offset-2_000)),end=model.getPositionAt(Math.min(model.getValueLength(),offset+500));
+      const prefix=model.getValueInRange(new monaco.Range(start.lineNumber,start.column,position.lineNumber,position.column)),suffix=model.getValueInRange(new monaco.Range(position.lineNumber,position.column,end.lineNumber,end.column));
+      const body=`Continue ${language} code at <CURSOR>. Output only raw text to insert, without Markdown fences, explanation or repeating the existing code. Preserve indentation.\nContext: ${JSON.stringify({ variables: context.variables.slice(0, 80), tables: context.tables.slice(0, 80), database: context.database, schema: context.schema }).slice(0, 2000)}\n${prefix}<CURSOR>${suffix}`;
+      return {session_id:context.sessionId,body,timeout:8,block_id:id};
+    },valid,token,completion.triggerKind===monaco.languages.InlineCompletionTriggerKind.Explicit?0:350);
+    return valid()&&insertText?{items:[{insertText,range:new monaco.Range(position.lineNumber,position.column,position.lineNumber,position.column)}]}:{items:[]};
   },
   disposeInlineCompletions() {},
 });
 for (const language of ["sql", "python"]) monaco.languages.registerDocumentFormattingEditProvider(language, {
   async provideDocumentFormattingEdits(model, options, token) {
     const version = model.getVersionId(), id = model.uri.path.split("/").at(-1) ?? "";
-    const { code, error } = await runtime.request<{ code: string; error?: string | null }>("language.format", { ...languageParams(contexts.get(id), { language: language as Language, code: model.getValue() }), options });
+    const { code, error } = await runtime.request<{ code: string; error?: string | null }>("language.format", { ...languageParams(getCompletionContext(id), { language: language as Language, code: model.getValue() }), options });
     if (error) throw new Error(error);
     return token.isCancellationRequested || model.isDisposed() || version !== model.getVersionId() ? [] : [{ range: model.getFullModelRange(), text: code }];
   },
@@ -119,16 +142,26 @@ export const MonacoBlock = memo(function MonacoBlock({ id, code, language, heigh
       padding: { top: 12, bottom: 12 }, smoothScrolling: false,
       scrollbar: { verticalScrollbarSize: 9, horizontalScrollbarSize: 9 },
       bracketPairColorization: { enabled: true }, tabSize: 4,
-      mouseWheelZoom:true,
+      mouseWheelZoom:true, wordBasedSuggestions:"off", suggest: { insertMode: "replace" },
     });
     record.editor = editor;
     record.container = host;
     record.clearMarkers = () => { if (!record.model.isDisposed()) monaco.editor.setModelMarkers(record.model, "datapyn", []); };
     if (record.viewState) editor.restoreViewState(record.viewState);
     if (consumePendingFocus(id) || (documentRevision > 0 && wasEditorFocused(id))) queueMicrotask(() => { if (record.editor === editor) editor.focus(); });
-    const changed = editor.onDidChangeModelContent(() => callbacks.current.onChange(record.model.getValue()));
+    const changed = editor.onDidChangeModelContent(() => { record.completionQuery = undefined; completionGates.get(id)?.cancel();inlineGates.get(id)?.cancel();callbacks.current.onChange(record.model.getValue()); });
     const focused = editor.onDidFocusEditorText(() => { markEditorFocused(id); callbacks.current.onFocus(); });
-    const cursor = editor.onDidChangeCursorPosition(({ position }) => callbacks.current.onCursor?.(position.lineNumber, position.column));
+    const blurred = editor.onDidBlurEditorText(() => { record.completionQuery = undefined; record.completionIntent = (record.completionIntent ?? 0) + 1; completionGates.get(id)?.cancel();inlineGates.get(id)?.cancel(); });
+    const completionKeys = editor.onKeyDown(event => {
+      if (event.keyCode === monaco.KeyCode.Escape) { record.completionQuery = undefined; record.completionIntent = (record.completionIntent ?? 0) + 1; completionGates.get(id)?.cancel();inlineGates.get(id)?.cancel(); }
+      if (event.keyCode === monaco.KeyCode.UpArrow || event.keyCode === monaco.KeyCode.DownArrow) record.completionNavigation = (record.completionNavigation ?? 0) + 1;
+    });
+    const manualSuggestAction = editor.addAction({ id: "datapyn.triggerLocalSuggestions", label: "DataPyn IntelliSense", keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Space], precondition: "editorTextFocus", run: () => triggerLocalSuggestions(id) });
+    const cursor = editor.onDidChangeCursorPosition(({ position }) => {
+      const query=record.completionQuery;
+      if(query&&(query.line!==position.lineNumber||query.column!==position.column)){record.completionQuery=undefined;completionGates.get(id)?.cancel();}
+      callbacks.current.onCursor?.(position.lineNumber, position.column);
+    });
     let viewTimer:ReturnType<typeof setTimeout>|undefined;
     const scheduleView=()=>{clearTimeout(viewTimer);viewTimer=setTimeout(()=>captureEditorViewState(id),300);};
     const selectionView=editor.onDidChangeCursorSelection(scheduleView),scrollView=editor.onDidScrollChange(scheduleView);
@@ -141,7 +174,7 @@ export const MonacoBlock = memo(function MonacoBlock({ id, code, language, heigh
     // Hidden desktop webviews may suspend animation frames. The microtask
     // follows creation, restored cursor state and the preference effects.
     queueMicrotask(()=>{if(record.editor === editor)callbacks.current.onReady?.(id);});
-    return () => { clearTimeout(viewTimer);selectionView.dispose();scrollView.dispose();captureEditorViewState(id);changed.dispose(); focused.dispose(); cursor.dispose();configuration.dispose(); completionGates.get(id)?.invalidate(); record.viewState = editor.saveViewState(); record.editor = undefined; record.container = undefined; editor.dispose(); };
+    return () => { clearTimeout(viewTimer);selectionView.dispose();scrollView.dispose();captureEditorViewState(id);changed.dispose(); focused.dispose(); blurred.dispose();completionKeys.dispose();manualSuggestAction.dispose();cursor.dispose();configuration.dispose(); completionGates.get(id)?.cancel();inlineGates.get(id)?.cancel(); record.viewState = editor.saveViewState(); record.editor = undefined; record.container = undefined; editor.dispose(); };
     // Creating a new widget for a changed code prop discards undo history.
     // The separate effect below synchronizes external edits into the stable model.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -162,9 +195,11 @@ export const MonacoBlock = memo(function MonacoBlock({ id, code, language, heigh
     const validate = () => {
       clearTimeout(timeout);
       timeout = setTimeout(async () => {
-        const model = record.model, version = model.getVersionId(), contextVersion = contextVersions.get(id);
+        const model = record.model, context = getCompletionContext(id);
+        if (!context?.sessionId || model.isDisposed()) return;
+        const version = model.getVersionId(), contextVersion = contextVersions.get(id);
         try {
-          const { markers } = await runtime.request<{ markers: LanguageMarker[] }>("language.diagnostics", { ...languageParams(contexts.get(id), { language: model.getLanguageId() as Language, code: model.getValue() }), block_id: id });
+          const { markers } = await runtime.request<{ markers: LanguageMarker[] }>("language.diagnostics", { ...languageParams(context, { language: model.getLanguageId() as Language, code: model.getValue() }), block_id: id });
           if (disposed || model.isDisposed() || model.getVersionId() !== version || contextVersions.get(id) !== contextVersion) return;
           monaco.editor.setModelMarkers(model, "datapyn", (markers ?? []).map((marker) => ({ startLineNumber: marker.start_line, startColumn: marker.start_column, endLineNumber: marker.end_line, endColumn: marker.end_column, message: marker.message, severity: marker.severity === "warning" ? monaco.MarkerSeverity.Warning : marker.severity === "info" ? monaco.MarkerSeverity.Info : monaco.MarkerSeverity.Error })));
         } catch { /* Diagnostics never prevent editing or execution. */ }

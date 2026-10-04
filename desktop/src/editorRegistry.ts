@@ -1,16 +1,37 @@
 import type * as monaco from "monaco-editor/editor/editor.api.js";
-import type { CompletionContext, LanguageRequestGate } from "./editorLanguage";
+import type { CompletionContext, InlineRequestGate, LanguageRequestGate } from "./editorLanguage";
 import { findInDocuments } from "./documentWindows";
 
 export interface EditorPreferences { fontFamily?: string; fontSize?: number; wordWrap?: boolean; minimap?: boolean; lineNumbers?: boolean; tabSize?: number; readOnly?: boolean; autocomplete?: boolean; aiAutocomplete?: boolean;theme?:"dark"|"light"|"system" }
-export interface ModelRecord { model: monaco.editor.ITextModel; viewState: monaco.editor.ICodeEditorViewState | null; editor?: monaco.editor.IStandaloneCodeEditor; container?: HTMLElement; clearMarkers?: () => void }
+export interface ModelRecord { model: monaco.editor.ITextModel; viewState: monaco.editor.ICodeEditorViewState | null; editor?: monaco.editor.IStandaloneCodeEditor; container?: HTMLElement; clearMarkers?: () => void; completionIntent?: number; completionNavigation?: number; completionQuery?: { version: number; line: number; column: number; intent?: number; navigation?: number } }
 export const models = new Map<string, ModelRecord>();
 export const contexts = new Map<string, CompletionContext>();
+let completionContextResolver: ((blockId:string)=>CompletionContext|undefined) | undefined;
+export function setCompletionContextResolver(resolve:(blockId:string)=>CompletionContext|undefined) { completionContextResolver=resolve;return()=>{if(completionContextResolver===resolve)completionContextResolver=undefined;}; }
+export function getCompletionContext(blockId:string):CompletionContext|undefined {
+  // A request reading its context must not schedule itself again. External
+  // namespace/schema events use the notifying setter below to refresh live UI.
+  if(completionContextResolver){const context=completionContextResolver(blockId);if(context)setCompletionContext(blockId,context,false);else return undefined;}
+  return contexts.get(blockId);
+}
 export const completionGates = new Map<string, LanguageRequestGate>();
+export const inlineGates = new Map<string, InlineRequestGate>();
 export const contextVersions = new Map<string, number>();
 export const diagnosticRefreshers = new Map<string, () => void>();
 export const editorPreferences = new Map<string, EditorPreferences | undefined>();
 export const pendingInsertions = new Map<string, string[]>();
+const manualSuggestions = new Set<string>();
+interface EditorSuggestionController extends monaco.editor.IEditorContribution { triggerSuggest(onlyFrom?:Set<monaco.languages.CompletionItemProvider>,auto?:boolean,noFilter?:boolean):void }
+export function consumeManualSuggestions(id:string) { const requested = manualSuggestions.has(id); manualSuggestions.delete(id); return requested; }
+export function triggerLocalSuggestions(id:string) {
+  const editor = models.get(id)?.editor; if (!editor) return;
+  manualSuggestions.add(id);
+  const controller=editor.getContribution?.<EditorSuggestionController>("editor.contrib.suggestController");
+  // Monaco's action is disabled whenever its widget is visible (including
+  // "No suggestions"). The controller can refresh that widget with new data.
+  if(controller?.triggerSuggest)controller.triggerSuggest();
+  else {editor.trigger("datapyn", "hideSuggestWidget", {});editor.trigger("datapyn", "editor.action.triggerSuggest", {});}
+}
 const restoredViews=new Map<string,monaco.editor.ICodeEditorViewState>();
 const viewStateListeners=new Set<(blockId:string,state:monaco.editor.ICodeEditorViewState)=>void>();
 export function subscribeEditorViewStates(listener:(blockId:string,state:monaco.editor.ICodeEditorViewState)=>void){viewStateListeners.add(listener);return()=>viewStateListeners.delete(listener);}
@@ -34,11 +55,20 @@ export function markEditorFocused(id: string): void { focusedEditor = id; }
 export function wasEditorFocused(id: string): boolean { return focusedEditor === id; }
 export function consumePendingFocus(id: string): boolean { if (pendingFocus !== id) return false; pendingFocus = undefined; return true; }
 function shallowArray<T>(a:readonly T[],b:readonly T[]){return a===b||(a.length===b.length&&a.every((value,index)=>value===b[index]));}
-export function setCompletionContext(blockId: string, context: CompletionContext) {
+function sameVariables(a:CompletionContext["variables"],b:CompletionContext["variables"]) { return a===b||(a.length===b.length&&a.every((value,index)=>{const next=b[index];return value===next||(value.name===next.name&&value.type===next.type&&value.module===next.module&&shallowArray(value.columns??[],next.columns??[]));})); }
+function sameSiblings(a:CompletionContext["siblings"],b:CompletionContext["siblings"]) { return a===b||((a?.length??0)===(b?.length??0)&&(a??[]).every((value,index)=>{const next=b![index];return value===next||(value.name===next.name&&value.code===next.code&&value.language===next.language&&value.cellType===next.cellType);})); }
+export function setCompletionContext(blockId: string, context: CompletionContext, notify=true) {
   const previous=contexts.get(blockId);
-  if(previous===context||(previous&&previous.sessionId===context.sessionId&&previous.connectionId===context.connectionId&&previous.database===context.database&&previous.schema===context.schema&&previous.globalImports===context.globalImports&&previous.preamble===context.preamble&&shallowArray(previous.variables,context.variables)&&shallowArray(previous.tables,context.tables)))return;
+  if(previous===context||(previous&&previous.sessionId===context.sessionId&&previous.connectionId===context.connectionId&&previous.database===context.database&&previous.schema===context.schema&&previous.globalImports===context.globalImports&&previous.preamble===context.preamble&&previous.schemaVersion===context.schemaVersion&&previous.namespaceVersion===context.namespaceVersion&&previous.schemaSnapshot===context.schemaSnapshot&&sameVariables(previous.variables,context.variables)&&shallowArray(previous.tables,context.tables)&&sameSiblings(previous.siblings,context.siblings)))return;
   contexts.set(blockId, context); contextVersions.set(blockId, (contextVersions.get(blockId) ?? 0) + 1);
-  completionGates.get(blockId)?.invalidate(); models.get(blockId)?.clearMarkers?.(); diagnosticRefreshers.get(blockId)?.();
+  completionGates.get(blockId)?.invalidate(); inlineGates.get(blockId)?.cancel(); models.get(blockId)?.clearMarkers?.();
+  if(!notify)return;
+  diagnosticRefreshers.get(blockId)?.();
+  const record = models.get(blockId), query = record?.completionQuery, editor = record?.editor, position = editor?.getPosition?.();
+  if (query && editor?.hasTextFocus?.() && record?.model.getVersionId() === query.version && query.intent === record.completionIntent && query.navigation === record.completionNavigation && position?.lineNumber === query.line && position.column === query.column) queueMicrotask(()=>{
+    const current=models.get(blockId),cursor=current?.editor?.getPosition?.();
+    if(current===record&&current.editor===editor&&editor.hasTextFocus()&&current.completionQuery===query&&current.model.getVersionId()===query.version&&query.intent===current.completionIntent&&query.navigation===current.completionNavigation&&cursor?.lineNumber===query.line&&cursor.column===query.column)triggerLocalSuggestions(blockId);
+  });
 }
 export function selectedCode(blockId: string): string | undefined {
   const record = models.get(blockId); if (!record || record.model.isDisposed()) return;
@@ -78,10 +108,12 @@ export function forceAutocomplete(blockId: string) {
   const editor = models.get(blockId)?.editor; if (!editor) return;
   editor.focus();
   if (editorPreferences.get(blockId)?.aiAutocomplete) {
+    const record = models.get(blockId); if(record){record.completionQuery=undefined;record.completionIntent=(record.completionIntent??0)+1;}
+    completionGates.get(blockId)?.cancel();
     // A visible suggestion list takes precedence over accepting ghost text with Tab.
     editor.trigger("datapyn", "hideSuggestWidget", {});
     editor.trigger("datapyn", "editor.action.inlineSuggest.trigger", { explicit: true });
-  } else editor.trigger("datapyn", "editor.action.triggerSuggest", {});
+  } else triggerLocalSuggestions(blockId);
 }
 export function transformEditorSelection(blockId: string, transform: "upper" | "lower" | "duplicate" | "deleteLine") {
   const editor = models.get(blockId)?.editor; if (!editor) return;
@@ -100,7 +132,8 @@ export function replaceEditorCode(blockId: string, code: string) {
   record.model.pushStackElement(); record.model.pushEditOperations(record.editor?.getSelections() ?? [], [{ range: record.model.getFullModelRange(), text: code }], () => record.editor?.getSelections() ?? null); record.model.pushStackElement();
 }
 export function disposeModel(blockId: string) {
+  manualSuggestions.delete(blockId);
   restoredViews.delete(blockId);
-  models.get(blockId)?.model.dispose(); models.delete(blockId); contexts.delete(blockId); completionGates.get(blockId)?.invalidate(); completionGates.delete(blockId); contextVersions.delete(blockId); diagnosticRefreshers.delete(blockId); editorPreferences.delete(blockId); pendingInsertions.delete(blockId); if (pendingFocus === blockId) pendingFocus = undefined;
+  models.get(blockId)?.model.dispose(); models.delete(blockId); contexts.delete(blockId); completionGates.get(blockId)?.invalidate(); completionGates.delete(blockId); inlineGates.get(blockId)?.cancel();inlineGates.delete(blockId);contextVersions.delete(blockId); diagnosticRefreshers.delete(blockId); editorPreferences.delete(blockId); pendingInsertions.delete(blockId); if (pendingFocus === blockId) pendingFocus = undefined;
   if (focusedEditor === blockId) focusedEditor = undefined;
 }

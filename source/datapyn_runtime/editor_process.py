@@ -10,6 +10,10 @@ from .process_group import initialize_kernel_group, own_process_group
 from .stdio import isolate_kernel_output
 
 
+class _SupersededCompletion(Exception):
+    pass
+
+
 def _editor_main(connection):
     initialize_kernel_group()
     isolate_kernel_output()
@@ -83,7 +87,7 @@ class CompletionProcess:
             try:
                 deadline = time.monotonic() + timeout
                 if not self.ready:
-                    initialized = self._receive(process, connection, deadline)
+                    initialized = self._receive(process, connection, deadline, superseded)
                     if not initialized.get("ready"):
                         self._stop()
                         return initialized
@@ -91,13 +95,33 @@ class CompletionProcess:
                 # Readiness is confirmed before sending a potentially large
                 # document, so a stuck initializer cannot block a pipe write.
                 connection.send({"params": params, "context": context})
-                return self._receive(process, connection, deadline)
+                return self._receive(process, connection, deadline, superseded)
+            except _SupersededCompletion:
+                self._stop()
+                return {"result": {"items": [], "superseded": True}}
             except BaseException:
                 self._stop()
                 raise
 
-    def _receive(self, process, connection, deadline):
+    def warmup(self, timeout=12):
+        with self.lock:
+            process, connection = self._start()
+            if self.ready:
+                return
+            try:
+                initialized = self._receive(process, connection, time.monotonic() + timeout)
+                if not initialized.get("ready"):
+                    self._stop()
+                    raise RuntimeError("Python completion initializer is unavailable")
+                self.ready = True
+            except BaseException:
+                self._stop()
+                raise
+
+    def _receive(self, process, connection, deadline, superseded=None):
         while not self.closed.is_set() and time.monotonic() < deadline:
+            if superseded is not None and superseded():
+                raise _SupersededCompletion()
             if connection.poll(min(0.05, max(0, deadline - time.monotonic()))):
                 return connection.recv()
             if not process.is_alive():

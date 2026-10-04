@@ -1,8 +1,8 @@
 import {afterEach,describe,expect,it,vi} from "vitest";
-import {captureEditorViewState,restoreEditorViewState,subscribeEditorViewStates,takeRestoredEditorViewState,consumePendingFocus,disposeModel,focusEditor,forceAutocomplete,insertInEditor,models,pendingInsertions,selectedCode,setCompletionContext,contexts,contextVersions,editorPreferences,revealEditorBlock} from "./editorRegistry";
+import {captureEditorViewState,restoreEditorViewState,subscribeEditorViewStates,takeRestoredEditorViewState,consumePendingFocus,disposeModel,focusEditor,forceAutocomplete,insertInEditor,models,pendingInsertions,selectedCode,setCompletionContext,contexts,contextVersions,editorPreferences,revealEditorBlock,consumeManualSuggestions,triggerLocalSuggestions,getCompletionContext,setCompletionContextResolver,completionGates,inlineGates,diagnosticRefreshers} from "./editorRegistry";
 import {registerDocument} from "./documentWindows";
 
-afterEach(()=>{models.clear();pendingInsertions.clear();contexts.clear();contextVersions.clear();editorPreferences.clear();vi.unstubAllGlobals();});
+afterEach(()=>{models.clear();pendingInsertions.clear();contexts.clear();contextVersions.clear();completionGates.clear();inlineGates.clear();diagnosticRefreshers.clear();editorPreferences.clear();vi.unstubAllGlobals();});
 describe("Editor focus across viewport virtualization",()=>{
   it("restores private cursor/scroll metadata and emits only changed view states without reading code",()=>{
     const state={cursorState:[],viewState:{scrollTop:30,scrollLeft:0},contributionsState:{}};
@@ -47,6 +47,43 @@ describe("Editor focus across viewport virtualization",()=>{
     editorPreferences.set("local",{aiAutocomplete:true});forceAutocomplete("local");
     expect(editor.trigger).toHaveBeenLastCalledWith("datapyn","editor.action.inlineSuggest.trigger",{explicit:true});
     expect(()=>forceAutocomplete("absent")).not.toThrow();
+  });
+  it("keeps Ctrl+Space/manual suggestions available when automatic completion is disabled",()=>{
+    const editor={trigger:vi.fn()};models.set("manual",{editor} as never);editorPreferences.set("manual",{autocomplete:false});
+    triggerLocalSuggestions("manual");expect(editor.trigger).toHaveBeenCalledWith("datapyn","editor.action.triggerSuggest",{});
+    expect(consumeManualSuggestions("manual")).toBe(true);expect(consumeManualSuggestions("manual")).toBe(false);
+  });
+  it("refreshes an already visible empty/suggestion widget through the controller instead of its disabled action",()=>{
+    const controller={triggerSuggest:vi.fn()},editor={getContribution:vi.fn(()=>controller),trigger:vi.fn()};models.set("visible-widget",{editor} as never);
+    triggerLocalSuggestions("visible-widget");expect(editor.getContribution).toHaveBeenCalledWith("editor.contrib.suggestController");expect(controller.triggerSuggest).toHaveBeenCalledOnce();expect(editor.trigger).not.toHaveBeenCalled();expect(consumeManualSuggestions("visible-widget")).toBe(true);
+  });
+  it("closes the existing widget before triggering suggestions if an editor exposes no controller",()=>{
+    const editor={getContribution:vi.fn(()=>undefined),trigger:vi.fn()};models.set("fallback-widget",{editor} as never);triggerLocalSuggestions("fallback-widget");
+    expect(editor.trigger.mock.calls).toEqual([["datapyn","hideSuggestWidget",{}],["datapyn","editor.action.triggerSuggest",{}]]);
+  });
+  it("cancels pending local enrichment before forcing AI so the dropdown cannot steal Tab",()=>{
+    const editor={focus:vi.fn(),trigger:vi.fn()},cancel=vi.fn();const record={editor,completionQuery:{version:1,line:1,column:1}};
+    models.set("ai-race",record as never);completionGates.set("ai-race",{cancel} as never);editorPreferences.set("ai-race",{aiAutocomplete:true});
+    forceAutocomplete("ai-race");expect(cancel).toHaveBeenCalledOnce();expect(record.completionQuery).toBeUndefined();expect(models.get("ai-race")?.completionIntent).toBe(1);
+  });
+  it("compares enriched metadata and sibling source semantically without cancelling every React update",()=>{
+    const context={variables:[{name:"df",type:"DataFrame",columns:["name"]}],tables:["main.sales"],siblings:[{name:"example",code:"x = 1",language:"python" as const}],schemaVersion:1,namespaceVersion:2};
+    setCompletionContext("metadata",context);const version=contextVersions.get("metadata");
+    setCompletionContext("metadata",{...context,variables:[{...context.variables[0],columns:["name"]}],siblings:[{...context.siblings[0]}]});expect(contextVersions.get("metadata")).toBe(version);
+    setCompletionContext("metadata",{...context,variables:[{...context.variables[0],columns:["other"]}]});expect(contextVersions.get("metadata")).toBe(version!+1);
+    setCompletionContext("metadata",{...context,siblings:[{...context.siblings[0],code:"x = 2"}]});expect(contextVersions.get("metadata")).toBe(version!+2);
+  });
+  it("resolves the requesting block's context lazily and releases the callback on profile disposal",()=>{
+    const context={variables:[],tables:["owned_table"],sessionId:"owned-session"};const resolve=vi.fn((id:string)=>id==="owned"?context:undefined),release=setCompletionContextResolver(resolve);
+    expect(getCompletionContext("owned")).toBe(context);expect(resolve).toHaveBeenCalledWith("owned");expect(getCompletionContext("other")).toBeUndefined();
+    release();expect(getCompletionContext("owned")).toBe(context);expect(getCompletionContext("other")).toBeUndefined();
+  });
+  it("does not reschedule a diagnostic or suggestion request when that request lazily reads newer context",()=>{
+    let revision=1;const refresh=vi.fn(),invalidate=vi.fn();diagnosticRefreshers.set("lazy",refresh);completionGates.set("lazy",{invalidate} as never);
+    const release=setCompletionContextResolver(()=>({variables:[],tables:[],sessionId:"s",namespaceVersion:revision}));
+    expect(getCompletionContext("lazy")?.namespaceVersion).toBe(1);revision=2;expect(getCompletionContext("lazy")?.namespaceVersion).toBe(2);
+    expect(refresh).not.toHaveBeenCalled();expect(invalidate).toHaveBeenCalledTimes(2);
+    setCompletionContext("lazy",{variables:[],tables:[],sessionId:"s",namespaceVersion:3});expect(refresh).toHaveBeenCalledOnce();release();
   });
   it("finds offscreen blocks in their popout document and activates that native window before focus",()=>{
     const main={querySelector:()=>null},view={focus:vi.fn()},scroll=vi.fn();

@@ -11,7 +11,7 @@ import { Activity, ArrowDown, ArrowUp, Braces, Check, ChevronDown, ChevronRight,
 import logo from "./assets/datapyn-logo.svg";
 import { errorText, isDesktop, runtime } from "./runtime";
 import { WorkspaceController, encodeDocument, type Block, type SessionDocument, type WorkspaceStorage } from "./workspace";
-import { disposeModel, focusEditor, insertInEditor, selectedCode, setCompletionContext, editorAction, formatEditor, forceAutocomplete, transformEditorSelection, getRegisteredEditor } from "./editorRegistry";
+import { disposeModel, focusEditor, insertInEditor, selectedCode, setCompletionContext,setCompletionContextResolver, editorAction, formatEditor, forceAutocomplete, transformEditorSelection, getRegisteredEditor } from "./editorRegistry";
 import type { EditorPreferences } from "./MonacoBlock";
 import { ResultGrid } from "./ResultGrid";
 import { ConnectionDialog } from "./ConnectionDialog";
@@ -44,6 +44,7 @@ import {useWindowLayout} from "./useWindowLayout";
 import {flushNativePopoutLayouts} from "./nativePopoutLayout";
 import {OutputRevealTracker} from "./outputReveal";
 import {hasVisibleShortcutDialog} from "./shortcutModalGuard";
+import {SessionCompletionIndex,SessionLanguageContexts} from "./sessionCompletion";
 const DataActions = lazy(()=>import("./DataActions").then(m=>({default:m.DataActions})));
 const VariableInspector = lazy(()=>import("./VariableInspector").then(m=>({default:m.VariableInspector})));
 const ChartPanel = lazy(()=>import("./ChartPanel").then(m=>({default:m.ChartPanel})));
@@ -79,6 +80,18 @@ export function App() {
   const catalogState=useSyncExternalStore(connections.subscribe,connections.getSnapshot);
   const state = useSyncExternalStore(workspace.subscribe, workspace.getSnapshot);
   const session = state.sessions.find((item) => item.id === state.activeId)!;
+  const languageContexts=useRef(new SessionLanguageContexts()),completionIndex=useRef(new SessionCompletionIndex());
+  const [languageRevision,setLanguageRevision]=useState(0);
+  useEffect(()=>setCompletionContextResolver(blockId=>{
+    const snapshot=workspace.getSnapshot(),active=workspace.session();
+    const owner=active?.blocks.some(b=>b.id===blockId) ? active : snapshot.sessions.find(s=>s.blocks.some(b=>b.id===blockId));
+    return owner ? completionIndex.current.context(owner,blockId,languageContexts.current) : undefined;
+  }),[]);
+  useEffect(()=>{
+    let disposed=false,cleanup:(()=>void)|undefined;
+    void runtime.subscribe(event=>{if(languageContexts.current.accept(event))setLanguageRevision(n=>n+1);}).then(fn=>{if(disposed)fn();else cleanup=fn;});
+    return()=>{disposed=true;cleanup?.();};
+  },[]);
   const [preferences, setPreferences] = useState(loadPreferences);
   const [leftVisible, setLeftVisible] = useState(preferences.leftVisible), [rightVisible, setRightVisible] = useState(preferences.rightVisible);
   const [connectionDialog, setConnectionDialog] = useState(false), [settingsDialog, setSettingsDialog] = useState(false);
@@ -444,11 +457,10 @@ export function App() {
     observe(); const unsubscribe=workspace.subscribe(observe); return () => {unsubscribe();};
   }, [activateBottom]);
   useEffect(() => {
-    let preamble="";
-    session.blocks.forEach((block) => {setCompletionContext(block.id, { variables: session.variables, tables:[], sessionId: session.id,
-      connectionId: block.connection_id ?? session.savedConnectionId, database: block.database_name ?? session.database, schema: block.schema ?? session.schema,
-      preamble, globalImports: "import pandas as pd\nimport numpy as np\nimport polars as pl" });if(block.language === "python" && (!block.cell_type || block.cell_type === "code")){preamble=(preamble+"\n"+block.code).slice(-200_000);const line=preamble.indexOf("\n");if(preamble.length === 200_000 && line >= 0)preamble=preamble.slice(line+1);}});
-  }, [session.id, session.blocks, session.variables, session.savedConnectionId, session.database, session.schema]);
+    languageContexts.current.retain(new Set(state.sessions.map(s=>s.id)));
+    const context=completionIndex.current.context(session,session.focusedBlockId,languageContexts.current);
+    if(context)setCompletionContext(session.focusedBlockId,context);
+  }, [session.id, session.focusedBlockId, session.blocks, session.variables, session.results, session.savedConnectionId, session.database, session.schema,languageRevision,state.sessions]);
 
   const result = activeResult[session.id] === "__images__" && (session.richOutputs?.length || session.images.length) ? undefined : session.results.find((item) => item.result_id === activeResult[session.id]) ?? session.results.at(-1);
   const focusedBlock = session.blocks.find((block) => block.id === session.focusedBlockId);

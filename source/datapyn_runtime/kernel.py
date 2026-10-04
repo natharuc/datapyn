@@ -321,9 +321,11 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300):
         })
         return connector
 
-    def publish_context(params=None, *, metadata=False):
+    def publish_context(params=None, *, metadata=False, invalidated=False):
         key = context_key
         context = {"key": key, "variables": namespace_snapshot(namespace), "connection_id": pool.active_key[0] if pool.active_key else None}
+        if invalidated:
+            context.update({"schema": {}, "metadata_invalidated": True})
         if metadata and connector is not None:
             schema = pool.explorer().completion_schema((params or {}).get("code", ""))
             context.update({"schema": schema, "database": schema.get("database", ""),
@@ -460,7 +462,12 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300):
                 # Keep the previous durable generation until a later success.
                 snapshot_dirty = error is None
                 send({"event": "execution.finished", "payload": payload, "job_id": job_id})
-                publish_context()
+                from .sql_context import changes_metadata
+                invalidated = params["language"] == "sql" and connector is not None and changes_metadata(params["code"])
+                if invalidated:
+                    pool.explorer().cache.clear()
+                    pool.explorer().column_cache.clear()
+                publish_context(invalidated=invalidated)
                 continue
             try:
                 if method == "connection.connect":

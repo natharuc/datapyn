@@ -99,6 +99,7 @@ fn allowed_method(method: &str) -> bool {
             | "explorer.query"
             | "explorer.use_database"
             | "language.complete"
+            | "language.cancel"
             | "language.format"
             | "language.diagnostics"
             | "parameters.scan"
@@ -657,6 +658,7 @@ mod tests {
     #[test]
     fn native_bridge_only_exposes_runtime_contract() {
         assert!(allowed_method("execution.cancel"));
+        assert!(allowed_method("language.cancel"));
         assert!(allowed_method("workspace.read"));
         assert!(!allowed_method("shell.execute"));
         assert!(!allowed_method(""));

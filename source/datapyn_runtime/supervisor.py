@@ -68,6 +68,7 @@ class SessionRuntime:
         self._restart_times = deque(maxlen=4)
         self.language_contexts = OrderedDict()
         self.language_variables = {}
+        self.language_version = 0
         self._context_requests = set()
         self._context_codes = {}
         self._thread = threading.Thread(target=self._loop, name=f"session-{session_id}", daemon=True)
@@ -255,7 +256,16 @@ class SessionRuntime:
             if "language_context" in message:
                 context = message["language_context"]
                 key = context.get("key", "default")
+                self.language_version += 1
+                if context.get("metadata_invalidated"):
+                    for old_key, old_context in self.language_contexts.items():
+                        if old_context.get("connection_id") == context.get("connection_id"):
+                            old_context["schema"] = {}
+                            old_context["schema_complete"] = False
+                            self._context_codes.pop(old_key, None)
                 self.language_contexts[key] = {**self.language_contexts.get(key, {}), **context}
+                merged = self.language_contexts[key]
+                merged["version"] = self.language_version
                 self.language_contexts.move_to_end(key)
                 while len(self.language_contexts) > 32:
                     old_key, _old_context = self.language_contexts.popitem(last=False)
@@ -263,8 +273,11 @@ class SessionRuntime:
                 self.language_variables = context.get("variables", self.language_variables)
                 self._context_requests.discard(key)
                 self.emit({"event": "language.context_updated", "payload": {
-                    "session_id": self.session_id, "connection_id": context.get("connection_id"),
-                    "database": context.get("database", ""), "schema": context.get("schema_name", ""),
+                    "session_id": self.session_id, "connection_id": merged.get("connection_id"),
+                    "database": merged.get("database", ""), "schema": merged.get("schema_name", ""),
+                    "version": self.language_version, "variables": self.language_variables,
+                    **({"schema_snapshot": context["schema"]} if "schema" in context else {}),
+                    **({"metadata_invalidated": True} if context.get("metadata_invalidated") else {}),
                 }})
                 return
             event = message.get("event")
@@ -369,17 +382,20 @@ class SessionRuntime:
             key = self.context_key(params)
             context = dict(self.language_contexts.get(key) or {})
             context["variables"] = dict(self.language_variables)
+            context["version"] = self.language_version
             code = params.get("code", "")
-            previous_code, previous_time = self._context_codes.get(key, (None, 0))
+            from .sql_context import metadata_signature
+            signature = metadata_signature(code) if params.get("language") == "sql" and isinstance(code, str) and len(code) <= MAX_CODE_BYTES else ()
+            previous_signature, previous_time = self._context_codes.get(key, (None, 0))
             now = time.monotonic()
-            needs_context = not context.get("schema") or (code != previous_code and now - previous_time > 0.4)
+            needs_context = signature != previous_signature or now - previous_time >= 60
             if params.get("language") == "sql" and key not in self._context_requests and needs_context:
                 # Metadata work waits safely behind executions. The language
                 # request itself immediately uses the latest immutable snapshot.
                 self._context_requests.add(key)
                 if len(self._queue) < MAX_QUEUED_JOBS:
                     self._queue.append(Job("language.context", dict(params)))
-                    self._context_codes[key] = (code, now)
+                    self._context_codes[key] = (signature, now)
                     self._wake.set()
                 else:
                     self._context_requests.discard(key)
@@ -692,6 +708,12 @@ class Supervisor:
                 session.idle_timeout = seconds
                 session.enqueue(method, {"seconds": seconds})
             return {"seconds": seconds}
+        if method == "language.cancel":
+            session_id = params.get("session_id")
+            if session_id is not None:
+                self._identifier(session_id, "session_id")
+            return self.background.cancel_completion(session_id, self._identifier(params.get("block_id"), "block_id"),
+                                                     self._identifier(params.get("completion_id"), "completion_id"))
         if method in {"language.complete", "language.diagnostics", "language.format", "parameters.scan"}:
             routed = self._route(params)
             context = self._session(params).editor_context(routed) if params.get("session_id") else {}

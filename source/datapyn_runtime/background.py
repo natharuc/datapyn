@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 import multiprocessing
-import sys
 import threading
 import time
 
@@ -42,14 +41,28 @@ class BackgroundJobs:
         self.slots = threading.BoundedSemaphore(16)
         self.closed = threading.Event()
         from .editor_process import CompletionProcess
-        use_process = getattr(sys, "frozen", False) if completion_process is None else completion_process
+        # Both development and frozen builds keep native inference on an owned,
+        # killable main thread. Local threads cannot interrupt a stuck library.
+        use_process = True if completion_process is None else completion_process
         self.completion_worker = CompletionProcess(self.closed) if use_process else None
         self.tests = set()
         self.lock = threading.Lock()
         self.latest = {}
+        self.completion_ids = {}
         self.sequence = 0
         self.active_count = 0
         self.test_jobs = {}
+        if self.completion_worker is not None:
+            self.warmup_thread = threading.Thread(target=self._warm_completion, name="editor-warmup", daemon=True)
+            self.warmup_thread.start()
+
+    def _warm_completion(self):
+        try:
+            self.completion_worker.warmup()
+        except Exception:
+            # Startup remains usable if inference fails; an explicit request
+            # retries and surfaces its actual failure through the protocol.
+            pass
 
     def submit(self, request_id, method, params, context):
         if not self.slots.acquire(blocking=False):
@@ -69,6 +82,8 @@ class BackgroundJobs:
             if method in {"language.complete", "language.diagnostics", "parameters.scan"} and params.get("block_id"):
                 key = (params.get("session_id"), params["block_id"], method)
                 self.latest[key] = sequence
+                if method == "language.complete":
+                    self.completion_ids[key] = (sequence, params.get("completion_id"))
         executor = self.delivery_executor if method in {"notifications.deliver_prepared", "notifications.test"} else self.executor
         try:
             future = executor.submit(self._run, method, dict(params), context, key, sequence, cancelled)
@@ -87,12 +102,25 @@ class BackgroundJobs:
             finally:
                 with self.lock:
                     self.active_count -= 1
+                    if key is not None and self.latest.get(key) == sequence:
+                        self.latest.pop(key, None)
+                        self.completion_ids.pop(key, None)
                     if test_id:
                         self.test_jobs.pop(test_id, None)
                 self.slots.release()
             if not self.closed.is_set():
                 self.emit({"id": request_id, **message})
         future.add_done_callback(done)
+
+    def cancel_completion(self, session_id, block_id, completion_id):
+        key = (session_id, block_id, "language.complete")
+        with self.lock:
+            current = self.completion_ids.get(key)
+            if current is None or current[1] != completion_id:
+                return {"status": "already_finished"}
+            self.latest.pop(key, None)
+            self.completion_ids.pop(key, None)
+            return {"status": "cancelling"}
 
     def cancel_test(self, test_id):
         with self.lock:
