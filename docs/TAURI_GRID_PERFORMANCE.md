@@ -8,6 +8,7 @@ A grade conserva o DataFrame no kernel Python e envia ao frontend somente blocos
 - Páginas visuais têm até 200 linhas × 32 colunas. A fila usa dois pedidos simultâneos, debounce de 35 ms, prioridade para a região atual e descarte das respostas de uma visualização antiga. Uma troca de filtro não libera artificialmente slots ainda ocupados por IPC antigo.
 - Cache LRU tem três limites: 40 blocos, 250 mil células e 16 MiB de memória JavaScript estimada. Cabeçalhos vêm do descritor original. Chegadas de páginas atualizam somente as células visíveis, agrupadas em `requestAnimationFrame`, por `DataEditorRef.updateCells`.
 - Filtros e ordenações conservam posições `uint32`/`uint64`, em vez de cópias completas de DataFrames. Cache LRU de posições: 64 visualizações e 256 MiB por kernel; execução, restauração e liberação de resultados invalidam os índices. Ordenação continua estável, com nulos ao final e seleção após filtro/ordenação.
+- O popup dos cabeçalhos consulta uma coluna original, com limite de 10.000 linhas examinadas, 50 sugestões e 32 KiB na lista JSON. Informa amostragem e descarta respostas antigas. Intervalos, texto literal, bool/nulos e ordenação continuam sendo processados no kernel sobre a fonte inteira; a WebView não executa `unique()` nem ordena milhões de linhas. Ver `TAURI_GRID_HEADERS.md`.
 - Paging Pandas extrai apenas os elementos das colunas solicitadas antes de construir o pequeno DataFrame da página. Isso evita copiar colunas inteiras em DataFrames fragmentados. Polars permanece nativo; a conversão de timestamps com precisão de nanossegundos é restrita à página. A conversão completa para Pandas ocorre somente em ações explícitas que precisem dela.
 - Seleções de linhas/colunas usam faixas compactas. Selecionar 10 milhões de linhas consecutivas não cria 10 milhões de números em JavaScript. Retângulos descontínuos conservam exatamente as células selecionadas.
 - Texto/Excel/JSON são formatados em Web Worker local, com transferência em lotes e acknowledgement, limite incremental de 16 MiB e cancelamento. A cópia continua limitada a 200 mil células; seleções maiores orientam a usar exportação. SQL é gerado no kernel, com cancelamento cooperativo. Decimal, bigint, Unicode, nulos e cabeçalhos continuam preservados.
@@ -38,6 +39,8 @@ O executável Tauri recompilado passou pelos três smokes congelados. No smoke c
 
 ## Reprodução e regressões
 
+No aceite congelado dos cabeçalhos em 04/10/2026, o RPC de sugestões sobre 10 milhões de linhas levou 13,64 ms, examinando no máximo 10.000 linhas. O primeiro RPC com filtro/ordenação levou 49,24 ms, e a mediana das páginas seguintes foi 0,78 ms para 100 linhas. Esses tempos incluem o transporte do runtime empacotado, mas não pintura ou banco remoto. O aceite nativo verificou filtros combinados em um milhão de linhas e troca de janela do grid sem materializar o conjunto na WebView.
+
 ```powershell
 .venv/Scripts/python.exe scripts/tauri/benchmark_grid.py --baseline 8ebcf14
 .venv/Scripts/python.exe scripts/tauri/benchmark_grid.py
@@ -50,4 +53,4 @@ npm --prefix desktop run desktop:build -- --no-bundle
 
 Regressões cobrem fila de mil saltos, dois pedidos em voo, cache por bytes/células/LRU, damage recortado, reset e abort, seleções de 1M/10M sem iteração dos índices, worker/Unicode/precisão/limites, DataFrames consolidados e fragmentados sem materialização de colunas completas, ordenação estável, índices repetidos, Polars nativo, timestamps ns e exports de UInt64 nullable/Decimal.
 
-Os 350 testes frontend e 407 testes runtime passaram na integração. Após o último ajuste de extração, 152 testes relacionados passaram, incluindo as 25 regressões de paginação. Banco remoto, pico total de RAM de cada carga do usuário e todas as combinações possíveis de dtype ainda dependem do cenário real.
+Os 350 testes frontend e 407 testes runtime passaram na integração original da paginação. Após o último ajuste de extração, 152 testes relacionados passaram, incluindo as 25 regressões de paginação. A integração dos cabeçalhos passou por 530 testes frontend e 602 testes runtime. Banco remoto, pico total de RAM de cada carga do usuário e todas as combinações possíveis de dtype ainda dependem do cenário real.

@@ -4,9 +4,9 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import DataEditor, { CompactSelection, GridCellKind, type DataEditorProps, type DataEditorRef, type GridCell, type GridColumn, type GridSelection, type Item, type Rectangle } from "@glideapps/glide-data-grid";
 import "@glideapps/glide-data-grid/dist/index.css";
 import { Copy, Filter, ArrowDownAZ, LoaderCircle, Settings2, X } from "lucide-react";
-import { errorText, type Column, type Primitive, type ResultRef, type RuntimeTransport } from "./runtime";
+import { errorText, type Column, type ColumnValues, type Primitive, type ResultRef, type RuntimeTransport } from "./runtime";
 import { selectionRectangles,selectedCellCount } from "./gridSelection";
-import type { DataView } from "./dataTypes";
+import type { ColumnFilter, DataView } from "./dataTypes";
 import { formatCell, type ColumnFormat, type ColumnFormats } from "./gridFormat";
 import { cellSelected, MAX_COPY_CELLS, selectedLayout, type CopyFormat, type CopyTable } from "./gridClipboard";
 import { formatClipboard } from "./clipboardFormatClient";
@@ -16,6 +16,11 @@ import { useOwnerDocumentRevision } from "./useOwnerDocument";
 import { GridPageCache, GRID_PAGE_COLUMNS, GRID_PAGE_ROWS, type GridPage, type GridTile } from "./gridPageCache";
 import { GridPageScheduler, StaleGridRequest, viewportTiles } from "./gridPageScheduler";
 import { pageDamage } from "./gridPageDamage";
+import { GridRepaintScheduler } from "./gridRepaintScheduler";
+import { ColumnHeaderPopup } from "./ColumnHeaderPopup";
+import { filterSummary } from "./gridColumnFilters";
+import { containsHeaderPoint, headerSortBounds } from "./gridHeaderControls";
+import { reconcileGridView } from "./gridViewColumns";
 import "./resultGrid.css";
 
 const GridCanvas = memo(DataEditor);
@@ -23,6 +28,7 @@ const NO_DELETE = () => false;
 const GRID_KEYBINDINGS = { copy: false } as const;
 const LOADING_CELL: GridCell = { kind: GridCellKind.Loading, allowOverlay: false };
 const NULL_THEME = { textDark: "#8391a5" };
+const NO_COLUMN_FILTERS: ColumnFilter[] = [];
 function consecutiveRuns(indexes: readonly number[], maximum: number) {
   const runs: { start: number; length: number }[] = [];
   for (const index of indexes) {
@@ -58,15 +64,22 @@ export function ResultGrid({ sessionId, result, transport, onMessage, copySignal
   const cache = useRef(new GridPageCache());
   const editor = useRef<DataEditorRef>(null);
   const visible = useRef<Rectangle>({ x: 0, y: 0, width: Math.min(GRID_PAGE_COLUMNS, result.columns.length), height: Math.min(GRID_PAGE_ROWS, displayRowLimit, result.row_count) });
-  const damage = useRef<Rectangle[]>([]), paintFrame = useRef<{ window: Window; id: number }>();
+  const repaint = useRef<GridRepaintScheduler>();
   const generation = useRef(0);
   const message = useRef(onMessage); message.current = onMessage;
   const [selection, setSelection] = useState<GridSelection>(emptySelection);
   const [loading, setLoading] = useState(false), [error, setError] = useState("");
   const [ready, setReady] = useState(false), [copying, setCopying] = useState(false);
-  const [filter, setFilter] = useState(initialView?.filter?.text??""), [filterQuery, setFilterQuery] = useState(initialView?.filter?.text??"");
-  const [columnFilters,setColumnFilters]=useState<NonNullable<NonNullable<DataView["filter"]>["filters"]>>(initialView?.filter?.filters??(initialView?.filter?.column?[{column:initialView.filter.column,operator:initialView.filter.operator,value:initialView.filter.value}]:[]));
-  const [sort, setSort] = useState<{ column: string; direction: "asc" | "desc" }|undefined>(initialView?.sort);
+  const restoredView = useMemo(() => reconcileGridView(initialView,result.columns),[initialView,result.columns]);
+  const [filter, setFilter] = useState(restoredView?.filter?.text??""), [filterQuery, setFilterQuery] = useState(restoredView?.filter?.text??"");
+  const [columnFilterState,setColumnFilters]=useState<ColumnFilter[]>(restoredView?.filter?.filters??(restoredView?.filter?.column?[{column:restoredView.filter.column,operator:restoredView.filter.operator,value:restoredView.filter.value,value_to:restoredView.filter.value_to}]:NO_COLUMN_FILTERS));
+  const [headerPopup, setHeaderPopup] = useState<{index:number;anchor:Rectangle}>();
+  const headerTargets = useRef(new Map<number, Rectangle>());
+  const [sortState, setSort] = useState<DataView["sort"]>(restoredView?.sort);
+  // Reconcile before any page/export RPC, including mutations of an existing handle.
+  const validView = useMemo(() => reconcileGridView({filter:{filters:columnFilterState},sort:sortState},result.columns),[columnFilterState,sortState,result.columns]);
+  const columnFilters = validView?.filter?.filters ?? NO_COLUMN_FILTERS, sort = validView?.sort;
+  useEffect(() => { if (columnFilters !== columnFilterState) setColumnFilters(columnFilters); if (sort !== sortState) setSort(sort); },[columnFilters,columnFilterState,sort,sortState]);
   const [totalRows, setTotalRows] = useState(result.row_count);
   const [resultColumns, setResultColumns] = useState<Column[]>(result.columns);
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
@@ -94,24 +107,27 @@ export function ResultGrid({ sessionId, result, transport, onMessage, copySignal
   useEffect(() => { setFormats(columnFormats ?? {}); }, [columnFormats]);
   useEffect(() => { setRowLimit(displayRowLimit); }, [displayRowLimit, result.result_id]);
   useEffect(() => { setSeparator(copySeparator); setCopyNull(nullDisplay); }, [copySeparator, nullDisplay]);
+  const filteredColumns = useMemo(() => new Set(columnFilters.map(item => item.column)), [columnFilters]);
+  const addressableColumns = useMemo(() => {
+    const counts = new Map<string,number>();
+    for (const column of resultColumns) counts.set(column.name,(counts.get(column.name)??0)+1);
+    return new Set([...counts].filter(([,count])=>count===1).map(([name])=>name));
+  }, [resultColumns]);
   const columns = useMemo<GridColumn[]>(() => resultColumns.map((column,index) => ({ title: column.name,
-    id: String(index), width: columnWidths[index] ?? 175, icon: /int|float|decimal|number/i.test(column.dtype) ? "headerNumber" : "headerString" })), [resultColumns, columnWidths]);
+    id: String(index), width: columnWidths[index] ?? 175, hasMenu: true,
+    icon: /bool/i.test(column.dtype) ? "headerBoolean" : /date|timestamp/i.test(column.dtype) ? "headerDate" : /int|float|decimal|number/i.test(column.dtype) ? "headerNumber" : "headerString" })), [resultColumns, columnWidths]);
   const cellContext = useRef({ formats, resultColumns, copyNull });
   cellContext.current = { formats, resultColumns, copyNull };
   const requestContext = useRef({ sessionId, resultId: result.result_id, sort, filter: effectiveFilter, transport });
   requestContext.current = { sessionId, resultId: result.result_id, sort, filter: effectiveFilter, transport };
-  const queueDamage = useCallback((region: Rectangle) => {
-    damage.current.push(region);
-    if (paintFrame.current) return;
-    const host = panelRef.current?.ownerDocument.defaultView;
-    if (!host) return;
-    const id = host.requestAnimationFrame(() => {
-      paintFrame.current = undefined;
-      const cells = pageDamage(damage.current.splice(0), visible.current);
+  if (!repaint.current) repaint.current = new GridRepaintScheduler(
+    () => panelRef.current?.ownerDocument.defaultView,
+    regions => {
+      const cells = pageDamage(regions, visible.current);
       if (cells.length) editor.current?.updateCells(cells);
-    });
-    paintFrame.current = { window: host, id };
-  }, []);
+    },
+  );
+  const queueDamage = useCallback((region: Rectangle) => repaint.current!.enqueue(region), []);
   const scheduler = useRef<GridPageScheduler<GridPage>>();
   if (!scheduler.current) scheduler.current = new GridPageScheduler<GridPage>({
     load: tile => {
@@ -156,10 +172,16 @@ export function ResultGrid({ sessionId, result, transport, onMessage, copySignal
     queueDamage(region);
     return () => {
       generation.current++; scheduler.current!.reset(); copyAbort.current?.abort();
-      if (paintFrame.current) paintFrame.current.window.cancelAnimationFrame(paintFrame.current.id);
-      paintFrame.current = undefined; damage.current = [];
+      repaint.current!.reset();
     };
   }, [sessionId, result.result_id, result.row_count, result.columns, sort, effectiveFilter, transport, refreshRevision, queueDamage]);
+  useLayoutEffect(() => {
+    // A cancelled frame in a closing popout may never fire. Start a fresh batch
+    // in the adopted document without invalidating pages, result or view state.
+    repaint.current!.reset();
+    queueDamage(visible.current);
+    return () => repaint.current!.reset();
+  }, [ownerDocumentRevision, queueDamage]);
   useEffect(() => { const timer = setTimeout(() => setFilterQuery(filter.trim()), 250); return () => clearTimeout(timer); }, [filter]);
   useEffect(() => { queueDamage(visible.current); }, [formats, copyNull, queueDamage]);
   const retry = useCallback(() => {
@@ -270,24 +292,62 @@ export function ResultGrid({ sessionId, result, transport, onMessage, copySignal
     const key = column.id ?? column.title;
     setColumnWidths(previous => previous[key] === width ? previous : { ...previous, [key]: width });
   }, []);
+  const openHeaderPopup = useCallback((index:number, anchor?:Rectangle) => {
+    const bounds = anchor ?? editor.current?.getBounds(index, -1) ?? panelRef.current?.getBoundingClientRect();
+    if (bounds) setHeaderPopup({index, anchor:{x:bounds.x,y:bounds.y,width:bounds.width,height:anchor ? bounds.height : Math.min(36,bounds.height)}});
+  }, []);
+  useEffect(() => { setHeaderPopup(undefined); headerTargets.current.clear(); }, [sessionId,result.result_id,refreshRevision,ownerDocumentRevision]);
+  const loadColumnValues = useCallback(() => transport.request<ColumnValues>("result.column_values", {
+    session_id:sessionId,result_id:result.result_id,column:resultColumns[headerPopup?.index ?? -1]?.name,limit:50,
+  }), [transport,sessionId,result.result_id,resultColumns,headerPopup?.index]);
+  const drawHeader = useCallback<NonNullable<DataEditorProps["drawHeader"]>>((args, drawContent) => {
+    if (args.columnIndex < 0) { drawContent(); return; }
+    const {ctx,rect,menuBounds,columnIndex,theme} = args;
+    const sortBounds = addressableColumns.has(args.column.title) ? headerSortBounds(rect,menuBounds) : undefined;
+    const menuOnLeft = menuBounds.x < rect.x + rect.width/2;
+    if (sortBounds) headerTargets.current.set(columnIndex, {...sortBounds,x:sortBounds.x-rect.x,y:sortBounds.y-rect.y});
+    else headerTargets.current.delete(columnIndex);
+    // Clip the column title before the independent sort/filter targets.
+    ctx.save(); ctx.beginPath();
+    const textStart = menuOnLeft ? (sortBounds?.x ?? menuBounds.x) + (sortBounds?.width ?? menuBounds.width) : rect.x;
+    const textEnd = menuOnLeft ? rect.x + rect.width : sortBounds?.x ?? menuBounds.x;
+    ctx.rect(textStart,rect.y,Math.max(0,textEnd-textStart),rect.height); ctx.clip(); drawContent(); ctx.restore();
+    const filtered = filteredColumns.has(args.column.title), direction = sort?.column === args.column.title ? sort.direction : undefined;
+    ctx.save(); ctx.lineWidth=1.5; ctx.lineCap="round"; ctx.lineJoin="round";
+    if (sortBounds && (args.isHovered || args.isSelected || direction)) {
+      const x=sortBounds.x+sortBounds.width/2,y=sortBounds.y+sortBounds.height/2,up=direction!=="desc";
+      ctx.strokeStyle=direction?theme.accentColor:theme.textLight; ctx.beginPath();
+      ctx.moveTo(x,y-5);ctx.lineTo(x,y+5);
+      ctx.moveTo(x-4,up?y-1:y+1);ctx.lineTo(x,up?y-5:y+5);ctx.lineTo(x+4,up?y-1:y+1);ctx.stroke();
+    }
+    if (args.isHovered || args.isSelected || filtered) {
+      const x=menuBounds.x+menuBounds.width/2,y=menuBounds.y+menuBounds.height/2;
+      ctx.strokeStyle=filtered?theme.accentColor:theme.textHeader;ctx.beginPath();
+      ctx.moveTo(x-6,y-5);ctx.lineTo(x+6,y-5);ctx.lineTo(x+2,y);ctx.lineTo(x+2,y+5);ctx.lineTo(x-2,y+3);ctx.lineTo(x-2,y);ctx.closePath();ctx.stroke();
+    }
+    ctx.restore();
+  }, [filteredColumns,sort,addressableColumns]);
   const onHeaderClicked = useCallback<NonNullable<DataEditorProps["onHeaderClicked"]>>((index, event) => {
     const column = columnsRef.current[index];
-    if (!column || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    if (!column || !addressableColumns.has(column.title) || event.isEdge || event.ctrlKey || event.metaKey || event.shiftKey || !containsHeaderPoint(headerTargets.current.get(index),event.localEventX,event.localEventY)) return;
+    event.preventDefault();
     setSort(previous => ({ column: column.title, direction: previous?.column === column.title && previous.direction === "asc" ? "desc" : "asc" }));
-  }, []);
-  const onHeaderContextMenu = useCallback<NonNullable<DataEditorProps["onHeaderContextMenu"]>>((index, event) => { event.preventDefault(); setColumnDialog(index); }, []);
-  const onCellContextMenu = useCallback<NonNullable<DataEditorProps["onCellContextMenu"]>>((cell, event) => { event.preventDefault(); setColumnDialog(cell[0]); }, []);
+  }, [addressableColumns]);
+  const onHeaderMenuClick = useCallback<NonNullable<DataEditorProps["onHeaderMenuClick"]>>((index, bounds) => openHeaderPopup(index,bounds), [openHeaderPopup]);
+  const onHeaderContextMenu = useCallback<NonNullable<DataEditorProps["onHeaderContextMenu"]>>((index, event) => { event.preventDefault(); openHeaderPopup(index,event.bounds); }, [openHeaderPopup]);
+  const onCellContextMenu = useCallback<NonNullable<DataEditorProps["onCellContextMenu"]>>((cell, event) => { event.preventDefault(); openHeaderPopup(cell[0]); }, [openHeaderPopup]);
 
   return <div ref={panelRef} className="result-grid-panel">
     <div className="grid-toolbar">
       <span className="result-meta"><span className="mono">{totalRows.toLocaleString(getLocale())}</span> {t("linhas")} <span className="dim">/ {columns.length} {t("colunas")}</span></span>
       {totalRows > rowLimit && <button className="text-button" title={t("Carregar todas as linhas na grade virtualizada")} onClick={()=>setRowLimit(totalRows)}>{t("Exibindo")} {rowLimit} {t("· Mostrar todas")}</button>}
       <label className="grid-filter"><Filter size={13} /><input aria-label={t("Filtrar resultados")} placeholder={t("Filtrar valores…")} value={filter} onChange={(event) => {setFilter(event.target.value);}} /></label>
-      {columnFilters.length>0&&<div className="grid-filter-chips">{columnFilters.map(item=><button key={item.column} className="text-button" title={`${t("Limpar filtro da coluna")} · ${item.operator}: ${item.value??""}`} onClick={()=>setColumnFilters(previous=>previous.filter(filter=>filter.column!==item.column))}><Filter size={13}/>{item.column}<X size={12}/></button>)}</div>}
+      {columnFilters.length>0&&<div className="grid-filter-chips">{[...filteredColumns].map(column=><span className="grid-filter-chip" key={column}><button className="text-button" title={filterSummary(columnFilters.filter(item=>item.column===column),getLocale())} onClick={()=>openHeaderPopup(resultColumns.findIndex(item=>item.name===column))}><Filter size={13}/>{filterSummary(columnFilters.filter(item=>item.column===column),getLocale())}</button><button className="text-button" aria-label={`${t("Limpar filtro da coluna")} · ${column}`} onClick={()=>setColumnFilters(previous=>previous.filter(filter=>filter.column!==column))}><X size={12}/></button></span>)}</div>}
+      {(columnFilters.length>0||filter)&&<button className="text-button" title={featureText("Limpar todos os filtros")} aria-label={featureText("Limpar todos os filtros")} onClick={()=>{setColumnFilters([]);setFilter("");setFilterQuery("");}}><X size={13}/></button>}
       {sort && <button className="text-button" onClick={() => setSort(undefined)} title={t("Limpar ordenação")}><ArrowDownAZ size={13} />{sort.column} {sort.direction === "asc" ? "↑" : "↓"}</button>}
       {loading && <LoaderCircle className="spin" size={13} />}
       {copying && <button className="text-button" onClick={() => copyAbort.current?.abort()} title={t("Cancelar")}><X size={13}/>{t("Cancelar")}</button>}
-      <button className="text-button" disabled={!columns.length} onClick={()=>setColumnDialog(selection.current?.cell[0]??0)} title={t("Formatar ou filtrar uma coluna; clique direito no cabeçalho")}><Settings2 size={13}/>{t("Coluna")}</button>
+      <button className="text-button" disabled={!columns.length} onClick={()=>openHeaderPopup(selection.current?.cell[0]??selection.columns.first()??0)} title={t("Formatar ou filtrar uma coluna; clique direito no cabeçalho")}><Settings2 size={13}/>{t("Coluna")}</button>
       <button className="text-button" disabled={copying||!ready} onClick={() => void copy("excel",true)} title={t("Copiar seleção com cabeçalhos (Ctrl+Shift+C)")}><Copy size={13} /> {t("Cabeçalhos")}</button>
       <details className="grid-copy-menu"><summary title={t("Copiar resultados")}>{copying?<LoaderCircle className="spin" size={13}/>:<Copy size={13}/>}{t("Copiar ▾")}</summary><div>
         <button disabled={copying||!ready} onClick={()=>void copy("excel")}>Excel · Ctrl+C</button><button disabled={copying||!ready} onClick={()=>void copy("plain")}>{t("Texto delimitado")}</button><button disabled={copying||!ready} onClick={()=>void copy("json")}>{t("JSON")}</button><button disabled={copying||!ready} onClick={()=>{setSqlError("");setSqlDialog(true);}}>SQL INSERT…</button><button onClick={()=>setSettingsDialog(true)}>{t("Preferências de cópia…")}</button>
@@ -300,28 +360,30 @@ export function ResultGrid({ sessionId, result, transport, onMessage, copySignal
         onVisibleRegionChanged={onVisibleRegionChanged}
         onColumnResize={onColumnResize}
         onHeaderClicked={onHeaderClicked}
+        onHeaderMenuClick={onHeaderMenuClick}
+        drawHeader={drawHeader}
         onHeaderContextMenu={onHeaderContextMenu}
         onCellContextMenu={onCellContextMenu}
         onDelete={NO_DELETE}
         theme={gridTheme} />}
     </div>}
     <div className="grid-selection-status" aria-live="polite">{selectedCount?t("{count} células selecionadas",{count:selectedCount.toLocaleString(getLocale())}):t("Ctrl+C: copiar · Shift+clique: intervalo · Ctrl+clique: múltiplos intervalos")}{copying&&t(" · Copiando…")}</div>
-    {columnDialog!==undefined&&resultColumns[columnDialog]&&<ColumnDialog key={`${result.result_id}:${columnDialog}`} column={resultColumns[columnDialog]} format={formats[resultColumns[columnDialog].name]} currentFilter={columnFilters.find(item=>item.column===resultColumns[columnDialog].name)} onClose={()=>setColumnDialog(undefined)}
-      onFormat={format=>{const next={...formats};if(format.type==="default")delete next[resultColumns[columnDialog].name];else next[resultColumns[columnDialog].name]=format;setFormats(next);formatChange.current?.(next);setColumnDialog(undefined);}}
-      onFilter={next=>{setColumnFilters(previous=>{const kept=previous.filter(item=>item.column!==resultColumns[columnDialog].name);return next?.column?[...kept,{column:next.column,operator:next.operator,value:next.value}]:kept;});setColumnDialog(undefined);}}/>}
+    {headerPopup&&hostDocument&&resultColumns[headerPopup.index]&&<ColumnHeaderPopup key={`${result.result_id}:${headerPopup.index}:${refreshRevision}:${ownerDocumentRevision}`} ownerDocument={hostDocument} anchor={headerPopup.anchor} column={resultColumns[headerPopup.index]} filters={columnFilters} sortDirection={sort?.column===resultColumns[headerPopup.index].name?sort.direction:undefined} locale={getLocale()} loadValues={addressableColumns.has(resultColumns[headerPopup.index].name)?loadColumnValues:undefined} filterDisabledReason={addressableColumns.has(resultColumns[headerPopup.index].name)?undefined:featureText("Renomeie as colunas com nomes repetidos para filtrar ou ordenar.")} onClose={()=>setHeaderPopup(undefined)} onApply={setColumnFilters}
+      onSort={direction=>setSort(direction?{column:resultColumns[headerPopup.index].name,direction}:undefined)} onFormat={()=>setColumnDialog(headerPopup.index)}
+      onCopyName={()=>{const clipboard=hostDocument.defaultView?.navigator.clipboard;if(!clipboard){message.current(t("Área de transferência indisponível nesta janela."));return;}void clipboard.writeText(resultColumns[headerPopup.index].name).catch(failure=>message.current(errorText(failure)));}}/>}
+    {columnDialog!==undefined&&resultColumns[columnDialog]&&<ColumnDialog key={`${result.result_id}:${columnDialog}`} column={resultColumns[columnDialog]} format={formats[resultColumns[columnDialog].name]} onClose={()=>setColumnDialog(undefined)}
+      onFormat={format=>{const next={...formats};if(format.type==="default")delete next[resultColumns[columnDialog].name];else next[resultColumns[columnDialog].name]=format;setFormats(next);formatChange.current?.(next);setColumnDialog(undefined);}}/>}
     {settingsDialog&&<Modal title={t("Preferências de cópia")} onClose={()=>setSettingsDialog(false)} className="grid-settings-modal"><div className="grid-settings-body"><label>{t("Separador")}<select value={separator} onChange={event=>setSeparator(event.target.value)}><option value={"\t"}>{t("Tabulação · Excel")}</option><option value=",">{t("Vírgula")}</option><option value=";">{t("Ponto e vírgula")}</option></select></label><label>{t("Valores nulos")}<select value={copyNull} onChange={event=>setCopyNull(event.target.value)}><option value="">{t("Em branco")}</option><option value="NULL">{t("NULL")}</option><option value="None">{t("None")}</option></select></label><p>{t("Texto e Excel usam a formatação visível. JSON e INSERT preservam os valores originais. Sem seleção, a cópia usa todas as linhas filtradas.")}</p></div><footer><button onClick={()=>{onCopySettingsChange?.({copySeparator:separator,nullDisplay:copyNull});setSettingsDialog(false);}}>{t("Salvar")}</button></footer></Modal>}
     {sqlDialog&&<Modal title={t("Copiar como SQL INSERT")} onClose={()=>{if(!copying)setSqlDialog(false);}} className="grid-settings-modal"><div className="grid-settings-body"><label>{t("Tabela de destino")}<input autoFocus value={sqlTable} onChange={event=>setSqlTable(event.target.value)} placeholder="schema.tabela"/></label><p>{t("Os comandos serão copiados para revisão.")}</p>{sqlError&&<p className="data-error" role="alert">{t(sqlError)}</p>}</div><footer><button disabled={copying} onClick={()=>setSqlDialog(false)}>{t("Cancelar")}</button>{onInsertSql&&<button disabled={copying||!sqlTable.trim()} onClick={()=>void insertSelectedSql()}>{featureText("Inserir em novo bloco")}</button>}<button disabled={copying||!sqlTable.trim()} onClick={()=>void copy("sql",false,sqlTable)}>{copying?t("Copiando…"):t("Copiar INSERT")}</button></footer></Modal>}
   </div>;
 }
 
-function ColumnDialog({column,format,currentFilter,onClose,onFormat,onFilter}:{column:Column;format?:ColumnFormat;currentFilter?:DataView["filter"];onClose:()=>void;onFormat:(format:ColumnFormat)=>void;onFilter:(filter:DataView["filter"])=>void}) {
+function ColumnDialog({column,format,onClose,onFormat}:{column:Column;format?:ColumnFormat;onClose:()=>void;onFormat:(format:ColumnFormat)=>void}) {
   useLocale();
   const [draft,setDraft]=useState<ColumnFormat>(format??{type:"default",decimals:2});
-  const [operator,setOperator]=useState(currentFilter?.column===column.name?currentFilter.operator??"contains":"contains"),[value,setValue]=useState(currentFilter?.column===column.name?String(currentFilter.value??""):"");
   const numeric=["number","currency","percent"].includes(draft.type);
-  const nullOperator=operator==="is_null"||operator==="not_null",booleanColumn=/bool/i.test(column.dtype),dateColumn=/date|timestamp/i.test(column.dtype);
   return <Modal title={t("Coluna · {name}",{name:column.name})} onClose={onClose} className="grid-settings-modal"><div className="grid-settings-body"><p className="dim">{column.dtype}</p><label>{t("Formato")}<select value={draft.type} onChange={event=>setDraft(previous=>({...previous,type:event.target.value as ColumnFormat["type"]}))}><option value="default">{t("Padrão")}</option><option value="number">{t("Número")}</option><option value="currency">{t("Moeda")}</option><option value="percent">{t("Percentual")}</option><option value="date">{t("Data · YYYY-MM-DD")}</option><option value="datetime">{t("Data e hora · YYYY-MM-DD HH:MM:SS")}</option></select></label>
     {numeric&&<><label>{t("Casas decimais")}<input type="number" min="0" max="8" value={draft.decimals??2} onChange={event=>setDraft(previous=>({...previous,decimals:Math.max(0,Math.min(8,Number(event.target.value)))}))}/></label><div className="grid-format-affixes"><label>{t("Prefixo")}<input value={draft.prefix??(draft.type==="currency"?"$ ":"")} onChange={event=>setDraft(previous=>({...previous,prefix:event.target.value}))} placeholder="R$ "/></label><label>{t("Sufixo")}<input value={draft.suffix??(draft.type==="percent"?"%":"")} onChange={event=>setDraft(previous=>({...previous,suffix:event.target.value}))}/></label></div></>}
-    <button className="grid-modal-action" onClick={()=>onFormat(draft)}>{t("Aplicar formato")}</button><hr/><label>{t("Filtro da coluna")}<select value={operator} onChange={event=>setOperator(event.target.value)}><option value="contains">{t("Contém")}</option><option value="equals">{t("Igual a")}</option><option value="gt">{t("Maior que")}</option><option value="lt">{t("Menor que")}</option><option value="gte">{t("Maior ou igual")}</option><option value="lte">{t("Menor ou igual")}</option><option value="is_null">{t("É nulo")}</option><option value="not_null">{t("Não é nulo")}</option></select></label><label>{t("Valor")}{booleanColumn?<select disabled={nullOperator} value={value} onChange={event=>setValue(event.target.value)}><option value="">—</option><option value="true">True</option><option value="false">False</option></select>:<input disabled={nullOperator} type={dateColumn?(/datetime|timestamp/i.test(column.dtype)?"datetime-local":"date"):"text"} value={value} onChange={event=>setValue(event.target.value)} onKeyDown={event=>{if(event.key==="Enter"&&(value||nullOperator))onFilter({column:column.name,operator,value});}}/>}</label><div className="grid-modal-actions"><button onClick={()=>onFilter(undefined)}>{t("Limpar filtro")}</button><button disabled={!value&&!nullOperator} onClick={()=>onFilter({column:column.name,operator,value})}>{t("Filtrar")}</button></div>
+    <button className="grid-modal-action" onClick={()=>onFormat(draft)}>{t("Aplicar formato")}</button>
   </div></Modal>;
 }

@@ -33,6 +33,7 @@ Request IDs are integer correlation IDs; session and execution IDs are strings.
 | `execution.run` | IDs, language/code; variable name, per-block connection/database/schema, local/shared parameters/delimiter, SQL export | queued status |
 | `execution.cancel` | `session_id`, `execution_id` | `execution_id`, `status` |
 | `result.page` | `session_id`, `result_id`, `offset`, `limit`, optional `sort`, `filter` | `columns`, `rows`, `total_rows`, `offset` |
+| `result.column_values` | `session_id`, `result_id`, `column`, optional `limit` (1–50) | bounded `values`, inferred `kind`, `sampled`, `scanned_rows`, `total_rows`; at most 10,000 source rows/32 KiB |
 | `result.release` | `session_id`, `result_id` | releases a table handle and its cached views; preserves namespace variables |
 | `data.import` / `variable.inspect/delete` | session ID and chosen file or variable name | imported results, bounded inspection, updated namespace |
 | `result.export/export_table` | result/variable, scope/filter/sort, destination | file or database export summary |
@@ -137,12 +138,28 @@ wait for a polling interval. Wire scalars are actual Python builtins, preventing
 NumPy primitive subclasses from importing scientific libraries in the broker
 during unpickling.
 
-Frozen Python completion uses a persistent owned interpreter. It initializes
+Source and frozen Python completion use a persistent owned interpreter. It initializes
 scientific libraries on its main thread, supplies Jedi's embedded interpreter
 environment explicitly, and reuses inference caches across requests. Startup
 readiness and each completion share a 12-second deadline; timeout disposes the
 worker, obsolete queued requests skip work, and profile changes or shutdown
-dispose its process group. Source runs retain the threaded Jedi service.
+dispose its process group.
+
+Unexpected completion-worker EOF or broken-pipe writes return
+`editor_unavailable`, including `initialization` or `inference` and the observed
+process exit code. Large native status codes retain their hexadecimal value,
+for example `0xC0000005`; a process that has not exited within the bounded
+100 ms diagnostic wait reports `unknown`. The failed request is not retried.
+Its process group and transport are disposed; a later explicit request starts
+a new worker. Session kernels and their namespaces are separate. Python
+bootstrap exceptions are reported through the same private worker pipe before
+the supervisor forwards the correlated error response.
+
+These diagnostics identify the failure boundary, not its underlying cause.
+See the [frozen completion diagnostic note](../../docs/TAURI_AUTOCOMPLETE.md#diagnóstico-de-falha-do-worker-congelado)
+for the reproduced errors, limits of the investigation and focused regression
+coverage. Native child stdout/stderr remain discarded to protect NDJSON; an
+empty supervisor stderr is not proof that no child exception occurred.
 
 Pynia reuses the four existing ACP agents and protocol/config/permission rules.
 Each tab has its own agent session, conversation and optional separate inline

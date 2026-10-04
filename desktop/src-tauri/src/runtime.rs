@@ -80,6 +80,7 @@ fn allowed_method(method: &str) -> bool {
             | "execution.run"
             | "execution.cancel"
             | "result.page"
+            | "result.column_values"
             | "result.release"
             | "workspace.read"
             | "workspace.write"
@@ -581,6 +582,13 @@ mod tests {
             json!({"session_id":first,"result_id":handle,"offset":0,"limit":10}),
         );
         assert_eq!(page["rows"][0][0], 42);
+        let suggestions = request(
+            &client,
+            "result.column_values",
+            json!({"session_id":first,"result_id":handle,"column":"value"}),
+        );
+        assert_eq!(suggestions["values"], json!([42]));
+        assert_eq!(suggestions["kind"], "number");
 
         let second = request(&client, "session.create", json!({}))["session_id"].clone();
         request(
@@ -666,6 +674,7 @@ mod tests {
         assert!(allowed_method("language.cancel"));
         assert!(allowed_method("workspace.read"));
         assert!(allowed_method("result.export_text"));
+        assert!(allowed_method("result.column_values"));
         assert!(allowed_method("result.export_cancel"));
         assert!(allowed_method("result.export_table"));
         assert!(allowed_method("variable.archive.export"));

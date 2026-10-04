@@ -367,6 +367,8 @@
   "1 aviso": "1 warning",
   "{count} avisos": "{count} warnings",
   "Validação parcial": "Partial validation",
+  "Limpar todos os filtros": "Clear all filters",
+  "Renomeie as colunas com nomes repetidos para filtrar ou ordenar.": "Rename duplicate columns to filter or sort them.",
   "Validação indisponível": "Validation unavailable",
   "Validando sintaxe…": "Checking syntax…",
   "Sintaxe válida": "Valid syntax",

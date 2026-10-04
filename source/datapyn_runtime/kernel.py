@@ -404,6 +404,8 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                     result = database.schema(connector)
                 elif method == "result.page":
                     result = store.page(params)
+                elif method == "result.column_values":
+                    result = store.column_values(params)
                 elif method == "result.release":
                     result = store.release(params["result_id"])
                 elif method == "namespace.snapshot":

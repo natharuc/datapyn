@@ -41,6 +41,18 @@ def smoke(executable=None, timeout=90, report=None):
             ref = finished["results"][0]
             page = client.request("result.page", {"session_id": "parity", "result_id": ref["result_id"], "offset": 0, "limit": 20})
             assert page["rows"] == [[1, "one"], [2, "two"]]
+            header_values = client.request("result.column_values", {
+                "session_id": "parity", "result_id": ref["result_id"], "column": "title"})
+            assert header_values["kind"] == "text" and header_values["values"] == ["one", "two"]
+            assert header_values["sampled"] is False
+            header_view = {"session_id": "parity", "result_id": ref["result_id"],
+                           "filter": {"filters": [{"column": "id", "operator": "between", "value": "1", "value_to": "2"},
+                                                  {"column": "title", "operator": "ends_with", "value": "O"}]},
+                           "sort": {"column": "id", "direction": "desc"}}
+            header_page = client.request("result.page", header_view)
+            assert header_page["rows"] == [[2, "two"]] and header_page["total_rows"] == 1
+            header_export = client.request("result.export_text", {**header_view, "format": "json"})
+            assert json.loads(header_export["text"]) == [{"id": 2, "title": "two"}]
             details = client.request("explorer.details", {"session_id": "parity", "name": "sample", "schema": "main"})
             assert details["primary_key"]["constrained_columns"] == ["id"]
             assert "CREATE TABLE" in details["definition"]
@@ -118,11 +130,19 @@ def smoke(executable=None, timeout=90, report=None):
             restored_archive = client.request("variable.archive.import", {"session_id": "parity", "path": str(archive), "overwrite": True})
             assert any(item["variable_name"] == "df" for item in restored_archive["results"])
             client.request("snapshot.settings.set", {"settings": {"enabled": True, "restore_on_startup": True, "max_size_mb": 50}})
+            client.execute("parity", "snapshot-precision", "python",
+                "snapshot_exact = pd.DataFrame({'large': pd.Series([None, 9007199254740993], dtype=object)})\n"
+                "snapshot_native = pl.DataFrame({'large': pl.Series([None, 9223372036854775809], dtype=pl.UInt64)})")
             client.request("system.flush_workspace")
             client.request("session.close", {"session_id": "parity"})
             client.request("session.create", {"session_id": "parity"})
             client.event("session.ready", session_id="parity")
-            restored = client.execute("parity", "restored", "python", "assert df.shape == (2,3)\ndf")
+            restored = client.execute("parity", "restored", "python",
+                "assert df.shape == (2,3)\n"
+                "assert snapshot_exact['large'].dtype == object\n"
+                "assert snapshot_exact['large'].tolist() == [None, 9007199254740993]\n"
+                "assert snapshot_native.schema['large'] == pl.UInt64\n"
+                "assert snapshot_native['large'].to_list() == [None, 9223372036854775809]\ndf")
             assert any(item["variable_name"] == "df" for item in restored["results"])
             client.request("snapshot.settings.set", {"settings": {"enabled": False}})
             result = client.execute("parity", "million", "python", "large = pd.DataFrame({'id': np.arange(10000000), 'group': np.arange(10000000) % 10})\nlarge")
@@ -132,6 +152,12 @@ def smoke(executable=None, timeout=90, report=None):
                 "offset": 9_999_800, "limit": 200, "column_offset": 0, "column_limit": 1, "include_columns": False})
             assert last_page["rows"][0] == [9_999_800] and last_page["rows"][-1] == [9_999_999]
             assert last_page["columns"] == [] and last_page["total_columns"] == 2
+            started = time.perf_counter()
+            bounded_values = client.request("result.column_values", {
+                "session_id": "parity", "result_id": ref["result_id"], "column": "group", "limit": 50})
+            metrics["header_suggestions_10m_ms"] = round((time.perf_counter() - started) * 1000, 2)
+            assert bounded_values["values"] == list(range(10)) and bounded_values["sampled"] is True
+            assert bounded_values["scanned_rows"] <= 10_000 and bounded_values["total_rows"] == 10_000_000
             filtered = {"session_id": "parity", "result_id": ref["result_id"], "offset": 0, "limit": 100,
                         "filter": {"filters": [{"column": "group", "operator": "equals", "value": "4"}]},
                         "sort": {"column": "id", "direction": "desc"}}

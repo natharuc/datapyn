@@ -1,7 +1,8 @@
 import type { Primitive } from "./runtime";
 
+export interface ColumnFilter { column: string; operator?: string; value?: Primitive; value_to?: Primitive }
 export interface DataView {
-  filter?: { text?: string; column?: string; operator?: string; value?: Primitive; filters?: Array<{column: string; operator?: string; value?: Primitive}> };
+  filter?: { text?: string; column?: string; operator?: string; value?: Primitive; value_to?: Primitive; filters?: ColumnFilter[] };
   sort?: { column: string; direction: "asc" | "desc" };
   scope?: { row_ranges?: number[][]; column_indices?: number[]; rectangles?: Array<{x: number; y: number; width: number; height: number}> };
 }

@@ -27,6 +27,14 @@ describe("Export parity and original-value SQL generation", () => {
     expect(exportSource("analysis-1","frame-1",view,true)).toEqual({...exportSource("analysis-1","frame-1",view),scope:view.scope});
     expect(exportSource("analysis-1","frame-1",undefined,true)).not.toHaveProperty("scope");
   });
+  it("preserves complete header ranges and precise bounds for file/SQL/temporary-table actions", () => {
+    const filter={text:"Alpha",filters:[{column:"amount",operator:"between",value:"9007199254740993.000000000000000001",value_to:"9007199254740993.000000000000000002"},{column:"instant",operator:"between",value:"2026-10-01",value_to:"2026-10-02"},{column:"flag",operator:"equals",value:false}]};
+    const view={filter,sort:{column:"amount",direction:"desc" as const}};
+    const source=exportSource("analysis","frame",view);
+    expect(source.filter).toBe(filter);
+    expect(source.sort).toBe(view.sort);
+    expect((source.filter as typeof filter).filters[0].value_to).toBe("9007199254740993.000000000000000002");
+  });
   it("sends SQL table/schema as literal parts and limits GO to SQL Server", () => {
     const settings={...DEFAULT_FORMAT_EXPORT_SETTINGS,sqlMode:"create_insert" as const,sqlBatchSize:50,sqlTransaction:true,sqlGo:true};
     expect(exportOptions("sql",DEFAULT_EXPORT_SETTINGS,settings,"a.b","my.schema")).toEqual({table_name:"a.b",table_name_literal:true,schema_name:"my.schema",db_type:"sqlserver",sql_mode:"create_insert",batch_size:50,include_transaction:true,include_go:true});

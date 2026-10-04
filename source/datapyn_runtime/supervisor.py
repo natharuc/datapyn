@@ -884,11 +884,11 @@ class Supervisor:
             return {"execution_id": execution_id, "status": "queued"}
         if method == "execution.cancel":
             return self._session(params).cancel(self._identifier(params.get("execution_id"), "execution_id"))
-        if method in {"connection.connect", "connection.disconnect", "schema.get", "result.page", "result.release", "explorer.list", "explorer.details", "explorer.query", "explorer.use_database"}:
+        if method in {"connection.connect", "connection.disconnect", "schema.get", "result.page", "result.column_values", "result.release", "explorer.list", "explorer.details", "explorer.query", "explorer.use_database"}:
             routed = self._route(params)
             if method == "connection.connect" and not isinstance(routed.get("config") or routed.get("_connection_config"), dict):
                 raise RuntimeErrorResponse("invalid_params", "config must be an object")
-            if method in {"result.page", "result.release"}:
+            if method in {"result.page", "result.column_values", "result.release"}:
                 self._identifier(params.get("result_id"), "result_id")
             self._session(params).enqueue(method, routed, request_id)
             return None

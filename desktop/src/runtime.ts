@@ -20,6 +20,7 @@ export interface ResultExportProgress {
   current: number; total: number;
 }
 export interface ResultPage { columns: Column[]; rows: Primitive[][]; total_rows: number; offset: number; column_offset?: number; total_columns?: number }
+export interface ColumnValues { values: Primitive[]; kind: "text" | "number" | "bool" | "date"; sampled: boolean; scanned_rows: number; total_rows: number }
 export interface RuntimeInfo { protocol_version: number; python_version: string; capabilities: Record<string, unknown> | string[] }
 export type RichOutput = {artifact_id?:string;type:"image";data:string;mime:string}|{artifact_id?:string;type:"html";data:string}|{artifact_id?:string;type:"json"|"plotly";data:unknown};
 export interface ExecutionFinished {

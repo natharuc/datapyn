@@ -1,0 +1,32 @@
+.column-header-popup{position:fixed;z-index:260;box-sizing:border-box;width:306px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);overflow:auto;border:1px solid var(--border,#253147);border-radius:5px;background:var(--panel,#121a2b);color:inherit;box-shadow:0 8px 28px #0005;font:inherit;font-size:12px;line-height:1.35;scrollbar-width:thin}
+.column-header-popup>header{display:flex;align-items:center;gap:7px;min-height:34px;padding:5px 9px;border-bottom:1px solid var(--border-muted,#1b263a)}
+.column-header-popup>header>strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.column-header-popup>header>span{margin-left:auto;max-width:105px;color:var(--muted,#8b9cb3);font:10px "Ubuntu Mono",monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.column-header-popup button{font:inherit;color:inherit;border:0;border-radius:3px;background:transparent;cursor:pointer;min-width:0}
+.column-header-popup .column-header-close{display:flex;padding:3px;flex-shrink:0}
+.column-header-actions{display:flex;flex-direction:column;gap:1px;padding:5px}
+.column-header-actions>button{display:flex;align-items:center;gap:8px;width:100%;padding:6px 7px;text-align:left;font-size:11px}
+.column-header-actions>button>svg:last-child:not(:first-child){margin-left:auto;color:var(--blue-light,#9ab6ff)}
+.column-header-actions>button[aria-pressed=true]{color:var(--blue-light,#9ab6ff);background:color-mix(in srgb,var(--blue,#3369ff) 12%,transparent)}
+.column-header-popup button:hover:enabled{background:color-mix(in srgb,var(--muted,#8b9cb3) 12%,transparent)}
+.column-header-popup button:disabled{opacity:.4;cursor:default}
+.column-header-popup button:focus-visible,.column-header-popup input:focus-visible,.column-header-popup select:focus-visible{outline:1px solid var(--blue-light,#9ab6ff);outline-offset:1px}
+.column-header-popup>form{display:flex;flex-direction:column;gap:8px;padding:10px;border-top:1px solid var(--border-muted,#1b263a);border-bottom:1px solid var(--border-muted,#1b263a)}
+.column-header-filter-title{display:flex;align-items:center;justify-content:space-between;gap:7px}
+.column-header-filter-title>strong{font-weight:500;font-size:11px;white-space:nowrap}
+.column-header-popup input,.column-header-popup select{min-width:0;max-width:100%;box-sizing:border-box;border:1px solid var(--border,#253147);border-radius:3px;background:var(--bg,#0c111b);color:inherit;font:inherit;padding:5px 6px;min-height:28px}
+.column-header-filter-title>select{max-width:133px;font-size:11px;padding:3px 5px;min-height:25px}
+.column-header-operator{width:100%}
+.column-header-field{display:flex;flex-direction:column;gap:4px;min-width:0;font-size:11px;color:var(--muted,#8b9cb3)}
+.column-header-field>input,.column-header-field>select{width:100%;color:inherit;font-size:12px}
+.column-header-field>input{font-family:"Ubuntu Mono",monospace}
+.column-header-range{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.column-header-single{display:flex;flex-direction:column}
+.column-header-hint{font-size:10px;color:var(--muted,#8b9cb3);line-height:1.5}
+.column-header-error{font-size:11px;line-height:1.4;color:#ef8389;margin:0}
+.column-header-popup input[aria-invalid=true]{border-color:#ef8389}
+.column-header-filter-actions{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px}
+.column-header-filter-actions>button{padding:5px 8px;font-size:11px}
+.column-header-filter-actions>.column-header-apply{background:var(--blue,#3369ff);color:white;padding-inline:13px}
+.column-header-filter-actions>.column-header-apply:hover{background:color-mix(in srgb,var(--blue,#3369ff) 80%,white)}
+.column-header-utilities{padding-block:5px}
