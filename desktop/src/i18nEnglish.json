@@ -448,5 +448,18 @@
   "Mover para baixo":"Move down",
   "Agrupar com a análise":"Group with the analysis",
   "O layout salvo estava inválido. A disposição padrão foi restaurada.":"The saved layout was invalid. The default arrangement has been restored.",
-  "Não foi possível abrir outra janela. O painel permanece disponível na janela principal.":"Another window could not be opened. The panel remains available in the main window."
+  "Não foi possível abrir outra janela. O painel permanece disponível na janela principal.":"Another window could not be opened. The panel remains available in the main window.",
+  "Ir para o bloco":"Go to block",
+  "Execuções recentes":"Recent executions",
+  "Configurar notificações":"Configure notifications",
+  "Nenhuma execução recente":"No recent executions",
+  "Os avisos de conclusão aparecem aqui.":"Completion notices appear here.",
+  "Marcar todas como lidas":"Mark all as read",
+  "Limpar histórico":"Clear history",
+  "Execução cancelada":"Execution cancelled",
+  "Execução cancelada.":"Execution cancelled.",
+  "Execução concluída.":"Execution completed.",
+  "Não foi possível concluir a execução.":"The execution could not be completed.",
+  "Não foi possível entregar a notificação.":"The notification could not be delivered.",
+  "A sessão ou o bloco desta notificação não está disponível neste workspace.":"This notification's session or block is not available in this workspace."
 }

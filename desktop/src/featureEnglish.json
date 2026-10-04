@@ -377,5 +377,8 @@
   "Linha {line}, coluna {column}": "Line {line}, column {column}",
   "Mostrar mais diagnósticos ({count})": "Show more diagnostics ({count})",
   "Aviso": "Warning",
-  "Informação": "Information"
+  "Informação": "Information",
+  "Suprimir notificação": "Suppress notification",
+  "Notificação suprimida": "Notification suppressed",
+  "Regras são avaliadas em ordem. Uma regra de supressão interrompe a avaliação e impede o aviso, o som e o envio externo.": "Rules run in order. A suppression rule stops evaluation and prevents the notice, sound and external delivery."
 }

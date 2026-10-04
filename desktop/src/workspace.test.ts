@@ -69,6 +69,94 @@ class FakeTransport implements RuntimeTransport {
   }
 }
 
+describe("execution notification identity", () => {
+  it("captures the executed block while focus and active tab change", async () => {
+    const transport = new FakeTransport(), controller = new WorkspaceController(transport), session = controller.session()!;
+    const first = session.blocks[0], other = controller.addBlock(session.id, "python", "other=1");
+    controller.setWorkspaceIdentity("profile-original");
+    controller.updateBlock(session.id, first.id, {code:"SELECT 1",block_name:"Consulta",database_name:"block_database",connection_name:"block_connection"});
+    const finished = vi.fn(); controller.onQueueFinished = finished;
+    const job = controller.runBlock(session.id,first.id);
+    await vi.waitFor(()=>expect(transport.executions()).toHaveLength(1));
+    controller.focusBlock(session.id,other.id); const next=controller.createSession();
+    controller.setWorkspaceIdentity("profile-next");
+    transport.finish(0); await job;
+    expect(finished).toHaveBeenCalledTimes(1);
+    expect(finished.mock.calls[0][2]).toMatchObject({blockId:first.id,executionId:transport.executions()[0].params.execution_id,workspaceId:"profile-original",status:"succeeded",context:{block_name:"Consulta",database:"block_database",connection:"block_connection",rows:1,blocks:1}});
+    expect((transport.executions()[0].params.notification as {context:object}).context).toMatchObject({workspace_id:"profile-original"});
+    expect(controller.getSnapshot().activeId).toBe(next.id);
+    expect(controller.session(session.id)?.focusedBlockId).toBe(other.id); controller.dispose();
+  });
+  it("emits one queue notification at the failing block with actual attempt count", async () => {
+    const transport = new FakeTransport(), controller = new WorkspaceController(transport), session = controller.session()!;
+    const first=session.blocks[0],skip=controller.addBlock(session.id),failure=controller.addBlock(session.id),never=controller.addBlock(session.id);
+    controller.updateBlock(session.id,first.id,{code:"SELECT 1"});controller.updateBlock(session.id,skip.id,{code:"SELECT skip",is_active:false});
+    controller.updateBlock(session.id,failure.id,{code:"SELECT wrong",block_name:"Falha"});controller.updateBlock(session.id,never.id,{code:"SELECT never"});
+    const finished=vi.fn();controller.onQueueFinished=finished;
+    const job=controller.runAll(session.id);await vi.waitFor(()=>expect(transport.executions()).toHaveLength(1));transport.finish(0);
+    await vi.waitFor(()=>expect(transport.executions()).toHaveLength(2));transport.finish(1,"failed");await job;
+    expect(transport.executions().map(request=>(request.params.notification as {emit_notification:boolean}).emit_notification)).toEqual([false,false]);
+    expect(finished.mock.calls[0][2]).toMatchObject({blockId:failure.id,status:"failed",context:{blocks:2,rows:0,error:"Syntax error",block_name:"Falha"}});
+    expect(finished).toHaveBeenCalledTimes(1);controller.dispose();
+  });
+  it("explicitly carries the last table of this queue to a final Python block without reusing previous queues",async()=>{
+    const transport=new FakeTransport(),controller=new WorkspaceController(transport),session=controller.session()!,first=session.blocks[0];
+    controller.updateBlock(session.id,first.id,{code:"SELECT 1"});controller.addBlock(session.id,"python","print('done')");
+    const job=controller.runAll(session.id);await vi.waitFor(()=>expect(transport.executions()).toHaveLength(1));transport.finish(0);
+    await vi.waitFor(()=>expect(transport.executions()).toHaveLength(2));
+    expect(transport.executions()[1].params.notification).toMatchObject({queue_result:{result_id:"result-0",rows:1}});
+    transport.finish(1);await job;
+    const next=controller.runBlock(session.id,first.id);await vi.waitFor(()=>expect(transport.executions()).toHaveLength(3));
+    expect((transport.executions()[2].params.notification as {queue_result?:object}).queue_result).toBeUndefined();transport.finish(2);await next;controller.dispose();
+  });
+  it("retains rendered notification from the terminal event before a new execution", async () => {
+    const transport=new FakeTransport(),controller=new WorkspaceController(transport),session=controller.session()!,block=session.blocks[0];
+    controller.updateBlock(session.id,block.id,{code:"SELECT 1"});const finished=vi.fn();controller.onQueueFinished=finished;
+    const job=controller.runBlock(session.id,block.id);await vi.waitFor(()=>expect(transport.executions()).toHaveLength(1));
+    const request=transport.executions()[0],notification={enabled:true,sound:false,title:"Frozen",message:"old=10",success:true,suppressed:false,send_external:false,channels:{telegram:false,email:false}};
+    transport.listener?.({event:"execution.finished",payload:{session_id:session.id,execution_id:String(request.params.execution_id),status:"succeeded",duration_ms:1,results:[],variables:[],notification}});await job;
+    expect(finished.mock.calls[0][2].notification).toBe(notification);
+    expect((request.params.notification as {context:object;emit_notification:boolean}).emit_notification).toBe(true);
+    expect((request.params.notification as {context:object}).context).toMatchObject({block_id:block.id,blocks:1});controller.dispose();
+  });
+  it("distinguishes cancellation from an old unrelated error", async () => {
+    const transport=new FakeTransport(),controller=new WorkspaceController(transport),session=controller.session()!,block=session.blocks[0];
+    const old=controller.addBlock(session.id,"python","old=1");controller.updateBlock(session.id,old.id,{status:"failed",error:"old error"});controller.updateBlock(session.id,block.id,{code:"SELECT 1"});
+    const finished=vi.fn();controller.onQueueFinished=finished;const job=controller.runBlock(session.id,block.id);
+    await vi.waitFor(()=>expect(transport.executions()).toHaveLength(1));transport.finish(0,"cancelled");await job;
+    expect(finished.mock.calls[0][2]).toMatchObject({blockId:block.id,status:"cancelled",context:{error:"Execução cancelada.",rows:0}});controller.dispose();
+  });
+  it("does not reuse a prior success notification when a queue is cancelled between blocks", async () => {
+    const transport=new FakeTransport(),controller=new WorkspaceController(transport),session=controller.session()!,block=session.blocks[0];
+    controller.updateBlock(session.id,block.id,{code:"SELECT 1"});controller.addBlock(session.id,"sql","SELECT 2");
+    const finished=vi.fn();controller.onQueueFinished=finished;const job=controller.runAll(session.id);
+    await vi.waitFor(()=>expect(transport.executions()).toHaveLength(1));
+    const request=transport.executions()[0],notification={enabled:true,sound:false,title:"Success",message:"old",success:true,suppressed:true,send_external:false,channels:{telegram:false,email:false}};
+    transport.listener?.({event:"execution.finished",payload:{session_id:session.id,execution_id:String(request.params.execution_id),status:"succeeded",duration_ms:1,results:[],variables:[],notification}});
+    await controller.cancel(session.id);await job;
+    expect(transport.executions()).toHaveLength(1);
+    expect(finished.mock.calls[0][2]).toMatchObject({blockId:block.id,status:"cancelled",notification:undefined});controller.dispose();
+  });
+  it("reports startup failure without inventing a successful execution", async () => {
+    const transport=new FakeTransport(),controller=new WorkspaceController(transport),session=controller.session()!,block=session.blocks[0];
+    controller.updateBlock(session.id,block.id,{code:"SELECT 1"});transport.unavailable=true;
+    const finished=vi.fn();controller.onQueueFinished=finished;
+    await expect(controller.runBlock(session.id,block.id)).rejects.toThrow("indisponível");
+    expect(finished.mock.calls[0][2]).toMatchObject({blockId:block.id,status:"failed",context:{blocks:0,error:"Runtime indisponível"}});controller.dispose();
+  });
+  it("never fails a completed execution because a notification observer throws", async () => {
+    const transport=new FakeTransport(),controller=new WorkspaceController(transport),session=controller.session()!,block=session.blocks[0];
+    controller.updateBlock(session.id,block.id,{code:"SELECT 1"});controller.onQueueFinished=()=>{throw new Error("notice failed");};
+    const job=controller.runBlock(session.id,block.id);await vi.waitFor(()=>expect(transport.executions()).toHaveLength(1));transport.finish(0);
+    await expect(job).resolves.toBeUndefined();expect(controller.session()?.blocks[0].status).toBe("succeeded");controller.dispose();
+  });
+  it("keeps delivery events from changing result state",()=>{
+    const session=newSession();session.currentExecutionId="running";
+    const event={event:"notifications.delivery_finished" as const,payload:{session_id:session.id,execution_id:"running",block_id:session.blocks[0].id,deliveries:{email:{status:"failed"}}}};
+    expect(applyRuntimeEvent(session,event)).toBe(session);
+  });
+});
+
 describe("Documentos .dpw", () => {
   it("preserva configurações de blocos, parâmetros, notificações e charts ao salvar", () => {
     const source = { version: "1.0", blocks: [{ language: "sql", code: "SELECT @day", block_name: "sales", is_active: false,

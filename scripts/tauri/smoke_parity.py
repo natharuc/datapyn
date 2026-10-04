@@ -172,6 +172,126 @@ def smoke(executable=None, timeout=90, report=None):
             assert diagnostics["runtime"]["qt_loaded"] is False
             no_qt = client.execute("parity", "no-qt", "python", "import sys\nassert not any(name.startswith(('PyQt','PySide')) for name in sys.modules)")
             assert no_qt["status"] == "succeeded"
+            # Completion notifications are captured inside the kernel, before
+            # another block can change its namespace/result. Exercise the real
+            # execution protocol here: no external channel is ever enabled.
+            notification_start = time.perf_counter()
+            loaded = client.request("notifications.settings.get")["settings"]
+            settings = {
+                **loaded, "enabled": True, "sound": False,
+                "telegram": {**loaded["telegram"], "enabled": False},
+                "email": {**loaded["email"], "enabled": False},
+            }
+            saved = client.request("notifications.settings.set", {"settings": settings})["settings"]
+            assert saved["enabled"] is True and saved["sound"] is False
+            assert saved["telegram"]["enabled"] is False and saved["email"]["enabled"] is False
+            # Snapshot restart above intentionally discarded database handles.
+            client.request("connection.connect", {"session_id": "parity", "connection_id": profile["id"]})
+            context = {"workspace_id": "parity-workspace", "tab_name": "Notification parity", "blocks": 1}
+            config = {
+                "enabled": True, "title": "{{tab_name}} / {{block_name}}",
+                "message": "{{type}}: {{rows}} rows; first={{result[0][0]}}",
+                "color": "#5179ef", "rules": [], "channels": {"telegram": False, "email": False},
+            }
+            sql_id = "notification-sql"
+            queued = client.request("execution.run", {
+                "session_id": "parity", "execution_id": sql_id, "language": "sql",
+                "code": "SELECT 91 AS value UNION ALL SELECT 92 AS value", "variable_name": "notification_df",
+                "notification": {"context": {**context, "block_id": "notification-block-sql", "block_name": "SQL completion"}, "config": config},
+            })
+            assert queued == {"execution_id": sql_id, "status": "queued"}
+            sql_finished = client.event("execution.finished", execution_id=sql_id, session_id="parity")
+            assert sql_finished["session_id"] == "parity" and sql_finished["execution_id"] == sql_id
+            assert sql_finished["status"] == "succeeded", sql_finished
+            sql_ref = sql_finished["results"][0]
+            assert sql_ref["row_count"] == 2
+            notice = sql_finished["notification"]
+            assert notice["enabled"] is True and notice["sound"] is False, notice
+            assert notice["success"] is True and notice["status"] == "succeeded", notice
+            assert notice["title"] == "Notification parity / SQL completion", notice
+            assert notice["message"] == "sql: 2 rows; first=91", notice
+            assert not notice["suppressed"] and not any(notice["channels"].values()), notice
+
+            # A print-only Python block must report zero rows and must not
+            # render the previous SQL table through the legacy preview fallback.
+            print_id = "notification-print"
+            client.request("execution.run", {
+                "session_id": "parity", "execution_id": print_id, "language": "python",
+                "code": "print('notification print-only')",
+                "notification": {"context": {**context, "block_id": "notification-block-print", "block_name": "Python print"}, "config": config},
+            })
+            print_finished = client.event("execution.finished", execution_id=print_id, session_id="parity")
+            assert print_finished["status"] == "succeeded" and print_finished["results"] == [], print_finished
+            assert print_finished["execution_id"] == print_id and print_finished["session_id"] == "parity"
+            print_notice = print_finished["notification"]
+            assert print_notice["enabled"] is True and print_notice["sound"] is False
+            assert print_notice["title"] == "Notification parity / Python print", print_notice
+            assert print_notice["message"].startswith("python: 0 rows; first="), print_notice
+            assert "first=91" not in print_notice["message"] and "first=92" not in print_notice["message"], print_notice
+            assert sql_finished["notification"]["message"] == "sql: 2 rows; first=91"
+            output = client.event("execution.output", execution_id=print_id, session_id="parity")
+            assert output["stream"] == "stdout" and "notification print-only" in output["text"], output
+
+            # An explicit SQL result from this same queue remains available to
+            # the final Python block, even when that block returns no table.
+            queue_id = "notification-queue"
+            queue_result = {"result_id": sql_ref["result_id"], "rows": 2}
+            client.request("execution.run", {
+                "session_id": "parity", "execution_id": queue_id, "language": "python",
+                "code": "print('queue completed without a new table')",
+                "notification": {"context": {**context, "blocks": 2, "block_id": "notification-block-queue", "block_name": "Queue completion"},
+                                 "config": config, "queue_result": queue_result},
+            })
+            queue_finished = client.event("execution.finished", execution_id=queue_id, session_id="parity")
+            assert queue_finished["status"] == "succeeded" and queue_finished["results"] == [], queue_finished
+            assert queue_finished["execution_id"] == queue_id and queue_finished["session_id"] == "parity"
+            queue_notice = queue_finished["notification"]
+            assert queue_notice["title"] == "Notification parity / Queue completion", queue_notice
+            assert queue_notice["message"] == "python: 2 rows; first=91", queue_notice
+            assert queue_notice["success"] is True and queue_notice["sound"] is False
+
+            error_id = "notification-error"
+            client.request("execution.run", {
+                "session_id": "parity", "execution_id": error_id, "language": "python",
+                "code": "raise RuntimeError('notification-parity-error')",
+                "notification": {"context": {**context, "block_id": "notification-block-error", "block_name": "Error completion"},
+                                 "config": {**config, "message": "{{status}}: {{error}}; rows={{rows}}"}},
+            })
+            error_finished = client.event("execution.finished", execution_id=error_id, session_id="parity")
+            assert error_finished["status"] == "failed" and "notification-parity-error" in error_finished["error"], error_finished
+            assert error_finished["execution_id"] == error_id and error_finished["session_id"] == "parity"
+            error_notice = error_finished["notification"]
+            assert error_notice["title"] == "Notification parity / Error completion", error_notice
+            assert error_notice["enabled"] is True and error_notice["sound"] is False
+            assert error_notice["success"] is False and error_notice["status"] == "failed", error_notice
+            assert error_notice["message"].startswith("failed:") and "notification-parity-error" in error_notice["message"], error_notice
+            assert error_notice["message"].endswith("rows=0"), error_notice
+
+            suppressed_config = {**config, "rules": [{"enabled": True, "left": "{{rows}}", "operator": "equals",
+                                                      "value": "2", "action": "suppress", "action_value": ""}]}
+            preview = client.request("notifications.evaluate", {
+                "session_id": "parity", "config": suppressed_config,
+                "context": {**context, "block_id": "notification-block-suppressed", "block_name": "Suppressed SQL",
+                            "rows": 2, "result_id": sql_ref["result_id"], "success": True, "type": "sql"},
+            })
+            assert preview["enabled"] is True and preview["sound"] is False
+            assert preview["suppressed"] is True and preview["send_external"] is False, preview
+            assert preview["matched_rules"] == [0] and not any(preview["channels"].values()), preview
+            suppress_id = "notification-suppressed"
+            client.request("execution.run", {
+                "session_id": "parity", "execution_id": suppress_id, "language": "sql",
+                "code": "SELECT 91 AS value UNION ALL SELECT 92 AS value", "variable_name": "suppressed_notification_df",
+                "notification": {"context": {**context, "block_id": "notification-block-suppressed", "block_name": "Suppressed SQL"},
+                                 "config": suppressed_config},
+            })
+            suppressed_finished = client.event("execution.finished", execution_id=suppress_id, session_id="parity")
+            assert suppressed_finished["status"] == "succeeded" and suppressed_finished["results"][0]["row_count"] == 2, suppressed_finished
+            suppressed_notice = suppressed_finished["notification"]
+            assert suppressed_notice["suppressed"] is True and suppressed_notice["send_external"] is False, suppressed_notice
+            assert suppressed_notice["message"] == "sql: 2 rows; first=91" and suppressed_notice["matched_rules"] == [0], suppressed_notice
+            assert not any(suppressed_notice["channels"].values()), suppressed_notice
+            metrics["notification_cases"] = 6
+            metrics["notification_capture_ms"] = round((time.perf_counter() - notification_start) * 1000, 2)
         finally:
             if client:
                 client.close()
@@ -182,7 +302,7 @@ def smoke(executable=None, timeout=90, report=None):
                     os.environ[key] = value
     if report:
         Path(report).write_text(json.dumps(metrics, indent=2), encoding="utf-8")
-    print("Feature acceptance: SQLite/catalog, Explorer, completion/format, parameters, precise selections, five export formats, Excel import, PNG/JPEG/chart/rich exports, snapshot restart, precise streamed Parquet, projected ten-million-row Pandas/Polars results and Qt-free kernel OK.")
+    print("Feature acceptance: SQLite/catalog, Explorer, completion/format, parameters, precise selections, five export formats, Excel import, PNG/JPEG/chart/rich exports, snapshot restart, precise streamed Parquet, projected ten-million-row Pandas/Polars results, immutable completion/queue/error/suppressed notifications and Qt-free kernel OK.")
     print(json.dumps(metrics))
 
 

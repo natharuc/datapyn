@@ -6,7 +6,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
+import { requestPermission } from "@tauri-apps/plugin-notification";
 import { Activity, ArrowDown, ArrowUp, Braces, Check, ChevronDown, ChevronRight, Circle, Code2, Copy, Database, Download, FileCode2, FolderOpen, GripVertical, Keyboard, Layers3, LoaderCircle, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Play, Plus, RefreshCw, Save, Settings2, Square, Table2, Terminal, Trash2, Variable, X } from "lucide-react";
 import logo from "./assets/datapyn-logo.svg";
 import { errorText, isDesktop, runtime } from "./runtime";
@@ -42,13 +42,17 @@ import {useStartupSplash} from "./useStartupSplash";
 import {PANEL_IDS,isBottomPanel,type BottomPanelId,type DockingControls,type PanelId} from "./dockingLayout";
 import {normalizeMainWindowLayout,type MainWindowLayout} from "./windowLayout";
 import {useWindowLayout} from "./useWindowLayout";
-import {flushNativePopoutLayouts} from "./nativePopoutLayout";
+import {flushNativePopoutLayouts,nativePopoutLabel} from "./nativePopoutLayout";
+import { findInDocuments } from "./documentWindows";
 import {OutputRevealTracker} from "./outputReveal";
 import {hasVisibleShortcutDialog} from "./shortcutModalGuard";
 import {SessionCompletionIndex,SessionLanguageContexts} from "./sessionCompletion";
 import {exportContext} from "./exportContext";
 import {downloadDirectory} from "./queryDownload";
 import type {QueryDownloadRequest} from "./QueryDownloadDialog";
+import { NotificationCenter, activateNotificationTarget, shouldNotify, type NotificationEntry, type NotificationTarget } from "./executionNotifications";
+import { NotificationHistory, NotificationToasts } from "./NotificationCenterView";
+import { bindNativeNotifications, focusNativeNotificationWindow, nativeNotificationError, showNativeNotification } from "./nativeExecutionNotifications";
 const DataActions = lazy(()=>import("./DataActions").then(m=>({default:m.DataActions})));
 const QueryDownloadDialog = lazy(()=>import("./QueryDownloadDialog").then(m=>({default:m.QueryDownloadDialog})));
 const VariableInspector = lazy(()=>import("./VariableInspector").then(m=>({default:m.VariableInspector})));
@@ -128,6 +132,12 @@ export function App() {
   const [recentFiles,setRecentFiles] = useState<string[]>(()=>{try{return JSON.parse(localStorage.getItem("datapyn.desktop.recent-files.v1") ?? "[]");}catch{return [];}});
   const [recentVisible,setRecentVisible] = useState(false);
   const [notificationDialog,setNotificationDialog] = useState(false), [snapshotVisible,setSnapshotVisible] = useState(false);
+  const [notificationHistory,setNotificationHistory] = useState(false);
+  const [notificationCenter] = useState(() => new NotificationCenter());
+  const notificationState = useSyncExternalStore(notificationCenter.subscribe, notificationCenter.getSnapshot);
+  const notificationActivation = useRef<(target: NotificationTarget) => Promise<void>>(async () => {});
+  const notificationNavigation = useRef(0);
+  const lastNotificationContexts = useRef(new Map<string, NotificationContext>());
   const [profile,setProfile] = useState<ProfileState>(), [workspaceManager,setWorkspaceManager] = useState(false), [switchingProfile,setSwitchingProfile] = useState(false);
   const windowLayout=useWindowLayout(mainWindowLayout,profile?.active_id,setMainWindowLayout);
   const [preparedSession,setPreparedSession] = useState<string>();
@@ -149,21 +159,71 @@ export function App() {
   const updateConfigurationDefaults=(patch:ConfigurationDefaults)=>{workspaceExtras.current.imported_defaults=mergeConfigurationDefaults((workspaceExtras.current.imported_defaults ?? {}) as ConfigurationDefaults,patch);};
   const captureLayout=useRef<()=>unknown>(()=>undefined),flushWorkspace=useRef<()=>Promise<void>>(()=>Promise.resolve());
   const nativeDrafts=useRef(new NativeDrafts(runtime,failure=>reportMessage(errorText(failure))));
-  const [toast,setToast] = useState<{title:string;message:string;color?:string}>();
   const serviceHandler = useRef<(event:ServiceEvent)=>void>(()=>{});
-  const notify = (title:string,message:string,color?:string) => {setToast({title,message,color});setTimeout(()=>setToast(current=>current?.title === title && current?.message === message ? undefined : current),6500);};
+  const notify = (title:string,message:string,color?:string,success=true) => {notificationCenter.publish({title,message,color,success});};
   const notificationContext = (target:SessionDocument,success=true):NotificationContext => ({success,tab_name:target.title,
     rows:target.results.at(-1)?.row_count ?? 0,blocks:target.blocks.length,block_name:target.blocks.find(b=>b.id === target.focusedBlockId)?.block_name,
-    connection:target.connection?.name,database:target.database,type:target.blocks.find(b=>b.id === target.focusedBlockId)?.language,error:target.blocks.find(b=>b.status === "failed")?.error,result_id:target.results.at(-1)?.result_id});
-  workspace.onQueueFinished = (target,success)=>{
-    void runtime.request<NotificationResult>("notifications.send",{session_id:target.id,config:target.extras.notification_config,context:notificationContext(target,success)}).then(async response=>{
-      if(response.enabled){notify(response.title,response.message,response.color);if(isDesktop() && await isPermissionGranted()) sendNotification({title:response.title,body:response.message});}
-      if(response.enabled && response.sound){const ctx=new AudioContext(), oscillator=ctx.createOscillator(),gain=ctx.createGain();oscillator.connect(gain);gain.connect(ctx.destination);gain.gain.value=.06;oscillator.frequency.value=success?660:330;oscillator.start();oscillator.stop(ctx.currentTime+.14);oscillator.onended=()=>void ctx.close();}
-    }).catch(failure=>reportMessage(errorText(failure)));
+    connection:target.connection?.name,database:target.database,type:target.blocks.find(b=>b.id === target.focusedBlockId)?.language,error:target.blocks.find(b=>b.id === target.focusedBlockId)?.error,result_id:target.results.at(-1)?.result_id,...lastNotificationContexts.current.get(target.id)});
+  notificationActivation.current = async target => {
+    if (!activateNotificationTarget(workspace, profile?.active_id, target)) {
+      reportMessage(t("A sessão ou o bloco desta notificação não está disponível neste workspace.")); return;
+    }
+    setNotificationHistory(false); notificationCenter.markRead(JSON.stringify(target)); notificationCenter.dismiss(JSON.stringify(target));
+    const revision = ++notificationNavigation.current;
+    if (isDesktop()) {
+      try { await focusNativeNotificationWindow(); }
+      catch (failure) { reportMessage(errorText(failure)); }
+    }
+    const stillSelected = () => !workspace.isEditingLocked() && notificationCenter.getWorkspaceIdentity() === target.workspace_id && notificationNavigation.current === revision && workspace.getSnapshot().activeId === target.session_id && workspace.session(target.session_id)?.focusedBlockId === target.block_id;
+    if (!stillSelected()) return;
+    docking.current?.show("editor");
+    // pendingFocus survives lazy mounting; focus only after React reveals the tab/block.
+    requestAnimationFrame(() => {
+      if (!stillSelected()) return;
+      focusEditor(target.block_id);
+      const node=findInDocuments(`[data-block-id="${CSS.escape(target.block_id)}"]`),view=node?.ownerDocument.defaultView,label=view && nativePopoutLabel(view);
+      if(isDesktop() && label)void focusNativeNotificationWindow(label).catch(failure=>reportMessage(errorText(failure)));
+    });
   };
+  const openNotification = (entry: NotificationEntry) => { if (entry.target) void notificationActivation.current(entry.target); };
+  useEffect(() => {
+    notificationCenter.setWorkspace(profile?.active_id);
+    workspace.setWorkspaceIdentity(profile?.active_id);
+    notificationNavigation.current++;
+    lastNotificationContexts.current.clear();
+    if (!profile || !isDesktop()) return;
+    let disposed = false, cleanup: (() => void) | undefined;
+    void bindNativeNotifications(target => notificationActivation.current(target), (target, message) => notificationCenter.deliveryError(target, message))
+      .then(stop => { if (disposed) stop(); else cleanup = stop; }).catch(failure => reportMessage(nativeNotificationError(failure)));
+    return () => { disposed = true; cleanup?.(); };
+  }, [notificationCenter, profile?.active_id]);
+  workspace.onQueueFinished = (target,success,completion)=>{
+    lastNotificationContexts.current.set(target.id,completion.context);
+    if (!profile) return;
+    const destination: NotificationTarget = { workspace_id: completion.workspaceId ?? profile.active_id, session_id: target.id, block_id: completion.blockId, execution_id: completion.executionId };
+    const response: NotificationResult = completion.notification ?? {
+      enabled: preferences.notifications, sound: preferences.notificationSound, success, suppressed: false, send_external: false, channels: {telegram:false,email:false},
+      title: completion.status === "cancelled" ? t("Execução cancelada") : `${completion.context.block_name || completion.context.type || target.title} · ${success ? t("Concluído") : t("Erro")}`,
+      message: completion.status === "cancelled" ? t("Execução cancelada.") : completion.context.error || (success ? t("Execução concluída.") : t("Não foi possível concluir a execução.")),
+    };
+    if (!shouldNotify(response)) return;
+    const entry = notificationCenter.publish({ title:response.title,message:response.message,color:response.color || (completion.status === "cancelled" ? undefined : success ? "#4ba979" : "#df646b"),success,target:destination,status:completion.status });
+    if (!entry) return;
+    if (isDesktop()) void showNativeNotification(entry,response.sound).catch(failure=>notificationCenter.deliveryError(destination,nativeNotificationError(failure)));
+  };
+  useEffect(() => {
+    if (!profile) return;
+    let disposed=false,cleanup:(()=>void)|undefined;
+    void runtime.subscribe(event=>{
+      if (disposed || event.event !== "notifications.delivery_finished" || !event.payload.block_id || !event.payload.workspace_id) return;
+      const errors=Object.entries(event.payload.deliveries).filter(([,delivery])=>delivery.status === "failed").map(([channel])=>`${channel}: ${t("Não foi possível entregar a notificação.")}`);
+      if(errors.length)notificationCenter.deliveryError({workspace_id:event.payload.workspace_id,session_id:event.payload.session_id,block_id:event.payload.block_id,execution_id:event.payload.execution_id},errors.join(" "));
+    }).then(stop=>{if(disposed)stop();else cleanup=stop;});
+    return()=>{disposed=true;cleanup?.();};
+  },[notificationCenter,profile?.active_id,t]);
   serviceHandler.current = event=>{
     if(event.event !== "pynia.tool_request" || typeof event.payload.request_id !== "string") return;
-    void handlePyniaTool(workspace,event,{notify:(title,message)=>notify(title,message),extraContext:id=>({charts:workspace.session(id)?.extras.charts ?? []}),chart:async(args,sessionId)=>{
+    void handlePyniaTool(workspace,event,{notify:(title,message,success)=>notify(title,message,undefined,success),extraContext:id=>({charts:workspace.session(id)?.extras.charts ?? []}),chart:async(args,sessionId)=>{
       const target=workspace.session(sessionId);if(!target)throw new Error("Sessão não encontrada.");
       const saved=(target.extras.charts ?? []) as SavedChart[],operation=args.operation ?? "list";
       if(operation === "list")return{charts:saved};
@@ -467,6 +527,7 @@ export function App() {
   }, [activateBottom]);
   useEffect(() => {
     const ids = new Set(state.sessions.map(s=>s.id)); languageContexts.current.retain(ids); completionIndex.current.retain(ids);
+    for(const id of lastNotificationContexts.current.keys())if(!ids.has(id))lastNotificationContexts.current.delete(id);
     const context=completionIndex.current.context(session,session.focusedBlockId,languageContexts.current);
     if(context)setCompletionContext(session.focusedBlockId,context);
   }, [session.id, session.focusedBlockId, session.blocks, session.variables, session.results, session.savedConnectionId, session.database, session.schema,languageRevision,state.sessions]);
@@ -492,7 +553,7 @@ export function App() {
         <button disabled={!dockControls || editingLocked} aria-haspopup="dialog" aria-expanded={layoutDialog} onClick={()=>setLayoutDialog(true)}>{translateUi("Exibir")}</button>
         <button onClick={() => setPackageDialog(true)}>{translateUi("Pacotes Python")}</button>
         <button onClick={()=>setRecentVisible(!recentVisible)}>{translateUi("Recentes")}</button>
-        <button onClick={()=>setNotificationDialog(true)}>{translateUi("Notificações")}</button>
+        <button onClick={()=>setNotificationHistory(true)}>{translateUi("Notificações")}{notificationState.unread > 0 && <span className="notification-menu-count">{notificationState.unread}</span>}</button>
         <button onClick={()=>setWorkspaceManager(true)} title={profile?.profile.path}>{translateUi("Workspace")}{profile ? `: ${profile.profile.name}` : ""}</button>
         <button onClick={()=>setAboutDialog(true)}>{translateUi("Sobre")}</button>
         <button onClick={()=>setUpdateDialog(true)}>{translateUi("Atualizações")}</button>
@@ -578,7 +639,8 @@ export function App() {
     {packageDialog && <Suspense fallback={null}><PackageManagerDialog onClose={()=>setPackageDialog(false)} onError={reportMessage}/></Suspense>}
     {notificationDialog && <Suspense fallback={null}><NotificationsDialog sessionId={session.id} config={session.extras.notification_config as NotificationConfig} context={notificationContext(session)} onDefaults={flags=>setPreferences(p=>({...p,...flags}))} onSave={notification_config=>workspace.patchSession(session.id,s=>({...s,modified:true,extras:{...s.extras,notification_config}}))} onClose={()=>setNotificationDialog(false)}/></Suspense>}
     {workspaceManager && <Suspense fallback={null}><WorkspaceManagerDialog busy={state.sessions.some(s=>s.busy) || switchingProfile} onSelect={selectProfile} onClose={()=>setWorkspaceManager(false)} onMessage={reportMessage}/></Suspense>}
-    {toast && <div className="notification-toast" role="status" style={{borderLeftColor:toast.color ?? "var(--blue)"}}><strong>{toast.title}</strong><p>{toast.message}</p><button aria-label={translateUi("Fechar notificação")} onClick={()=>setToast(undefined)}>{translateUi("×")}</button></div>}
+    <NotificationToasts center={notificationCenter} entries={notificationState.toasts} onActivate={openNotification}/>
+    {notificationHistory && <NotificationHistory center={notificationCenter} entries={notificationState.entries} onActivate={openNotification} onSettings={()=>{setNotificationHistory(false);setNotificationDialog(true);}} onClose={()=>setNotificationHistory(false)}/>}
     {connectionDialog && <ConnectionDialog initial={session.connection} onClose={() => setConnectionDialog(false)} onConnect={async (config) => { await workspace.connect(session.id, config); setExplorerRefresh(n=>n+1); }} />}
     {settingsDialog && <SettingsDialog preferences={preferences} shortcuts={shortcuts} transfer={configurationActions} onClose={() => setSettingsDialog(false)} onSave={async(p,next) => { await saveNotificationFlags(runtime,p);setPreferences(p);if(p.notifications && !preferences.notifications && isDesktop())run(requestPermission());setShortcuts(next); workspace.patchSession(session.id,s=>({...s,extras:{...s.extras,shared_delimiter:p.sharedDelimiter}})); try { localStorage.setItem("datapyn.desktop.shortcuts.v1", JSON.stringify(next)); } catch { reportMessage("Atalhos aplicados. Não foi possível persistir nesta máquina."); } setSettingsDialog(false); }} />}
     {connectionPicker && <ConnectionPicker currentId={session.blocks.find(b=>b.id === connectionPicker)?.connection_id ?? session.savedConnectionId} onSelect={c => { if (connectionPicker === session.blocks[0].id) run(connectSaved(c)); else workspace.updateBlock(session.id,connectionPicker,{connection_id:c.id}); setConnectionPicker(undefined); requestAnimationFrame(()=>focusEditor(session.focusedBlockId)); }} onDefault={()=>{workspace.updateBlock(session.id,connectionPicker,{connection_id:undefined,database_name:undefined,schema:undefined});setConnectionPicker(undefined);}} onClose={()=>setConnectionPicker(undefined)}/>}

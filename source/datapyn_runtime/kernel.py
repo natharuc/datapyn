@@ -179,6 +179,7 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
     namespace.setdefault("display", rich_capture.display)
     connector = None
     context_key = "default"
+    connection_labels = {}
     editor_contexts = {}
     snapshot_dirty = False
 
@@ -202,6 +203,13 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
     def activate(params, *, default=False):
         nonlocal connector, context_key
         connector = pool.activate(params, default=default)
+        config = params.get("_connection_config") or params.get("config") or pool.default_config or {}
+        name = params.get("_connection_name") or config.get("name")
+        if name:
+            connection_labels[pool.active_key] = str(name)
+        for key in list(connection_labels):
+            if key not in pool.items:
+                del connection_labels[key]
         context_key = "|".join(str(params.get(key) or "") for key in ("connection_id", "database", "schema")) or "default"
         namespace.update({
             "db_engine": connector.engine, "db_type": connector.db_type,
@@ -267,11 +275,16 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                 old_stdout, old_stderr = sys.stdout, sys.stderr
                 sys.stdout, sys.stderr = CapturedStream(capture, "stdout"), CapturedStream(capture, "stderr")
                 results, rich_outputs, error, download_result = [], [], None, None
+                execution_connection = None
                 rich_capture.begin()
                 try:
                     before = {name: id(value) for name, value in namespace.items() if store.is_frame(value)}
                     if params.get("connection_id") or params.get("_connection_config") or pool.default_config is not None:
                         activate(params)
+                    if connector is not None:
+                        execution_connection = {"database": connector.connection_params.get("database", "")}
+                        if pool.active_key in connection_labels:
+                            execution_connection["connection"] = connection_labels[pool.active_key]
                     if params["language"] == "sql":
                         if connector is None:
                             raise ConnectionError("Connect this session to a database first")
@@ -356,7 +369,10 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                 # immutable names/types/columns before clients observe the
                 # completed execution, without waiting for database metadata.
                 publish_context()
-                send({"event": "execution.finished", "payload": payload, "job_id": job_id})
+                from .notifications import capture_completion
+                notification = capture_completion(params, payload, namespace, store, connection_context=execution_connection)
+                send({"event": "execution.finished", "payload": payload, "job_id": job_id,
+                      **({"notification_delivery": notification} if notification is not None else {})})
                 from .sql_context import changes_metadata
                 invalidated = params["language"] == "sql" and connector is not None and changes_metadata(params["code"])
                 if invalidated:

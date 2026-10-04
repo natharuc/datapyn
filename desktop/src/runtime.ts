@@ -1,5 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { NotificationResult } from "./NotificationsDialog";
 
 export type Language = "sql" | "python";
 export type Primitive = null | string | number | boolean;
@@ -25,9 +26,12 @@ export interface ExecutionFinished {
   session_id: string; execution_id: string; status: "succeeded" | "failed" | "cancelled";
   duration_ms: number; error?: string; results: ResultRef[]; variables: Variable[];
   rich_outputs?: RichOutput[];
+  notification?: NotificationResult;
+  notification_error?: string;
   export?: {files:Array<{path:string;rows:number;columns:number;size_bytes:number}>;total_rows:number;cancelled:boolean;errors:string[]};
 }
 export type RuntimeEvent =
+  | { event: "notifications.delivery_finished"; payload: {session_id:string;execution_id:string;block_id?:string;workspace_id?:string;deliveries:Record<string,{status:string;error?:string}>} }
   | { event: "execution.started"; payload: { session_id: string; execution_id: string } }
   | { event: "execution.output"; payload: { session_id: string; execution_id: string; stream: string; text: string } }
   | { event: "execution.export_progress"; payload: {session_id:string;execution_id:string;path:string;rows:number;size_bytes:number;total_rows:number} }
@@ -48,6 +52,7 @@ export function isRuntimeEvent(value: unknown): value is RuntimeEvent {
   if (typeof payload.session_id !== "string") return false;
   if (event === "session.ready" || event === "session.reset") return true;
   if (event === "session.error") return typeof payload.error === "string";
+  if (event === "notifications.delivery_finished") return typeof payload.execution_id === "string" && Boolean(payload.deliveries && typeof payload.deliveries === "object");
   if (event === "namespace.changed") return Array.isArray(payload.variables) && Array.isArray(payload.results);
   if (event === "language.context_updated") return typeof payload.version === "number" && Number.isFinite(payload.version)
     && Boolean(payload.variables && typeof payload.variables === "object" && !Array.isArray(payload.variables));

@@ -1,3 +1,8 @@
+mod execution_notifications;
+#[cfg(windows)]
+mod notification_activator;
+#[cfg(windows)]
+mod notification_identity;
 mod runtime;
 
 use serde::{Deserialize, Serialize};
@@ -532,6 +537,7 @@ pub fn run() {
                 .to_string_lossy(),
         ))))
         .manage(runtime::Backend::default())
+        .manage(execution_notifications::NativeNotifications::default())
         .manage(SplashLifecycle {
             latest: Mutex::new(SplashSnapshot::new(env!("CARGO_PKG_VERSION").into())),
             exiting: AtomicBool::new(false),
@@ -621,6 +627,8 @@ pub fn run() {
                 })
                 .build()?;
             disable_browser_accelerators(&main).map_err(std::io::Error::other)?;
+            // A closed preview process cannot route old immutable toast targets.
+            app.state::<execution_notifications::NativeNotifications>().initialize(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -632,7 +640,11 @@ pub fn run() {
             splash_retry,
             splash_exit,
             popout_layout,
-            close_popout
+            close_popout,
+            execution_notifications::execution_notification_show,
+            execution_notifications::execution_notification_take_pending,
+            execution_notifications::execution_notification_ack,
+            execution_notifications::execution_notification_focus_window
         ])
         .build(tauri::generate_context!())
         .expect("Unable to initialize the DataPyn desktop host");
@@ -659,6 +671,7 @@ pub fn run() {
             }
         }
         if matches!(event, tauri::RunEvent::Exit) {
+            app.state::<execution_notifications::NativeNotifications>().shutdown();
             // Cancelling startup must not wait for a request that holds the
             // runtime client mutex. Process exit closes the broker pipe and
             // Windows' KILL_ON_JOB_CLOSE handle, including owned kernels.

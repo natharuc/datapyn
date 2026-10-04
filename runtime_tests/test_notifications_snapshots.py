@@ -138,6 +138,110 @@ def test_numeric_zero_rule_is_not_empty():
     assert not notify.rule_matches(0, "is_empty", "")
 
 
+def test_completion_captures_only_its_result_and_immutable_namespace_text(isolated, monkeypatch):
+    monkeypatch.setattr(notify, "secret_get", lambda _: pytest.fail("Local completion must not read keyring"))
+    store = ResultStore(pd, pl)
+    frame = pd.DataFrame({"value": [7]})
+    result = store.register(frame, "df")
+    namespace = {"marker": "first"}
+    finished = {"session_id": "session", "execution_id": "one", "status": "succeeded", "results": [result]}
+    params = {"language": "python", "notification": {
+        "config": {"enabled": True, "title": "{{tab_name}}/{{block_name}}", "message": "{{rows}}/{{result[0][0]}}/{{marker}}"},
+        "context": {"tab_name": "Analysis", "block_name": "source", "block_id": "block-one", "rows": 999, "result_id": "stale"},
+    }}
+    prepared = notify.capture_completion(params, finished, namespace, store)
+    assert finished["notification"]["title"] == "Analysis/source"
+    assert finished["notification"]["message"] == "1/7/first"
+    assert prepared["_completion_context"] == {"session_id": "session", "execution_id": "one", "block_id": "block-one", "workspace_id": None}
+    frame.iat[0, 0] = 99
+    namespace["marker"] = "second"
+    params["notification"]["context"]["block_name"] = "another"
+    assert finished["notification"]["message"] == "1/7/first"
+    assert finished["notification"]["title"] == "Analysis/source"
+    assert "_settings" not in finished["notification"] and "_secrets" not in finished["notification"]
+    # An execution without results must not render cells from the previous one.
+    no_result = {**finished, "execution_id": "two", "results": []}
+    notify.capture_completion(params, no_result, namespace, store)
+    assert no_result["notification"]["message"] == "0/{{result[0][0]}}/second"
+    legacy = notify.evaluate({"config": {"enabled": True, "message": "{{result[0][0]}}"},
+                              "context": {"result_id": None}}, namespace, store, _loaded={"settings": prepared["_settings"]})
+    assert legacy["message"] == "99"
+
+
+def test_completion_only_emits_last_success_but_always_emits_failure_and_cancel(isolated):
+    params = {"language": "sql", "notification": {"emit_notification": False, "context": {"block_id": "intermediate"}}}
+    finished = {"session_id": "a", "execution_id": "one", "status": "succeeded", "results": []}
+    assert notify.capture_completion(params, finished) is None and "notification" not in finished
+    failed = {**finished, "status": "failed", "error": "Expected error"}
+    assert notify.capture_completion(params, failed)["notification"]["message"] == "Erro: Expected error"
+    cancelled = {**finished, "status": "cancelled", "error": "Namespace reset"}
+    response = notify.capture_completion(params, cancelled)["notification"]
+    assert response["status"] == "cancelled" and response["success"] is False
+    assert response["title"] == "Execução cancelada" and response["message"] == "Execução cancelada."
+    # A present, empty envelope opts into the normal global default templates.
+    default = {**finished, "execution_id": "default"}
+    assert notify.capture_completion({"language": "python", "notification": {}}, default)["notification"]["title"] == "python"
+
+
+def test_cancelled_completion_preserves_global_and_session_custom_templates(isolated):
+    notify.settings_set({"settings": {"error_title": "Global {{block_name}}", "error_message": "Status={{status}}: {{error}}"}})
+    finished = {"session_id": "a", "execution_id": "one", "status": "cancelled", "results": []}
+    params = {"language": "python", "notification": {"context": {"block_name": "Source"}}}
+    response = notify.capture_completion(params, finished)["notification"]
+    assert response["title"] == "Global Source"
+    assert response["message"] == "Status=cancelled: Execução cancelada."
+    params["notification"]["config"] = {"enabled": True, "title": "Custom {{block_name}}", "message": "{{status}}/{{error}}"}
+    response = notify.capture_completion(params, finished)["notification"]
+    assert response["title"] == "Custom Source" and response["message"] == "cancelled/Execução cancelada."
+
+
+def test_queue_result_only_reuses_exact_available_frame_for_success(isolated):
+    store = ResultStore(pd, pl)
+    queued = store.register(pd.DataFrame({"value": [7, 8]}), "queue_frame")
+    unrelated = store.register(pd.DataFrame({"value": [999]}), "unrelated")
+    params = {"language": "python", "notification": {
+        "config": {"enabled": True, "message": "{{rows}}/{{result[0][0]}}"},
+        "queue_result": {"result_id": queued["result_id"], "rows": 2},
+        "context": {"block_id": "last", "workspace_id": "origin"},
+    }}
+    finished = {"session_id": "a", "execution_id": "last", "status": "succeeded", "results": []}
+    prepared = notify.capture_completion(params, finished, {}, store)
+    assert finished["notification"]["message"] == "2/7"
+    assert prepared["_completion_context"]["workspace_id"] == "origin"
+    for status in ("failed", "cancelled"):
+        failed = {**finished, "status": status, "results": [unrelated]}
+        notify.capture_completion(params, failed, {}, store)
+        assert failed["notification"]["message"] == "0/{{result[0][0]}}"
+    downloaded = {**finished, "export": {"total_rows": 15}}
+    notify.capture_completion(params, downloaded, {}, store)
+    assert downloaded["notification"]["message"] == "15/{{result[0][0]}}"
+    store.release(queued["result_id"])
+    notify.capture_completion(params, finished, {}, store)
+    assert finished["notification"]["message"] == "0/{{result[0][0]}}"
+
+
+def test_suppressed_completion_never_reads_credentials_or_delivers(isolated, monkeypatch):
+    notify.settings_set({"settings": {"telegram": {"enabled": True, "chat_id": "recipient"}}, "secrets": {"telegram_bot_token": "private-token"}})
+    monkeypatch.setattr(notify, "secret_get", lambda _: pytest.fail("Suppressed completion must not read keyring"))
+    monkeypatch.setattr(notify, "deliver", lambda *args: pytest.fail("Suppressed completion must not deliver"))
+    finished = {"session_id": "a", "execution_id": "one", "status": "succeeded", "results": []}
+    prepared = notify.capture_completion({"language": "python", "notification": {"config": {"enabled": True, "rules": [
+        {"left": "yes", "operator": "equals", "value": "yes", "action": "suppress"},
+    ]}}}, finished)
+    assert finished["notification"]["suppressed"] is True
+    assert finished["notification"]["send_external"] is False
+    assert notify.deliver_prepared(prepared)["deliveries"] == {}
+
+
+def test_completion_evaluation_errors_are_redacted_and_do_not_change_execution(isolated):
+    finished = {"session_id": "a", "execution_id": "one", "status": "succeeded", "results": [{"result_id": "valid", "row_count": 7}]}
+    before = dict(finished)
+    assert notify.capture_completion({"language": "python", "notification": {"config": "invalid-secret-config"}}, finished) is None
+    assert {key: finished[key] for key in before} == before
+    assert finished["notification_error"] == "ValueError: notification evaluation failed"
+    assert "secret-config" not in json.dumps(finished)
+
+
 def test_snapshot_disabled_by_default(isolated):
     store = ResultStore(pd, pl)
     response = snapshot.save({"session_id": "session-1"}, {"df": pd.DataFrame({"x": [1]})}, store)

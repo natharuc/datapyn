@@ -1,6 +1,8 @@
 import { errorText, isRuntimeEvent, type ExecutionFinished, type Language, type ResultRef, type RuntimeEvent, type RuntimeInfo, type RuntimeTransport, type Variable,type RichOutput } from "./runtime";
 import type { NativeDocumentRecord, NativeWorkspaceState } from "./nativeDrafts";
 import { flushEditorViewStates,restoreEditorViewState, selectedCode, subscribeEditorViewStates } from "./editorRegistry";
+import type { QueueCompletion } from "./executionNotifications";
+import type { NotificationContext } from "./NotificationsDialog";
 
 export type BlockStatus = "idle" | "queued" | "running" | "cancelling" | "succeeded" | "failed" | "cancelled";
 export interface Block {
@@ -89,7 +91,7 @@ export function encodeDocument(session: SessionDocument): Record<string, unknown
 }
 
 export function eventBelongsToSession(session: SessionDocument, event: RuntimeEvent): boolean {
-  if (event.event === "backend.exited" || event.event === "language.context_updated" || event.event === "result.export_progress") return false;
+  if (event.event === "backend.exited" || event.event === "language.context_updated" || event.event === "result.export_progress" || event.event === "notifications.delivery_finished") return false;
   if (event.payload.session_id !== session.id) return false;
   return event.event === "session.reset" || event.event === "session.error" || event.event === "session.ready" || event.event === "namespace.changed" || event.payload.execution_id === session.currentExecutionId;
 }
@@ -104,7 +106,7 @@ function appendLog(session: SessionDocument, stream: string, text: string, block
 
 export function applyRuntimeEvent(session: SessionDocument, event: RuntimeEvent): SessionDocument {
   if (!isRuntimeEvent(event)) return session;
-  if (event.event === "backend.exited" || event.event === "language.context_updated" || event.event === "result.export_progress") return session;
+  if (event.event === "backend.exited" || event.event === "language.context_updated" || event.event === "result.export_progress" || event.event === "notifications.delivery_finished") return session;
   if (!eventBelongsToSession(session, event)) return session;
   if (event.event === "session.ready") return session;
   if (event.event === "namespace.changed") return {...session,variables:event.payload.variables,results:event.payload.results,resultRevision:session.resultRevision+1};
@@ -184,11 +186,13 @@ export class WorkspaceController {
   private readonly blockOwners=new Map<string,string>();
   private browserMigrationRead=false;
   private editingLocked=false;
+  private workspaceIdentity?:string;
+  setWorkspaceIdentity(id:string|undefined){this.workspaceIdentity=id;}
   setEditingLocked(locked:boolean){this.editingLocked=locked;}
   isEditingLocked(){return this.editingLocked;}
   private unsubscribeEditorViews?:()=>void;
   setSharedDelimiter(delimiter: string) { this.sharedDelimiter = delimiter; }
-  onQueueFinished?: (session: SessionDocument, success: boolean) => void;
+  onQueueFinished?: (session: SessionDocument, success: boolean, completion: QueueCompletion) => void;
   nativeSnapshot():NativeWorkspaceState {
     flushEditorViewStates();
     return {documents:this.state.sessions.map(session=>{
@@ -503,6 +507,7 @@ export class WorkspaceController {
     return this.runQueue(sessionId,[{...block,code:selection ?? block.code,export:exportOptions}]);
   }
   private async runQueue(sessionId: string, queue: Block[]) {
+    const workspaceId = this.workspaceIdentity;
     const session = this.session(sessionId);
     if (session?.runtimeError) throw new Error(session.notice ?? session.runtimeError);
     if (this.session(sessionId)?.busy) throw new Error("Esta aba já tem uma execução em andamento.");
@@ -511,28 +516,46 @@ export class WorkspaceController {
     this.cancelRequests.delete(sessionId);
     this.patchSession(sessionId, (session) => ({ ...session, busy: true, executionStartedAt: Date.now(), notice: undefined,
       blocks: session.blocks.map((block) => runnable.some((item) => item.id === block.id) ? { ...block, status: "queued", error: undefined } : block) }));
-    let succeeded = true;
+    let succeeded = true, failedError: string | undefined, cancelled = false;
+    let lastBlock = runnable[0], lastExecutionId = newId();
+    let lastContext: NotificationContext = { tab_name: session?.title, block_name: lastBlock.block_name, blocks: 0,
+      type: lastBlock.language === "sql" ? "SQL" : "Python", rows: 0 };
     let completed:ExecutionFinished|undefined;
+    let queueResult:{result_id:string;rows:number}|undefined;
     try {
       await this.ensureSession(sessionId);
-      for (const block of runnable) {
-        if (this.cancelRequests.has(sessionId)) {succeeded=false;break;}
-        const result = await this.runOne(sessionId, block);
+      for (const [index, block] of runnable.entries()) {
+        if (this.cancelRequests.has(sessionId)) {succeeded=false;cancelled=true;break;}
+        lastBlock = block; if (index) lastExecutionId = newId();
+        lastContext = { tab_name: session?.title, block_name: block.block_name, blocks: index + 1,
+          type: block.language === "sql" ? "SQL" : "Python", rows: 0, connection: String(block.connection_name ?? session?.extras.connection_name ?? session?.connection?.name ?? ""), database: block.database_name ?? session?.database };
+        const result = await this.runOne(sessionId, block, lastExecutionId, {
+          config: session?.extras.notification_config, context: { ...lastContext, block_id: block.id, workspace_id: workspaceId }, queue_result:queueResult, emit_notification: index === runnable.length - 1,
+        });
         completed = result;
-        if (result.status !== "succeeded") { succeeded = false; this.message(result.status === "failed" ? "Fila interrompida após erro." : "Execução cancelada."); break; }
+        const frame = result.results.at(-1);
+        if(frame)queueResult={result_id:frame.result_id,rows:frame.row_count};
+        lastContext = { ...lastContext, success: result.status === "succeeded", error: result.error,
+          result_id: frame?.result_id ?? (result.status === "succeeded" ? queueResult?.result_id : undefined), rows: result.export?.total_rows ?? frame?.row_count ?? (result.status === "succeeded" ? queueResult?.rows ?? 0 : 0) };
+        if (result.status !== "succeeded") { succeeded = false; cancelled = result.status === "cancelled"; this.message(result.status === "failed" ? "Fila interrompida após erro." : "Execução cancelada."); break; }
       }
-    } catch (error) { succeeded = false; this.message(errorText(error)); throw error; }
+    } catch (error) { succeeded = false; failedError = errorText(error); this.message(failedError); throw error; }
     finally {
       this.cancelRequests.delete(sessionId);
       this.patchSession(sessionId, (session) => ({ ...session, busy: false, lastDurationMs: session.executionStartedAt ? Date.now() - session.executionStartedAt : undefined, executionStartedAt: undefined, currentExecutionId: undefined, currentBlockId: undefined,
         blocks: session.blocks.map((block) => ["queued", "running", "cancelling"].includes(block.status) ? { ...block, status: "cancelled" } : block) }));
       this.schedulePeriodic(sessionId);
-      const current = this.session(sessionId);if(current) this.onQueueFinished?.(current,succeeded);
+      const current = this.session(sessionId);
+      const status = cancelled ? "cancelled" : succeeded ? "succeeded" : "failed";
+      if(current) try { this.onQueueFinished?.(current,succeeded,{ blockId: lastBlock.id, executionId: lastExecutionId, workspaceId,
+        status,
+        context: { ...lastContext, success: succeeded, error: failedError ?? (cancelled ? "Execução cancelada." : lastContext.error) },
+        notification: !failedError && completed?.execution_id === lastExecutionId && completed.status === status ? completed.notification : undefined }); }
+      catch(error) { this.message(errorText(error)); }
     }
     return completed;
   }
-  private async runOne(sessionId: string, block: Block): Promise<ExecutionFinished> {
-    const executionId = newId();
+  private async runOne(sessionId: string, block: Block, executionId: string, notification: Record<string, unknown>): Promise<ExecutionFinished> {
     const completion = new Promise<ExecutionFinished>((resolve, reject) => this.completions.set(executionId, { resolve, reject, sessionId, blockId: block.id }));
     // The event channel may report failure before execution.run's request acknowledgement.
     void completion.catch(() => {});
@@ -548,6 +571,7 @@ export class WorkspaceController {
       shared_parameters: this.session(sessionId)?.extras.shared_parameters_enabled === false ? [] : this.session(sessionId)?.extras.shared_parameters ?? [],
       shared_delimiter: this.sharedDelimiter,
       export: block.export,
+      notification,
     }).then(() => completion).catch((error) => {
         // A terminal event is authoritative even if its request acknowledgement arrives later.
         if (this.completions.delete(executionId)) {

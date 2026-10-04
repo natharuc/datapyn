@@ -235,7 +235,7 @@ class SessionRuntime:
             execution_id = job.params["execution_id"]
             with self._lock:
                 self._states[execution_id] = status
-            self.emit({"event": "execution.finished", "payload": {
+            payload = {
                 "session_id": self.session_id,
                 "execution_id": execution_id,
                 "status": status,
@@ -243,9 +243,26 @@ class SessionRuntime:
                 "error": message,
                 "results": [],
                 "variables": [],
-            }})
+            }
+            from .notifications import capture_completion
+            self._emit_finished(payload, capture_completion(job.params, payload))
         elif job.request_id is not None:
             self.emit({"id": job.request_id, "error": {"code": "kernel_reset", "message": message}})
+
+    def _emit_finished(self, payload, prepared=None):
+        # The local completion is delivered before scheduling any external IO.
+        self.emit({"event": "execution.finished", "payload": payload})
+        if prepared is not None and self.deliver_notification is not None:
+            try:
+                self.deliver_notification(None, prepared)
+            except Exception as error:
+                (prepared.get("_secrets") or {}).clear()
+                prepared.pop("_secrets", None)
+                self.emit({"event": "notifications.delivery_finished", "payload": {
+                    **prepared.get("_completion_context", {}),
+                    "deliveries": {channel: {"status": "failed", "error": f"{type(error).__name__}: notification scheduling failed"}
+                                   for channel, enabled in prepared["notification"]["channels"].items() if enabled},
+                }})
 
     def _reset_kernel(self, reason: str, active: Job | None, stale: list[Job]):
         self._stop_process()
@@ -314,6 +331,8 @@ class SessionRuntime:
                         return
                     self._states[payload["execution_id"]] = payload["status"]
                     self._active = None
+                    self._emit_finished(payload, message.get("notification_delivery"))
+                    return
                 elif event.startswith("execution.") and (not self._active or self._active.method != "execution.run"):
                     return
                 self.emit({"event": event, "payload": payload})
@@ -440,6 +459,7 @@ class Supervisor:
         self.emit = self._deliver
         self._internal = {}
         self._internal_lock = threading.RLock()
+        self._notification_deliveries = {}
         self._flushes = 0
         self.profile_path = profiles.profile_path()
         import os
@@ -453,13 +473,39 @@ class Supervisor:
         self.pynia = PyniaService(self.emit, self.internal_rpc, self.internal_query, lambda: self.catalog, state_path=self.profile_path)
 
     def deliver_notification(self, request_id, prepared):
-        self.background.submit(request_id, "notifications.deliver_prepared", prepared, {})
+        if request_id is not None:
+            # Preserve the existing explicit notifications.send RPC response.
+            self.background.submit(request_id, "notifications.deliver_prepared", prepared, {})
+            return
+        notification = prepared["notification"]
+        channels = [channel for channel, enabled in notification["channels"].items() if enabled]
+        if not notification["send_external"] or not channels:
+            (prepared.get("_secrets") or {}).clear()
+            prepared.pop("_secrets", None)
+            return
+        identifier = "notification:" + uuid.uuid4().hex
+        with self._internal_lock:
+            self._notification_deliveries[identifier] = {**prepared.get("_completion_context", {}), "_channels": channels}
+        try:
+            self.background.submit(identifier, "notifications.deliver_prepared", prepared, {})
+        except Exception as error:
+            self._deliver({"id": identifier, "error": {"message": f"{type(error).__name__}: notification scheduling failed"}})
+            (prepared.get("_secrets") or {}).clear()
+            prepared.pop("_secrets", None)
 
     def _deliver(self, message):
         request_id = message.get("id")
         event = message.get("event")
         execution_id = message.get("payload", {}).get("execution_id") if event else None
         with self._internal_lock:
+            notification = self._notification_deliveries.pop(request_id, None) if request_id else None
+            if notification is not None:
+                channels = notification.pop("_channels", [])
+                deliveries = message.get("result", {}).get("deliveries", {})
+                if "error" in message:
+                    deliveries = {channel: {"status": "failed", "error": "Notification delivery failed"} for channel in channels}
+                self._emit({"event": "notifications.delivery_finished", "payload": {**notification, "deliveries": deliveries}})
+                return
             pending = self._internal.get(request_id) if request_id else self._internal.get(execution_id)
             if pending:
                 done, box = pending
@@ -584,7 +630,11 @@ class Supervisor:
             routed["connection_id"] = identifier
         if identifier:
             self._identifier(identifier, "connection_id")
-            routed["_connection_config"] = self.catalog.config(identifier)
+            # The display name lives outside the driver config. Capture it
+            # without changing engine keys or exposing credentials to the UI.
+            with self.catalog._lock:
+                routed["_connection_config"] = self.catalog.config(identifier)
+                routed["_connection_name"] = self.catalog._find("connections", identifier)["name"]
         return routed
 
     def _session(self, params):
@@ -814,6 +864,12 @@ class Supervisor:
             variable_name = params.get("variable_name")
             if variable_name is not None and (not isinstance(variable_name, str) or not variable_name.isidentifier() or variable_name.startswith("__")):
                 raise RuntimeErrorResponse("invalid_params", "variable_name must be a valid Python identifier")
+            notification = params.get("notification")
+            if notification is not None:
+                if not isinstance(notification, dict) or not isinstance(notification.get("context", {}), dict):
+                    raise RuntimeErrorResponse("invalid_params", "notification and its context must be objects")
+                if not isinstance(notification.get("emit_notification", True), bool):
+                    raise RuntimeErrorResponse("invalid_params", "emit_notification must be a boolean")
             download = params.get("export")
             if download is not None:
                 if params["language"] != "sql" or not isinstance(download, dict):
@@ -857,6 +913,7 @@ class Supervisor:
         for session in list(self.sessions.values()):
             self._flush_snapshot(session)
         with self._internal_lock:
+            self._notification_deliveries.clear()
             for done, box in self._internal.values():
                 box["error"] = {"message": "Runtime is closing"}
                 done.set()

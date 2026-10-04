@@ -16,7 +16,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   gridFont:"Consolas, Ubuntu Mono, monospace",gridFontSize:12,
   tabSize: 4, wordWrap: false, lineNumbers: true, minimap: false, autocomplete: true,
   aiAutocomplete: false, connectionIdleSeconds: 300, maximizeFirstBlock: false, leftWidth: 260, rightWidth: 260, resultHeight: 310,
-  leftVisible: true, rightVisible: true, displayRowLimit: 100, notifications: false, notificationSound: false,
+  leftVisible: true, rightVisible: true, displayRowLimit: 100, notifications: true, notificationSound: true,
   sharedDelimiter: "{{name}}",
 };
 export const PREFERENCES_KEY = "datapyn.desktop.preferences.v1";

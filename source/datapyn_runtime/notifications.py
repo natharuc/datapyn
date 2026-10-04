@@ -86,9 +86,13 @@ def _normalize_settings(value):
     return settings
 
 
-def settings_get(params=None):
+def _load_settings():
     path = _settings_path()
-    settings = _normalize_settings(json.loads(path.read_text(encoding="utf-8")) if path.exists() else {})
+    return _normalize_settings(json.loads(path.read_text(encoding="utf-8")) if path.exists() else {})
+
+
+def settings_get(params=None):
+    settings = _load_settings()
     errors = []
     credentials = {}
     for name in SECRET_NAMES:
@@ -197,8 +201,12 @@ def evaluate(params, namespace=None, store=None, *, _loaded=None):
     custom = bool(config and config["enabled"])
     result = None
     if store is not None:
-        result_id = context.get("result_id") or params.get("result_id")
-        result = store.frames.get(result_id) if result_id else next(reversed(store.frames.values()), None)
+        if "_completion_result_id" in params:
+            result_id = params["_completion_result_id"]
+            result = store.frames.get(result_id) if result_id else None
+        else:
+            result_id = context.get("result_id") or params.get("result_id")
+            result = store.frames.get(result_id) if result_id else next(reversed(store.frames.values()), None)
     render = lambda template: render_template(template, context, namespace, result)
     title = render(config["title"] if custom else settings["success_title" if success else "error_title"])
     message = render(config["message"] if custom else settings["success_message" if success else "error_message"])
@@ -257,7 +265,7 @@ def deliver(channel, settings, notification, secrets=None):
         raise ValueError("Choose telegram or email")
 
 
-def prepare(params, namespace=None, store=None):
+def prepare(params, namespace=None, store=None, *, _loaded=None):
     """Resolve the namespace in the kernel; deliver its result on the broker.
 
     This is an internal IPC payload, never a frontend RPC response or an event.
@@ -265,7 +273,7 @@ def prepare(params, namespace=None, store=None):
     Capturing the settings and credentials together prevents a later workspace
     switch from selecting another profile's recipients or credential entries.
     """
-    loaded = settings_get()
+    loaded = _loaded if _loaded is not None else settings_get()
     notification = evaluate(params, namespace, store, _loaded=loaded)
     secrets, errors = {}, {}
     if notification["send_external"]:
@@ -278,6 +286,72 @@ def prepare(params, namespace=None, store=None):
                     errors[channel] = {"status": "failed", "error": f"{type(error).__name__}: credential store unavailable"}
     return {"version": 1, "notification": notification, "_settings": deepcopy(loaded["settings"]),
             "_secrets": secrets, "_errors": errors}
+
+
+def capture_completion(params, finished, namespace=None, store=None, *, connection_context=None):
+    """Freeze only rendered text/rules for this execution before its next job.
+
+    Credentials remain internal, and transport work runs on the broker. Local
+    and suppressed notifications do not query the OS credential store at all.
+    Notification failures must never change execution results or their status.
+    """
+    specification = params.get("notification")
+    status = finished["status"]
+    if specification is None:
+        return None
+    try:
+        if status == "succeeded" and not specification.get("emit_notification", True):
+            return None
+        context = deepcopy(specification.get("context") or {})
+        if connection_context is not None:
+            context.update(connection_context)
+        results = finished.get("results") or []
+        result = results[-1] if results and status == "succeeded" else None
+        if result is None and status == "succeeded" and "export" not in finished and store is not None:
+            queue_result = specification.get("queue_result") or {}
+            result_id = queue_result.get("result_id")
+            if isinstance(result_id, str) and result_id in store.frames:
+                # Only the exact result explicitly supplied by this queue is
+                # eligible, never the latest unrelated frame in the session.
+                result = store.descriptors.get(result_id)
+        context.update({
+            "session_id": finished["session_id"], "execution_id": finished["execution_id"],
+            "success": status == "succeeded", "status": status, "type": params["language"],
+            "error": "Execução cancelada." if status == "cancelled" else finished.get("error", ""),
+            "rows": result["row_count"] if result else (finished.get("export") or {}).get("total_rows", 0) if status == "succeeded" else 0,
+            "result_id": result["result_id"] if result else None,
+        })
+        config = normalize_config(specification.get("config"))
+        settings = _load_settings()
+        # Destination checks are enough to determine whether local rendering
+        # needs credentials. The external path then uses the existing exact
+        # settings/credential snapshot, including profile isolation.
+        settings["telegram"]["configured"] = bool(settings["telegram"]["chat_id"])
+        email = settings["email"]
+        email["configured"] = bool(email["host"] and email["from_address"] and _recipients(email["to"]))
+        # The legacy preview/send operation can use its most recent frame.
+        # Completion rendering must explicitly select only this execution's
+        # frame, including its absence, without changing that legacy behavior.
+        rendered_params = {"config": config, "context": context, "_completion_result_id": context["result_id"]}
+        preliminary = evaluate(rendered_params, namespace, store, _loaded={"settings": settings})
+        if preliminary["send_external"] and any(preliminary["channels"].values()):
+            prepared = prepare(rendered_params, namespace, store)
+        else:
+            prepared = {"version": 1, "notification": preliminary, "_settings": deepcopy(settings), "_secrets": {}, "_errors": {}}
+        if status == "cancelled" and not (config and config["enabled"]):
+            # Preserve configured templates, but the normal cancellation is
+            # a clear status rather than an execution error notification.
+            if prepared["_settings"]["error_title"] == DEFAULTS["error_title"]:
+                prepared["notification"]["title"] = "Execução cancelada"
+            if prepared["_settings"]["error_message"] == DEFAULTS["error_message"]:
+                prepared["notification"]["message"] = "Execução cancelada."
+        prepared["notification"]["status"] = status
+        prepared["_completion_context"] = {key: context.get(key) for key in ("session_id", "execution_id", "block_id", "workspace_id")}
+        finished["notification"] = deepcopy(prepared["notification"])
+        return prepared
+    except Exception as error:
+        finished["notification_error"] = f"{type(error).__name__}: notification evaluation failed"
+        return None
 
 
 def deliver_prepared(payload):

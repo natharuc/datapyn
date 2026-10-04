@@ -161,6 +161,14 @@ Validação local desta mudança: 152 testes frontend em 25 arquivos, 12 testes 
 
 Banco externo/autenticação, agentes ACP autenticados, instalações reais de pacotes, SMTP/Telegram, assinatura/atualização publicada, instalador em máquina limpa, Linux/macOS e o roteiro completo em vários monitores continuam como aceites explícitos da matriz. Implementação e teste local não aprovam esses cenários por inferência.
 
+## Notificações e navegação de conclusões
+
+A conclusão captura o workspace/sessão/bloco/execução de origem, mesmo após mudar de aba ou de foco. Avisos locais e o histórico recente permitem voltar ao editor; no Windows, a ponte WinRT recebe clique no corpo ou em **Abrir resultado**, restaura a janela principal/popout e confirma o destino consumido. Histórico tem 100 entradas e até três avisos simultâneos, sem DataFrames ou credenciais na interface.
+
+Templates são renderizados no kernel antes da próxima execução; usam conexão/database efetivos e, quando fornecida explicitamente, a última tabela da mesma fila. Erro e cancelamento ficam distintos. Supressão e som seguem a configuração existente. Entregas Telegram/SMTP rodam separadamente e falhas aparecem na entrada correta, com a identidade do workspace original.
+
+Validação automatizada em 4 de outubro de 2026: 485 testes frontend em 49 arquivos, TypeScript, 510 testes runtime/compatibilidade, Ruff e 35 testes Rust. Build de produção e smoke de paridade do sidecar congelado passaram. No executável, o histórico Windows confirmou entregas reais; a ativação via SCM/COM restaurou a janela minimizada e focou o bloco Python de origem. Encerrar a instância removeu o grupo nativo inteiro. Detalhes e limites do aceite em [TAURI_NOTIFICATIONS.md](TAURI_NOTIFICATIONS.md).
+
 ## Organização e restauração dos docks
 
 O menu **Exibir** controla os nove painéis, incluindo a Saída Pynia independente. Abas podem ser movidas, divididas ou agrupadas por arraste ou pelos controles direcionais; divisórias redimensionam os grupos. Os cabeçalhos permitem maximizar, flutuar dentro da aplicação, destacar em uma janela nativa e acoplar novamente. Nos docks flutuantes, arrastar o cabeçalho move a janela; Shift permite reorganizar o grupo por arraste.
