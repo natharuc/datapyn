@@ -1,7 +1,8 @@
 import {describe,expect,it,vi} from "vitest";
 import {isRuntimeEvent,type RuntimeEvent} from "./runtime";
 import {SessionCompletionIndex,SessionLanguageContexts} from "./sessionCompletion";
-import {newBlock,newSession} from "./workspace";
+import {applyRuntimeEvent,newBlock,newSession} from "./workspace";
+import {completionSite,localCompletions} from "./editorCompletions";
 
 const update=(version:number,connection="a",database="db",schema="public",tables=["users"]):RuntimeEvent=>({event:"language.context_updated",payload:{session_id:"s",connection_id:connection,database,schema,version,
   variables:{df:{type:"DataFrame",module:"pandas.core.frame",columns:["sales total"]}},
@@ -63,6 +64,42 @@ describe("language metadata delivery",()=>{
 });
 
 describe("focused block completion context",()=>{
+  it("offers every SQL result in Python blocks across connection scopes, even after closing grid tabs",()=>{
+    let session=newSession();session.id="sql-python";session.savedConnectionId="main";session.currentExecutionId="query";
+    const sql={...newBlock("sql","SELECT 1; SELECT 2;"),block_name:"vendas",status:"running" as const},first={...newBlock("python","vend"),connection_id:"other"},second=newBlock("python","vendas1.");
+    session.blocks=[sql,first,second];
+    const contexts=new SessionLanguageContexts(),index=new SessionCompletionIndex();
+    contexts.accept({event:"language.context_updated",payload:{session_id:session.id,connection_id:"main",version:1,variables:{}}});
+    const frames={vendas:{type:"DataFrame",module:"pandas.core.frame",columns:["pedido_id","valor total"]},vendas1:{type:"DataFrame",module:"pandas.core.frame",columns:["status"]}};
+    // Kernel publishes the immutable namespace before announcing query completion.
+    contexts.accept({event:"language.context_updated",payload:{session_id:session.id,connection_id:"main",version:2,variables:frames}});
+    session=applyRuntimeEvent(session,{event:"execution.finished",payload:{session_id:session.id,execution_id:"query",status:"succeeded",duration_ms:1,variables:Object.keys(frames).map(name=>({name,type:"DataFrame",preview:""})),results:Object.entries(frames).map(([name,metadata])=>({result_id:name,variable_name:name,row_count:10_000_000,columns:metadata.columns.map(column=>({name:column,dtype:"string"}))}))}});
+    for(const block of [first,second]){
+      const context=index.context(session,block.id,contexts)!;
+      expect(localCompletions("python",completionSite("python","vend",5),context,"vend").filter(item=>item.kind==="variable").map(item=>item.label)).toEqual(["vendas","vendas1"]);
+      expect(localCompletions("python",completionSite("python","vendas1.",9),context,"vendas1.")).toContainEqual(expect.objectContaining({label:"status",kind:"field"}));
+      expect(context.variables.find(variable=>variable.name==="vendas")?.columns).toEqual(["pedido_id","valor total"]);
+    }
+    session.results=[];
+    expect(index.context(session,first.id,contexts)!.variables.map(variable=>variable.name)).toEqual(["vendas","vendas1"]);
+    expect(index.context({...session,id:"another-session",variables:[],results:[]},first.id,contexts)!.variables).not.toContainEqual(expect.objectContaining({name:"vendas1"}));
+  });
+  it("does not resurrect executed SQL frames after deletion or overwrite from stale block results",()=>{
+    const session=newSession();session.id="executed";
+    const sql={...newBlock("sql","SELECT 1"),block_name:"vendas",status:"succeeded" as const,results:[{result_id:"old",variable_name:"vendas",row_count:1,columns:[{name:"old_column",dtype:"int"}]}]},python=newBlock("python","vendas.");session.blocks=[sql,python];session.results=sql.results;
+    const contexts=new SessionLanguageContexts(),index=new SessionCompletionIndex();
+    contexts.accept({event:"language.context_updated",payload:{session_id:session.id,version:1,variables:{vendas:{type:"DataFrame",module:"pandas.core.frame",columns:["new_column"]}}}});
+    expect(index.context(session,python.id,contexts)!.variables).toContainEqual(expect.objectContaining({name:"vendas",columns:["new_column"]}));
+    contexts.accept({event:"language.context_updated",payload:{session_id:session.id,version:2,variables:{vendas:{type:"int"}}}});
+    expect(index.context(session,python.id,contexts)!.variables).toContainEqual({name:"vendas",type:"int"});
+    contexts.accept({event:"language.context_updated",payload:{session_id:session.id,version:3,variables:{}}});
+    expect(index.context(session,python.id,contexts)!.variables).toEqual([]);
+  });
+  it("plans valid Unicode SQL frame names without offering Python keywords as executable identifiers",()=>{
+    const session=newSession(),python=newBlock("python",""),unicode={...newBlock("sql","SELECT 1"),block_name:"Δados"},keyword={...newBlock("sql","SELECT 2"),block_name:"class"};session.blocks=[python,unicode,keyword];
+    const context=new SessionCompletionIndex().context(session,python.id,new SessionLanguageContexts())!;
+    expect(context.variables).toContainEqual({name:"Δados",type:"DataFrame"});expect(context.variables).not.toContainEqual(expect.objectContaining({name:"class"}));
+  });
   it("provides imports from later blocks, multiline imports, peer snippets and SQL DataFrames without execution",()=>{
     const session=newSession();session.id="s";
     const current=newBlock("python","calcul"),other=newBlock("python","from collections import (\n    Counter,\n    defaultdict,\n)\nimport datetime as dt\ndef calculate_value():\n    return 3\n"),sql=newBlock("sql","SELECT 1");

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { completionInsertion, completionSite, filterCompletions, localCompletions, pythonSymbols } from "./editorCompletions";
+import { dataframeMembers } from "./dataframeMembers";
+import { mergeCompletions } from "./editorLanguage";
 import type { CompletionContext } from "./editorLanguage";
 
 const context: CompletionContext = {
@@ -84,7 +86,8 @@ describe("instant local completion scope", () => {
   });
   it("limits a dataframe dot to valid column identifiers without unrelated keywords or variables", () => {
     const items = localCompletions("python", site("python", "frame.|"), context, "frame.");
-    expect(items.map(item => item.label)).toEqual(["title", "total"]);
+    expect(items.filter(item => item.kind === "field").map(item => item.label)).toEqual(["title", "total"]);
+    expect(items.map(item => item.label)).toEqual(expect.arrayContaining(["query", "merge", "head", "columns", "shape"]));
     expect(localCompletions("python", site("python", "unknown.|"), context, "unknown.")).toEqual([]);
   });
   it("offers dataframe columns with spaces inside string indexing", () => {
@@ -92,8 +95,63 @@ describe("instant local completion scope", () => {
   });
   it("excludes Python hard keywords from dot fields while retaining soft keywords and all bracket fields", () => {
     const scoped:CompletionContext={variables:[{name:"frame",type:"DataFrame",columns:["class","for","None","match","case","valid"]}],tables:[]};
-    expect(localCompletions("python",site("python","frame.|"),scoped,"frame.").map(item=>item.label)).toEqual(["match","case","valid"]);
+    expect(localCompletions("python",site("python","frame.|"),scoped,"frame.").filter(item=>item.kind==="field").map(item=>item.label)).toEqual(["match","case","valid"]);
     expect(localCompletions("python",site("python",'frame["|"]'),scoped,'frame["').map(item=>item.label)).toEqual(["class","for","None","match","case","valid"]);
+  });
+  it("provides Pandas methods/properties instantly from one shared catalog even for a large document", () => {
+    const large = "value = 1\n".repeat(55_000) + "frame.qu";
+    const scoped: CompletionContext = { variables: [{ name: "frame", type: "DataFrame", module: "pandas.core.frame", columns: ["quantity"] }], tables: [] };
+    const items = localCompletions("python", site("python", "frame.qu|"), scoped, "frame.qu", [], large);
+    expect(large.length).toBeGreaterThan(500_000);
+    expect(items).toEqual(expect.arrayContaining([expect.objectContaining({ label: "query", kind: "method", insert_text: "query" }), expect.objectContaining({ label: "quantile", kind: "method" }), expect.objectContaining({ label: "quantity", kind: "field" })]));
+    expect(dataframeMembers("pandas")).toBe(dataframeMembers("pandas"));expect(dataframeMembers("pandas").length).toBeGreaterThan(200);
+    expect(localCompletions("python", site("python", "frame.sh|"), scoped, "frame.sh")).toContainEqual(expect.objectContaining({ label: "shape", kind: "property" }));
+  });
+  it("uses Pandas for SQL stubs, keeps methods ahead of homonymous columns and preserves bracket labels", () => {
+    const scoped: CompletionContext = { variables: [{ name: "sql_frame", type: "DataFrame", columns: ["head", "query", "columns", "customer name", "for", "value"] }], tables: [] };
+    const items = localCompletions("python", site("python", "sql_frame.|"), scoped, "sql_frame.");
+    for (const [label,kind] of [["head","method"],["query","method"],["columns","property"]]) expect(items.filter(item=>item.label===label)).toEqual([expect.objectContaining({label,kind})]);
+    expect(items.map(item=>item.label)).not.toContain("customer name");expect(items.map(item=>item.label)).not.toContain("for");
+    expect(localCompletions("python", site("python", 'sql_frame["|"]'), scoped, 'sql_frame["').map(item=>item.label)).toEqual(["head","query","columns","customer name","for","value"]);
+  });
+  it("merges enriched RPC members with the shared catalog once while keeping homonymous bracket columns", () => {
+    const scoped: CompletionContext = { variables: [{ name: "sql_frame", type: "DataFrame", module:"pandas.core.frame", columns: ["head", "query", "columns"] }], tables: [] };
+    const local=localCompletions("python",site("python","sql_frame.|"),scoped,"sql_frame.");
+    const remote=[{label:"head",kind:"function",insert_text:"head",detail:"def head"},{label:"query",kind:"function",insert_text:"query",detail:"def query"},{label:"columns",kind:"instance",insert_text:"columns",detail:"Index"}];
+    const merged=mergeCompletions(remote,local,"python");
+    for(const item of remote){expect(merged.filter(candidate=>candidate.label===item.label)).toEqual([item]);expect(merged.find(candidate=>candidate.label===item.label)?.kind).not.toBe("field");}
+    const bracket=localCompletions("python",site("python",'sql_frame[["|"]]'),scoped,'sql_frame[["');
+    expect(mergeCompletions(scoped.variables[0].columns!.map(label=>({label,kind:"field",insert_text:label})),bracket,"python").map(item=>item.label)).toEqual(["head","query","columns"]);
+  });
+  it("keeps Polars methods/properties separate from Pandas and avoids nonexistent dot-column attributes", () => {
+    const scoped: CompletionContext = { variables: [{ name: "polar", type: "DataFrame", module: "polars.dataframe.frame", columns: ["customer", "with_columns"] }], tables: [] };
+    const items = localCompletions("python", site("python", "polar.|"), scoped, "polar.");
+    expect(items).toEqual(expect.arrayContaining([expect.objectContaining({label:"with_columns",kind:"method"}),expect.objectContaining({label:"schema",kind:"property"}),expect.objectContaining({label:"height",kind:"property"})]));
+    expect(items.map(item=>item.label)).not.toContain("customer");expect(items.map(item=>item.label)).not.toContain("query");expect(items.filter(item=>item.label==="with_columns")).toHaveLength(1);
+    expect(localCompletions("python", site("python", 'polar["cust|"]'), scoped, 'polar["cust').map(item=>item.label)).toEqual(["customer"]);
+    expect(localCompletions("python", site("python", 'polar.sort(by="cust|")'), scoped, 'polar.sort(by="cust').map(item=>item.label)).toEqual(["customer"]);
+    expect(localCompletions("python", site("python", 'polar.loc[:, "cust|"]'), scoped, 'polar.loc[:, "cust')).toEqual([]);
+  });
+  it.each([
+    'frame[["cust|"]]', 'frame[["title", "cust|"]]', "frame[['title', 'cust|']]",
+    'frame.loc[:, "cust|"]', 'frame.loc["row label", "cust|"]', 'frame.loc[frame["title"] == "x", "cust|"]', 'frame.loc[:, ["title", "cust|"]]',
+    'frame.sort_values(by="cust|")', 'frame.sort_values(ascending=False, by="cust|")', 'frame.sort_values("cust|")', 'frame.sort_values(by=["title", "cust|"])',
+  ])("completes literal column positions in %s without inserting quotes twice", line => {
+    const result = site("python", line);expect(result).toMatchObject({member:"frame",prefix:"cust",stringColumn:true});expect(result.blocked).not.toBe(true);
+    const items = localCompletions("python", result, context, line.replace("|",""));
+    expect(items.map(item=>item.label)).toEqual(["customer name"]);expect(completionInsertion(items[0],result,"python")).toBe("customer name");
+  });
+  it("escapes a column string once within a multi-column list and owns only its content", () => {
+    const result=site("python",'frame[["title", "a|b"]]'),items=localCompletions("python",result,context,'frame[["title", "a');
+    expect(items.map(item=>item.label)).toEqual(['a"b']);expect(completionInsertion(items[0],result,"python")).toBe('a\\"b');
+    expect(result).toMatchObject({startColumn:18,endColumn:20});
+  });
+  it.each([
+    'print("cust|")', 'label = "cust|"', '# frame.loc[:, "cust|"]', 'frame.loc["cust|", :]',
+    'frame.sort_values(ascending="cust|")', 'frame.sort_values(by=frame.columns, kind="cust|")',
+    'holder.frame["cust|"]', 'frame.iloc[:, "cust|"]', 'frame[["title", other_expression, "cust|"]]',
+  ])("does not reinterpret unrelated strings as dataframe columns: %s", line => {
+    expect(site("python",line).blocked).toBe(true);
   });
   it("resolves a simple alias using the actual qualified schema snapshot even with FROM below the cursor", () => {
     const source = "SELECT s.t\nFROM sales AS s";

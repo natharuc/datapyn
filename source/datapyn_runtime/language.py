@@ -22,6 +22,9 @@ _SQL_SERVICES = OrderedDict()
 _PYTHON_RESULTS = OrderedDict()
 _PYTHON_CACHE_BYTES = 0
 MAX_COMPLETION_CACHE_BYTES = 4 * MAX_DOCUMENT_BYTES
+# Python also accepts Unicode letters and combining marks outside regex \w.
+# Validate each captured name with isidentifier before using it as an atom.
+_PYTHON_IDENTIFIER = r"(?:[^\W\d]|[^\x00-\x7f])(?:\w|[^\x00-\x7f])*"
 
 
 def initialize_completion_worker():
@@ -121,7 +124,7 @@ def _python_complete_unlocked(code, line, column, variables, preamble="", global
     # Modules, user functions and objects with an unknown type still belong in
     # the namespace list. Their attributes are never inspected in the kernel.
     before = code.split("\n")[line - 1][:column]
-    token = re.search(r"(?<![\w.])([A-Za-z_][\w]*)?$", before)
+    token = re.search(rf"(?<![\w.])({_PYTHON_IDENTIFIER})?$", before)
     if token and not _inside_python_string(before):
         prefix = token.group(1) or ""
         for name, metadata in variables.items():
@@ -168,15 +171,30 @@ def _safe_context_source(source):
     return ""
 
 
+@lru_cache(maxsize=2)
+def _dataframe_class_members(dataframe_type):
+    # Inspect only trusted library class dictionaries, never an instance or
+    # descriptor. Inherited methods/properties also win over Pandas columns.
+    return frozenset(name for base in type.__getattribute__(dataframe_type, "__mro__")
+                     for name in type.__getattribute__(base, "__dict__"))
+
+
 def _python_snapshot_completions(code, line, column, variables):
     current = code.split("\n")[line - 1]
     before = current[:column]
-    member = re.search(r"(?<![\w.])([A-Za-z_]\w*)\.([\w]*)$", before)
-    subscript = re.search(r"(?<![\w.])([A-Za-z_]\w*)\[\s*(['\"])((?:\\.|[^\\'\"\n])*)$", before)
+    member = re.search(rf"(?<![\w.])({_PYTHON_IDENTIFIER})\.([\w]*)$", before)
+    subscript = re.search(rf"(?<![\w.])({_PYTHON_IDENTIFIER})\[\s*(['\"])((?:\\.|[^\\'\"\n])*)$", before)
     match = subscript or member
-    metadata = variables.get(match.group(1)) if match else None
+    metadata = variables.get(match.group(1)) if match and match.group(1).isidentifier() else None
     if not isinstance(metadata, dict) or metadata.get("type") != "DataFrame":
         return [], set(), bool(subscript)
+    # Polars selects columns through brackets/expressions; unlike Pandas it
+    # does not expose a column as a DataFrame attribute. Keep method inference.
+    if member and str(metadata.get("module", "")).startswith("polars."):
+        return [], set(), False
+    pandas = sys.modules.get("pandas")
+    dataframe_type = pandas.__dict__.get("DataFrame") if pandas is not None else None
+    attributes = _dataframe_class_members(dataframe_type) if member and dataframe_type is not None else ()
     prefix = match.group(3) if subscript else match.group(2)
     if subscript:
         try:
@@ -187,7 +205,7 @@ def _python_snapshot_completions(code, line, column, variables):
     items, seen = [], set()
     for value in metadata.get("columns", []):
         name = str(value)
-        if name in seen or not name.startswith(prefix) or (not subscript and (not name.isidentifier() or keyword.iskeyword(name))):
+        if name in seen or not name.startswith(prefix) or (not subscript and (name in attributes or not name.isidentifier() or keyword.iskeyword(name))):
             continue
         seen.add(name)
         item = {"label": name, "kind": "field", "detail": f"{match.group(1)} column", "insert_text": name}

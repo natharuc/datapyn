@@ -135,7 +135,13 @@ export const MonacoBlock = memo(function MonacoBlock({ id, code, language, heigh
       record = { model: monaco.editor.createModel(code, language, monaco.Uri.parse(`datapyn://blocks/${id}`)), viewState: takeRestoredEditorViewState(id) };
       models.set(id, record);
     }
-    const editor = monaco.editor.create(host, {
+    // Dockview contains paint and transforms its panels, so even fixed widgets
+    // need an external host in this editor's own document (including popouts).
+    const overflowHost = host.ownerDocument.createElement("div");
+    overflowHost.className = "datapyn-monaco-overflow monaco-editor";
+    host.ownerDocument.body.appendChild(overflowHost);
+    let editor: monaco.editor.IStandaloneCodeEditor;
+    try { editor = monaco.editor.create(host, {
       model: record.model, theme: activeTheme, fontFamily: "'JetBrains Mono', 'Cascadia Code', 'Fira Code', Consolas, 'Courier New', monospace", fontSize: 13,
       lineHeight: 22, minimap: { enabled: false }, automaticLayout: true,
       scrollBeyondLastLine: false, overviewRulerLanes: 0, hideCursorInOverviewRuler: true,
@@ -144,7 +150,13 @@ export const MonacoBlock = memo(function MonacoBlock({ id, code, language, heigh
       scrollbar: { verticalScrollbarSize: 9, horizontalScrollbarSize: 9 },
       bracketPairColorization: { enabled: true }, tabSize: 4,
       mouseWheelZoom:true, wordBasedSuggestions:"off", suggest: { insertMode: "replace" },
-    });
+      fixedOverflowWidgets: true, overflowWidgetsDomNode: overflowHost,
+    }); } catch (error) { overflowHost.remove(); throw error; }
+    const editorNode = editor.getDomNode();
+    const syncOverflowTheme = () => { overflowHost.className = `datapyn-monaco-overflow ${editorNode?.className ?? "monaco-editor"}`; };
+    syncOverflowTheme();
+    const overflowTheme = new view.MutationObserver(syncOverflowTheme);
+    if (editorNode) overflowTheme.observe(editorNode, { attributes: true, attributeFilter: ["class"] });
     record.editor = editor;
     record.container = host;
     record.clearMarkers = () => { if (!record.model.isDisposed()) monaco.editor.setModelMarkers(record.model, "datapyn", []); };
@@ -175,7 +187,7 @@ export const MonacoBlock = memo(function MonacoBlock({ id, code, language, heigh
     // Hidden desktop webviews may suspend animation frames. The microtask
     // follows creation, restored cursor state and the preference effects.
     queueMicrotask(()=>{if(record.editor === editor)callbacks.current.onReady?.(id);});
-    return () => { clearTimeout(viewTimer);selectionView.dispose();scrollView.dispose();captureEditorViewState(id);changed.dispose(); focused.dispose(); blurred.dispose();completionKeys.dispose();manualSuggestAction.dispose();cursor.dispose();configuration.dispose(); completionGates.get(id)?.cancel();inlineGates.get(id)?.cancel(); record.viewState = editor.saveViewState(); record.editor = undefined; record.container = undefined; editor.dispose(); };
+    return () => { overflowTheme.disconnect();clearTimeout(viewTimer);selectionView.dispose();scrollView.dispose();captureEditorViewState(id);changed.dispose(); focused.dispose(); blurred.dispose();completionKeys.dispose();manualSuggestAction.dispose();cursor.dispose();configuration.dispose(); completionGates.get(id)?.cancel();inlineGates.get(id)?.cancel(); record.viewState = editor.saveViewState(); record.editor = undefined; record.container = undefined; try { editor.dispose(); } finally { overflowHost.remove(); } };
     // Creating a new widget for a changed code prop discards undo history.
     // The separate effect below synchronizes external edits into the stable model.
     // eslint-disable-next-line react-hooks/exhaustive-deps

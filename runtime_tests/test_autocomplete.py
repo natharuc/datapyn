@@ -72,6 +72,29 @@ def test_pandas_and_polars_keep_their_actual_methods_and_columns():
     assert "query" not in polars
 
 
+def test_polars_columns_complete_only_in_brackets_while_pandas_supports_attributes():
+    snapshot = namespace_snapshot({
+        "pandas_frame": pd.DataFrame({"sales_total": [7], "sales total": [8]}),
+        "polars_frame": pl.DataFrame({"sales_total": [7], "sales total": [8]}),
+    })
+    context = {"variables": snapshot}
+    assert "sales_total" in labels(complete("pandas_frame.sales", context=context))
+    assert "sales_total" not in labels(complete("polars_frame.sales", context=context))
+    assert {"sales_total", "sales total"} == labels(complete('polars_frame["', context=context))
+    assert "head" in labels(complete("polars_frame.he", context=context))
+    assert "with_columns" in labels(complete("polars_frame.with_c", context=context))
+
+
+def test_pandas_class_members_win_column_collisions_in_attributes_only():
+    snapshot = namespace_snapshot({"frame": pd.DataFrame({"head": [1], "query": [2], "columns": [3], "sales_total": [4]})})
+    context = {"variables": snapshot}
+    for name in ("head", "query", "columns"):
+        items = [item for item in complete("frame." + name, context=context) if item["label"] == name]
+        assert items and all(item["kind"] != "field" for item in items)
+    assert {"head", "query", "columns", "sales_total"} == labels(complete('frame["', context=context))
+    assert next(item for item in complete("frame.sales", context=context) if item["label"] == "sales_total")["kind"] == "field"
+
+
 def test_dataframe_bracket_completion_escapes_quotes_and_replaces_entire_value(monkeypatch):
     snapshot = {"frame": {"type": "DataFrame", "columns": ["sales total", "sales'quoted", "sales\\path"]}}
     # Namespace string keys should not invoke slow dataframe static inference.
@@ -83,6 +106,15 @@ def test_dataframe_bracket_completion_escapes_quotes_and_replaces_entire_value(m
     assert next(item for item in items if item["label"] == "sales'quoted")["insert_text"] == "sales\\'quoted"
     assert complete("frame['absent", context={"variables": snapshot}) == []
     assert complete("deleted_frame['", context={"variables": snapshot}) == []
+
+
+@pytest.mark.parametrize("name", ["ação", "Δados", "数据", "a\u0301", "℘"])
+def test_unicode_dataframe_names_use_snapshot_columns_without_path_inference(name, monkeypatch):
+    snapshot = namespace_snapshot({name: pd.DataFrame({"amount": [7]})})
+    import jedi
+    monkeypatch.setattr(jedi, "Script", lambda *args, **kwargs: pytest.fail("String-key completion invoked Jedi"))
+    assert labels(complete(name + '["', context={"variables": snapshot})) == {"amount"}
+    assert complete(name + '["unknown', context={"variables": snapshot}) == []
 
 
 @pytest.mark.parametrize("db_type", ["databricks", "sqlserver"])

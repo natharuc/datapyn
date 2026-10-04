@@ -23,6 +23,8 @@ Python usa AST, compilação sem execução e tabelas de símbolos. Detecta tamb
 
 SQL usa o dialeto da conexão, preservando as posições do texto original, parâmetros e separadores `GO`. Reutiliza os ASTs para avisos de schema quando o snapshot é completo e as colunas foram carregadas. CTEs, subqueries, aliases e tabelas temporárias são resolvidos de forma conservadora. Não se consulta o banco para confirmar um aviso.
 
+Os módulos de `sqlglot.dialects` são incluídos explicitamente no runtime congelado: o parser carrega esses módulos sob demanda. O smoke de paridade do executável verifica SQL válido e inválido nos dialetos SQLite, SQL Server, PostgreSQL, MySQL e Databricks, sem conectar a bancos.
+
 O envelope de código é limitado a 1 MiB. O analisador possui orçamento cooperativo de 200 ms e limites de complexidade: SQL até 500 instruções, 256 KiB por lote, 30 mil tokens e 100 níveis; Python até 100 mil nós AST. Comandos específicos de dialeto que o parser não reconhece e análises que atingem os limites apresentam **Validação parcial**. A consulta pode ser executada normalmente.
 
 ## Verificação

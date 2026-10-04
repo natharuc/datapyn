@@ -1,5 +1,6 @@
 import type { CompletionContext, LanguageCompletion } from "./editorLanguage";
 import type { Language } from "./runtime";
+import { dataframeLibrary, dataframeMemberNames, dataframeMembers } from "./dataframeMembers";
 
 const SQL_KEYWORDS = "SELECT FROM WHERE AND OR NOT IN BETWEEN LIKE IS NULL JOIN INNER LEFT RIGHT FULL OUTER CROSS ON AS ORDER BY GROUP HAVING LIMIT OFFSET DISTINCT INSERT INTO VALUES UPDATE SET DELETE CREATE TABLE DROP ALTER COUNT SUM AVG MIN MAX CASE WHEN THEN ELSE END EXISTS UNION ALL TOP WITH OVER PARTITION ROW_NUMBER RANK DENSE_RANK LAG LEAD ASC DESC USE EXEC CALL DECLARE BEGIN COMMIT ROLLBACK COALESCE CAST CONVERT".split(" ");
 const PYTHON_KEYWORDS = "def class if elif else for while return import from as try except finally with lambda yield True False None and or not in is pass break continue async await raise assert del global nonlocal match case".split(" ");
@@ -13,6 +14,7 @@ interface SqlIdentifierPart { name: string; quoted: boolean }
 export interface CompletionSite {
   prefix: string; startColumn: number; endColumn: number; member?: string;
   quote?: string; stringColumn?: boolean; blocked?: boolean;
+  columnContext?: "index" | "loc" | "sort_values" | "sort";
   memberParts?: SqlIdentifierPart[];
 }
 
@@ -37,10 +39,10 @@ export function completionSite(language: Language, line: string, column: number)
     }
   }
   if (language === "python" && quote) {
-    const receiver = before.slice(0, quoteStart).match(/([\p{L}_][\p{L}\p{N}_]*)\s*\[\s*$/u)?.[1];
+    const receiver = pythonColumnReceiver(before.slice(0, quoteStart));
     if (!receiver) return { ...site, blocked: true };
     const end = closingQuote(after, quote, language);
-    return { prefix: decodePythonString(before.slice(quoteStart + 1)), startColumn: quoteStart + 2, endColumn: end < 0 ? offset + 1 : offset + end + 1, member: receiver, quote, stringColumn: true };
+    return { prefix: decodePythonString(before.slice(quoteStart + 1)), startColumn: quoteStart + 2, endColumn: end < 0 ? offset + 1 : offset + end + 1, member: receiver.member, quote, stringColumn: true, columnContext: receiver.columnContext };
   }
   if (language === "sql" && quote) {
     if (quote === "'") return { ...site, blocked: true };
@@ -52,6 +54,60 @@ export function completionSite(language: Language, line: string, column: number)
   site.member = memberParts?.map(part => part.name).join(".");
   if (language === "sql") site.memberParts = memberParts;
   return site;
+}
+
+const PYTHON_RECEIVER = String.raw`(?<![\p{L}\p{N}_.])([\p{L}_][\p{L}\p{N}_]*)`;
+const INDEX_RECEIVER = new RegExp(`${PYTHON_RECEIVER}\\s*$`, "u");
+const LOC_RECEIVER = new RegExp(`${PYTHON_RECEIVER}\\s*\\.\\s*loc\\s*$`, "u");
+const SORT_RECEIVER = new RegExp(`${PYTHON_RECEIVER}\\s*\\.\\s*(sort_values|sort)\\s*$`, "u");
+interface PythonOpening { char: string; index: number }
+/** Recognize column positions, not arbitrary strings, using a bounded lexical window. */
+function pythonColumnReceiver(beforeQuote: string): Pick<CompletionSite, "member" | "columnContext"> | undefined {
+  const source = beforeQuote.slice(-8192), masked = source.split(""), stack: PythonOpening[] = [];
+  for (let index = 0; index < source.length; index++) {
+    const char = source[index];
+    if (char === "#") return;
+    if (char === "'" || char === '"') {
+      const triple = source.slice(index, index + 3) === char.repeat(3), delimiter = triple ? char.repeat(3) : char;
+      const start = index; let end = index + delimiter.length, closed = false;
+      while (end < source.length) {
+        if (source[end] === "\\") { end += 2; continue; }
+        if (source.slice(end, end + delimiter.length) === delimiter) { end += delimiter.length; closed = true; break; }
+        end++;
+      }
+      if (!closed) return;
+      for (let position = start; position < end; position++) masked[position] = position === start ? "\0" : " ";
+      index = end - 1; continue;
+    }
+    if ("([{".includes(char)) stack.push({ char, index });
+    else if (")]}".includes(char)) {
+      const opening = stack.pop(); if (!opening || "([{".indexOf(opening.char) !== ")]}".indexOf(char)) return;
+    }
+  }
+  const text = masked.join(""), opening = stack.at(-1); if (!opening) return;
+  const classify = (parent: PythonOpening, body: string): Pick<CompletionSite, "member" | "columnContext"> | undefined => {
+    const head = text.slice(0, parent.index), argument = lastPythonArgument(body);
+    if (parent.char === "[") {
+      const index = head.match(INDEX_RECEIVER); if (index && !body.trim()) return { member: index[1], columnContext: "index" };
+      const loc = head.match(LOC_RECEIVER); if (loc && argument.hasComma && !argument.text.trim()) return { member: loc[1], columnContext: "loc" };
+    } else if (parent.char === "(") {
+      const sort = head.match(SORT_RECEIVER);
+      if (sort && ((!argument.hasComma && !body.trim()) || /^\s*by\s*=\s*$/.test(argument.text))) return { member: sort[1], columnContext: sort[2] as "sort_values" | "sort" };
+    }
+  };
+  const direct = classify(opening, text.slice(opening.index + 1)); if (direct) return direct;
+  // Column lists permit only completed literal strings before the editable string.
+  if (opening.char !== "[" || !/^\s*(?:\0\s*,\s*)*$/.test(text.slice(opening.index + 1))) return;
+  const parent = stack.at(-2); return parent ? classify(parent, text.slice(parent.index + 1, opening.index)) : undefined;
+}
+function lastPythonArgument(body: string): { text: string; hasComma: boolean } {
+  let depth = 0, last = -1;
+  for (let index = 0; index < body.length; index++) {
+    if ("([{".includes(body[index])) depth++;
+    else if (")]}".includes(body[index])) depth--;
+    else if (body[index] === "," && depth === 0) last = index;
+  }
+  return { text: body.slice(last + 1), hasComma: last >= 0 };
 }
 
 function closingQuote(after: string, quote: string, language: Language): number {
@@ -139,7 +195,10 @@ export function localCompletions(language: Language, site: CompletionSite, conte
   if (language === "python") {
     if (site.member) {
       const variable = context?.variables.find(item => item.name === site.member);
-      for (const name of variable?.columns ?? []) if (site.stringColumn || (IDENTIFIER.test(name)&&!PYTHON_HARD_KEYWORDS.has(name))) items.push({ label: name, kind: "field", detail: `${site.member} column`, insert_text: name, sortText: `0:${name}` });
+      const library = variable?.type === "DataFrame" ? dataframeLibrary(variable) : undefined;
+      if (site.stringColumn && ((library === "polars" && ["loc", "sort_values"].includes(site.columnContext ?? "")) || (library === "pandas" && site.columnContext === "sort"))) return [];
+      if (library && !site.stringColumn) items.push(...dataframeMembers(library));
+      for (const name of variable?.columns ?? []) if (site.stringColumn || (library !== "polars" && IDENTIFIER.test(name)&&!PYTHON_HARD_KEYWORDS.has(name)&&(!library||!dataframeMemberNames(library).has(name)))) items.push({ label: name, kind: "field", detail: `${site.member} column`, insert_text: name, sortText: `0:${name}` });
       return filterCompletions(items, site.prefix, language);
     }
     items.push(...(context?.variables ?? []).map(variable => ({ label: variable.name, kind: "variable", detail: variable.type, sortText: `0:${variable.name}` })), ...currentSymbols);

@@ -176,7 +176,9 @@ export class SessionCompletionIndex {
       const hasCode=parsed.hasCode;
       if(hasCode)siblings.push({name:other.block_name || "block",code:other.code,language:other.language,cellType:other.cell_type});
       if(block.language !== "python" || !hasCode)continue;
-      if(other.language === "sql" && /^[A-Za-z_]\w*$/.test(other.block_name) && !variables.has(other.block_name))variables.set(other.block_name,{name:other.block_name,type:"DataFrame"});
+      // SQL names can be planned before the first run. After execution, only
+      // the live namespace may assert that a DataFrame still exists (delete/overwrite).
+      if(other.language === "sql" && ["idle","queued","running"].includes(other.status) && /^[\p{L}_][\p{L}\p{N}_]*$/u.test(other.block_name) && !PYTHON_KEYWORDS.has(other.block_name) && !variables.has(other.block_name))variables.set(other.block_name,{name:other.block_name,type:"DataFrame"});
       if(other.language === "python" && size+parsed.preamble.length+1<=MAX_PREAMBLE){
         parts.push(parsed.preamble);size+=parsed.preamble.length+1;
       }

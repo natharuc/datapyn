@@ -5,7 +5,7 @@ O editor retorna sugestões locais imediatamente. Jedi e metadados de bancos sã
 ## Funcionalidades
 
 - SQL: keywords, tabelas, colunas, aliases, JOINs, CTEs, schemas e rotinas. Nomes especiais/reservados recebem quoting por dialeto. Catálogos explícitos SQL Server/Databricks carregam sob demanda; DDL invalida os metadados.
-- Python: builtins, imports/aliases de outros blocos, funções, variáveis, métodos pandas/Polars e colunas de DataFrames por atributo ou chave de string.
+- Python: builtins, imports/aliases de outros blocos, funções, variáveis e métodos/propriedades pandas/Polars. Pandas oferece colunas por atributo válido ou chave de string; Polars oferece colunas por indexação, sem inventar atributos.
 - Snippets de outros blocos da mesma linguagem preservam texto literal, incluindo `$`, chaves e quebras de linha.
 - Ctrl+Space solicita sugestões normais, mesmo com autocomplete automático desligado. Ctrl+. mantém sugestões normais ou Pynia inline conforme a preferência de IA. Tab/Enter aceitam; Escape descarta a intenção pendente.
 - Completar no meio de uma palavra substitui o sufixo. Strings Python e identificadores SQL reconhecem escapes e aspas existentes.
@@ -14,6 +14,18 @@ O editor retorna sugestões locais imediatamente. Jedi e metadados de bancos sã
 ## Integração e limites
 
 Imports/preamble antes ignorados são analisados sem executar código. Snapshots vazios são autoritativos, evitando variáveis removidas reaparecerem. Metadados SQL sem mudança nas variáveis não invalidam inferência Python. A leitura de contexto não reagenda o próprio diagnóstico.
+
+## DataFrames SQL nos blocos Python
+
+As consultas SQL materializadas mantêm seus DataFrames reais no namespace Python da sessão. O nome é o do resultado/bloco SQL, ou `df` quando não foi informado; múltiplos resultsets usam o nome base, seguido de `1`, `2` etc. Esses nomes aparecem em qualquer bloco Python dessa sessão, incluindo blocos com outra conexão SQL configurada. Fechar uma aba da grade não exclui a variável Python.
+
+O kernel publica os nomes, tipos, módulos e colunas antes de anunciar `execution.finished`. Assim, ao concluir o SQL, tanto as sugestões locais quanto a inferência remota já conhecem o resultado. A publicação não consulta o banco nem transfere linhas à interface. DataFrames removidos ou substituídos obedecem ao namespace atual; resultados antigos guardados nos blocos não os recriam. Nomes de consultas ainda não executadas podem ser sugeridos como contexto planejado.
+
+Um catálogo único de membros públicos de `pandas.DataFrame`/`polars.DataFrame` alimenta sugestões locais, inclusive em editores acima de 500.000 caracteres. Foi gerado das classes instaladas Pandas 2.3.3 e Polars 1.41.2; mudanças dessas versões devem atualizar o catálogo. Não se inspecionam propriedades de objetos do usuário. No dot, métodos/propriedades como `head`, `query` e `columns` têm precedência sobre colunas homônimas, que continuam disponíveis por string.
+
+Além de `vendas.` e `vendas['valor total']`, há sugestões de colunas em `vendas[['pedido_id', 'valor total']]`, `vendas.loc[:, 'valor total']` e `vendas.sort_values(by='valor total')`, incluindo listas de colunas e aspas/escapes existentes. Em Polars, `sort(by=...)` é reconhecido. Strings arbitrárias e posições de índices de linha não oferecem nomes de colunas. A execução Python usa os mesmos objetos criados pelo SQL, sem reconstruir ou serializar o DataFrame inteiro para completar código.
+
+O menu de sugestões usa um host externo por editor no seu próprio documento. Isso permite abrir a lista além da borda do bloco/dock, incluindo janelas destacadas. O host acompanha o tema e é removido junto com o widget; permanece abaixo dos diálogos da aplicação.
 
 Identificadores SQL usam aspas por dialeto também nas sugestões locais. Isso evita depender de uma lista parcial de palavras reservadas, como `AUTHORIZATION` no [PostgreSQL](https://www.postgresql.org/docs/current/sql-keywords-appendix.html).
 
@@ -49,3 +61,7 @@ Regressões cobrem cancelamento exato, digitação rápida, cache/backoff, sess�
 Verificação em 03/10/2026: 281 testes frontend, 322 testes runtime e 16 testes Rust passaram, assim como TypeScript, Ruff, build Tauri de produção e os três smokes do runtime empacotado. No aplicativo nativo foram conferidos Ctrl+Space, Tab/Enter, atualização de lista aberta, pandas/Polars, imports e funções entre blocos, snippets com `$`/chaves literais, substituição no meio da palavra, colunas com espaço/apóstrofo, keywords Python por chave sem gerar atributos inválidos, alias SQL, aspas existentes, tabela com ponto literal, alias de tabela com aspas no nome e isolamento entre sessões.
 
 O aceite nativo usa análise/base sintéticas em `.tooling/autocomplete-acceptance`. Bancos externos e provedores de IA autenticados precisam ser validados no ambiente configurado pelo usuário.
+
+Verificação dos DataFrames SQL em 04/10/2026: 437 testes frontend e 496 testes runtime passaram, além de TypeScript, Ruff, build Tauri de produção e os três smokes do runtime congelado. As regressões stdio verificam múltiplos resultsets, ordem contexto/finalização, conexões por bloco, isolamento entre sessões, exclusão/substituição de variáveis, mutações parciais após erro e restauração Parquet com nomes Unicode. Testes locais cobrem métodos/propriedades, colisões com colunas e contextos de listas/loc/sort, incluindo documentos grandes.
+
+No executável Windows final, com SQLite/perfil isolados em `.tooling/sql-frames-acceptance`, dois SELECTs produziram `vendas` e `vendas1`. Ctrl+Space ofereceu ambos no Python; `head` foi completado com Tab e executado sobre o DataFrame real. A sugestão `valor total` também foi aceita e executada em `vendas[['valor total']]`, retornando 125,5. O menu exibiu ambas as colunas além da borda inferior do dock, aceitou a segunda com o mouse e conservou o foco. No dock destacado, sugestões de métodos e `head` com Tab/F5 funcionaram; ao fechar a janela, o dock retornou com código e resultado preservados. A validação SQL com a conexão SQLite mostrou "Sintaxe válida"; o smoke congelado cobre SQL válido/inválido nos cinco dialetos suportados, após incluir seus módulos carregados sob demanda.

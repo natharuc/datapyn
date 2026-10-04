@@ -47,7 +47,7 @@ hiddenimports = [
     "src.services.pynia.tools.definitions",
     "src.services.entity_metadata_service",
 ]
-for package in ("datapyn_runtime", "sqlalchemy.dialects", "mysql.connector", "databricks.sqlalchemy", "keyring.backends", "plotly.graph_objs"):
+for package in ("datapyn_runtime", "sqlglot.dialects", "sqlalchemy.dialects", "mysql.connector", "databricks.sqlalchemy", "keyring.backends", "plotly.graph_objs"):
     hiddenimports += collect_submodules(package)
 
 datas = [(str(path), "src/language") for path in (ROOT / "source/src/language").glob("*.json")]

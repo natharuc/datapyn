@@ -61,6 +61,17 @@ def smoke(executable=None, timeout=90, report=None):
             assert formatted["error"] is None and "x = 1" in formatted["code"]
             malformed = client.request("language.diagnostics", {"language": "python", "code": "def broken(:"})
             assert malformed["markers"]
+            # Dialects load lazily in sqlglot. Exercise their actual bundled
+            # modules without a session or database metadata dependency.
+            for dialect in ("sqlite", "sqlserver", "postgresql", "mysql", "databricks"):
+                valid_sql = client.request("language.diagnostics", {
+                    "language": "sql", "db_type": dialect, "code": "SELECT 1 AS value", "locale": "pt-BR"})
+                assert valid_sql["status"] == "complete" and not valid_sql["markers"], (dialect, valid_sql)
+                invalid_sql = client.request("language.diagnostics", {
+                    "language": "sql", "db_type": dialect, "code": "SELECT FROM", "locale": "pt-BR"})
+                assert invalid_sql["status"] == "complete", (dialect, invalid_sql)
+                assert any(marker["severity"] == "error" and "esperado um nome de tabela" in marker["message"]
+                           for marker in invalid_sql["markers"]), (dialect, invalid_sql)
             shared = client.request("parameters.scan", {"code": "SELECT @local, {{shared}}", "codes": ["SELECT @local, {{shared}}"]})
             assert shared["sql_parameters"] and shared["shared_parameters"]
             result = client.execute("parity", "python", "python", "df['value'] = df['id'] * 3\nprint('python namespace alive')\ndf")

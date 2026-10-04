@@ -352,6 +352,10 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                 # A failed block may have partially changed a frame in place.
                 # Keep the previous durable generation until a later success.
                 snapshot_dirty = error is None
+                # All blocks share this interpreter's namespace. Publish its
+                # immutable names/types/columns before clients observe the
+                # completed execution, without waiting for database metadata.
+                publish_context()
                 send({"event": "execution.finished", "payload": payload, "job_id": job_id})
                 from .sql_context import changes_metadata
                 invalidated = params["language"] == "sql" and connector is not None and changes_metadata(params["code"])
@@ -360,7 +364,7 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                     refresh_temporary_tables(connector)
                     pool.explorer().cache.clear()
                     pool.explorer().column_cache.clear()
-                publish_context(invalidated=invalidated)
+                    publish_context(invalidated=True)
                 continue
             try:
                 if method == "connection.connect":
