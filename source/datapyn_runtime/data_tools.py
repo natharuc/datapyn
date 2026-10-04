@@ -301,10 +301,11 @@ def build_chart(params, namespace, store):
     """Original aggregation and palettes, with at most 500 points on the wire."""
     import plotly.graph_objects as go
     from plotly.utils import PlotlyJSONEncoder
-    from src.services.visualization.chart_data import prepare_chart_data, chart_palette, chart_color, chart_max_points, format_chart_number
+    from src.services.visualization.chart_data import chart_palette, chart_color
+    from .chart_runtime import prepare, restyle, trace_values, label_number
+    from .chart_snapshots import capture
     from src.language import init_language
     init_language(params.get("language", "pt-BR"))
-    frame = selected_frame(params, namespace, store)
     config = params.get("config") or {}
     if not isinstance(config, dict):
         raise ValueError("Chart config must be an object")
@@ -313,9 +314,11 @@ def build_chart(params, namespace, store):
         raise ValueError("Choose bar, line, area, scatter or pie")
     if config.get("aggregation", "sum") not in {"sum", "mean", "min", "max", "count", "median"}:
         raise ValueError("Unsupported aggregation")
-    if frame.empty:
-        raise ValueError("The selected data is empty")
-    data, labels = prepare_chart_data(frame, config)
+    if config.get("nulls", "zero") not in {"zero", "keep", "drop"}:
+        raise ValueError("Choose zero, keep or drop for null values")
+    if config.get("sort", "original") not in {"original", "none", "x_asc", "y_desc"}:
+        raise ValueError("Choose original, x_asc or y_desc for chart sorting")
+    data, labels, metrics = restyle(store, params["chart_id"], config) if params.get("chart_id") else prepare(params, namespace, store, config)
     if data.empty:
         raise ValueError("There are no numeric values to chart")
     if len(data.columns) > 50:
@@ -336,24 +339,31 @@ def build_chart(params, namespace, store):
         red, green, blue = to_rgb(color)
         return f"rgba({int(red * 255)},{int(green * 255)},{int(blue * 255)},{opacity:.3f})"
     figure = go.Figure()
+    approximate = False
     if chart_type == "pie":
-        series = data.iloc[:, 0].fillna(0)
+        series = data.iloc[:, 0]
         series = series[series > 0]
         if series.empty:
             raise ValueError("Pie charts require positive values")
-        figure.add_trace(go.Pie(labels=[str(value) for value in series.index], values=series.astype(float).tolist(),
+        values, customdata, approximate = trace_values(series, series.index, store.pd)
+        figure.add_trace(go.Pie(labels=[str(value)[:1000] for value in series.index], values=values, customdata=customdata,
+                               name=str(data.columns[0]), hovertemplate="%{customdata[0]}<br>%{customdata[1]} (%{percent})<extra></extra>",
                                hole=0.42, marker={"colors": chart_palette(config, len(series)), "line": {"color": background, "width": 2}}, sort=False,
                                textfont={"color": label_color},
                                textinfo="label+percent" if config.get("show_data_labels") else "label"))
     else:
         for index, name in enumerate(data.columns):
-            values, color = [scalar(value) for value in data[name]], colors[index % len(colors)]
-            text = [format_chart_number(value, config) for value in values] if config.get("show_data_labels") else None
+            values, customdata, inexact = trace_values(data[name], data.index, store.pd)
+            approximate |= inexact
+            color = colors[index % len(colors)]
+            text = [label_number(value, config) for value in data[name]] if config.get("show_data_labels") else None
+            hover = {"customdata": customdata, "hovertemplate": "%{customdata[0]}<br>%{fullData.name}: %{customdata[1]}<extra></extra>"}
             if chart_type == "bar":
                 horizontal = config.get("horizontal", False)
                 figure.add_trace(go.Bar(x=values if horizontal else labels, y=labels if horizontal else values,
                                        orientation="h" if horizontal else "v", name=str(name), marker_color=color,
                                        opacity=number("bar_opacity", 94, 10, 100) / 100,
+                                       **hover,
                                        text=text, textfont={"color": label_color}, textposition="auto" if horizontal else "outside"))
             else:
                 stacked = config.get("stacking") in {"stacked", "percent"}
@@ -362,6 +372,7 @@ def build_chart(params, namespace, store):
                 if text:
                     mode += "+text"
                 figure.add_trace(go.Scatter(x=labels, y=values, name=str(name),
+                                           **hover,
                                            mode=mode,
                                            line={"color": color, "width": number("line_width", 2, 1, 10),
                                                  "dash": {"dashed": "dash", "dotted": "dot", "dashdot": "dashdot"}.get(config.get("line_style"), "solid")},
@@ -370,21 +381,29 @@ def build_chart(params, namespace, store):
                                            fill="tonexty" if chart_type == "area" and stacked and index else "tozeroy" if chart_type == "area" else None,
                                            fillcolor=rgba(color, number("area_opacity", 20, 5, 90) / 100) if chart_type == "area" else None,
                                            stackgroup="series" if chart_type == "area" and stacked else None))
+    font_size, title_size, tick_size = number("font_size", 12, 8, 24), number("title_size", 16, 10, 32), number("tick_size", 11, 8, 20)
+    font_family = str(config.get("font_family") or "Segoe UI, Roboto, Helvetica Neue, Arial, Ubuntu, sans-serif")[:200]
+    hover_mode = config.get("hover_mode", "x unified")
+    if hover_mode not in {"x unified", "closest", "x", "y"}:
+        hover_mode = "x unified"
     axis_style = {"showgrid": bool(config.get("show_grid", True)), "gridcolor": grid_color,
                   "linecolor": axis_color, "showline": bool(config.get("show_axis_line", False)), "zeroline": False,
-                  "tickfont": {"size": 11, "color": text_color}}
+                  "tickfont": {"size": tick_size, "color": text_color}}
     title = str(config.get("title", ""))[:1000]
-    figure.update_layout(title={"text": title, "x": 0, "xanchor": "left", "font": {"size": 16, "color": text_color}}, paper_bgcolor=background, plot_bgcolor=background,
-                         font={"family": "Segoe UI, Roboto, Helvetica Neue, Arial, Ubuntu, sans-serif", "color": text_color, "size": 12},
+    # The title lives in the container header while the horizontal legend ends
+    # at the plot's top edge. Separate bands keep both readable in image exports.
+    top_margin = max(86, title_size + font_size + 30) if title and config.get("show_legend", True) else max(56, title_size + 28) if title else 32
+    figure.update_layout(title={"text": title, "x": 0, "xref": "paper", "xanchor": "left", "y": 1, "yref": "container", "yanchor": "top", "pad": {"t": 12}, "font": {"size": title_size, "color": text_color}}, paper_bgcolor=background, plot_bgcolor=background,
+                         font={"family": font_family, "color": text_color, "size": font_size},
                          barmode="relative" if config.get("stacking") in {"stacked", "percent"} else "group",
-                         showlegend=config.get("show_legend", True), hovermode="x unified",
+                         showlegend=config.get("show_legend", True), hovermode=hover_mode,
                          hoverlabel={"bgcolor": background, "bordercolor": axis_color, "font": {"color": text_color}},
-                         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "left", "x": 0, "font": {"color": text_color}, "bgcolor": "rgba(0,0,0,0)"},
-                         margin={"l": 56, "r": 24, "t": 56 if title else 32, "b": 72},
-                         xaxis={**axis_style, "title": {"text": config.get("x_label") or config.get("x_column", ""), "font": {"size": 12, "color": text_color}}},
-                         yaxis={**axis_style, "title": {"text": config.get("y_label") or ("%" if config.get("normalize") or config.get("stacking") == "percent" else ""), "font": {"size": 12, "color": text_color}}})
+                         legend={"orientation": "h", "yanchor": "bottom", "y": 1, "xanchor": "left", "x": 0, "font": {"color": text_color, "size": font_size}, "bgcolor": "rgba(0,0,0,0)"},
+                         margin={"l": 56, "r": 24, "t": top_margin, "b": 72},
+                         xaxis={**axis_style, "title": {"text": str(config.get("x_label") or config.get("x_column", ""))[:1000], "font": {"size": font_size, "color": text_color}}},
+                         yaxis={**axis_style, "title": {"text": str(config.get("y_label") or ("%" if config.get("normalize") or config.get("stacking") == "percent" else ""))[:1000], "font": {"size": font_size, "color": text_color}}})
     if chart_type == "pie":
-        figure.update_layout(xaxis={"visible": False}, yaxis={"visible": False}, margin={"l": 12, "r": 12, "t": 48, "b": 12})
+        figure.update_layout(xaxis={"visible": False}, yaxis={"visible": False}, margin={"l": 12, "r": 12, "t": top_margin if title else 48, "b": 12})
     elif chart_type == "bar" and config.get("horizontal"):
         figure.update_yaxes(categoryorder="array", categoryarray=labels)
     else:
@@ -392,8 +411,9 @@ def build_chart(params, namespace, store):
         if len(labels) > 8:
             figure.update_xaxes(tickangle=-35)
             figure.update_layout(margin={"b": 96})
-    return {"figure": json.loads(json.dumps(figure.to_dict(), cls=PlotlyJSONEncoder)), "config": config,
-            "source_rows": len(frame), "point_count": len(data), "bounded": len(data) >= chart_max_points(config)}
+    return capture(store, {"figure": json.loads(json.dumps(figure.to_dict(), cls=PlotlyJSONEncoder)), "config": config,
+                           **metrics, "geometry_approximate": metrics.get("geometry_approximate", approximate),
+                           "grouping_applied": bool(config.get("group_by") and len(config.get("y_columns", [])) == 1)})
 
 
 def export_to_table(params, namespace, store, connector, progress=None, cancelled=None):

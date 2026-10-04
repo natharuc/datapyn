@@ -14,4 +14,4 @@ export interface ColumnSummary {
 export interface ResultSummary { row_count: number; column_count: number; cell_count?: number; columns: ColumnSummary[]; columns_truncated: boolean;
   aggregates?: {count_numeric: number; sum?: Primitive; mean?: Primitive; min?: Primitive; max?: Primitive; median?: Primitive; std?: Primitive; coefficient?: Primitive} }
 export type ChartConfig = Record<string, unknown> & { type?: string; x_column?: string; y_columns?: string[] };
-export interface ChartResponse { figure: { data: unknown[]; layout: Record<string, unknown> }; config: ChartConfig; source_rows: number; point_count: number; bounded: boolean }
+export interface ChartResponse { chart_id?: string; figure: { data: unknown[]; layout: Record<string, unknown> }; config: ChartConfig; source_rows: number; point_count: number; bounded: boolean; aggregated_point_count?: number; series_count?: number; max_points?: number; truncated_points?: number; geometry_approximate?:boolean; grouping_applied?:boolean; aggregation_engine?:string }

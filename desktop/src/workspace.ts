@@ -53,6 +53,49 @@ function object(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function optionalObject(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+type PortableChart = {id: string; config: Record<string, unknown>; title: string; variable_name: string};
+
+function legacyChartIndex(value: unknown, count: number): number | undefined {
+  // Qt stores the chart's index, independently of its position among data tabs.
+  const index = typeof value === "string" && /^\d+$/.test(value.trim()) ? Number(value) : value;
+  return typeof index === "number" && Number.isInteger(index) && index >= 0 && index < count ? index : undefined;
+}
+
+function restoreCharts(extras: Record<string, unknown>): Record<string, unknown> {
+  const state = optionalObject(extras.result_view_state), legacy = optionalObject(state?.charts);
+  const legacyConfigs = Array.isArray(legacy?.configs) ? legacy.configs.filter(config => optionalObject(config)) as Record<string, unknown>[] : undefined;
+  const charts = Array.isArray(extras.charts) ? extras.charts as PortableChart[] : legacyConfigs?.map((config, index) => ({
+    id: newId(), title: String(config.title || `Gráfico ${index + 1}`), variable_name: String(config.source_label || "df"), config: {...config},
+  }));
+  if (!charts) return extras;
+  const hasModernSelection = Object.prototype.hasOwnProperty.call(extras, "desktop_chart_id");
+  const selected = hasModernSelection
+    ? charts.find(chart => optionalObject(chart)?.id === extras.desktop_chart_id)
+    : charts[legacyChartIndex(legacy?.active_index ?? 0, charts.length) ?? -1];
+  return {...extras, charts, desktop_chart_id: selected?.id ?? null};
+}
+
+function encodeCharts(extras: Record<string, unknown>): Record<string, unknown> {
+  if (!Array.isArray(extras.charts)) return extras;
+  const charts = extras.charts as PortableChart[], state = optionalObject(extras.result_view_state), legacy = optionalObject(state?.charts);
+  const selected = charts.findIndex(chart => optionalObject(chart)?.id === extras.desktop_chart_id);
+  const previousIndex = legacyChartIndex(legacy?.active_index, charts.length);
+  const activeIndex = selected >= 0 ? selected : previousIndex;
+  const configs = charts.map((chart, index) => ({...chart.config,
+    ...(chart.title !== String(chart.config.title || `Gráfico ${index + 1}`) ? {title: chart.title} : {}),
+    ...(chart.variable_name !== String(chart.config.source_label || "df") ? {source_label: chart.variable_name} : {}),
+    ...(chart.config.stacking === "grouped" ? {stacking: "none"} : {}),
+  }));
+  return {...extras, desktop_chart_id: selected >= 0 ? charts[selected].id : null,
+    result_view_state: {...state, charts: {...legacy, configs,
+      ...(activeIndex !== undefined ? {active_index: activeIndex} : legacy && "active_index" in legacy ? {active_index: 0} : {}),
+    }},
+  };
+}
+
 /** Reads the actual single-tab .dpw format. Unknown settings survive a round trip. */
 export function decodeDocument(input: unknown, title = "Análise importada", restoreId = false): SessionDocument {
   const outer = object(input);
@@ -69,9 +112,7 @@ export function decodeDocument(input: unknown, title = "Análise importada", res
   if (session.blocks.length === 0) session.blocks = [newBlock()];
   session.focusedBlockId = session.blocks[0].id;
   const { blocks: _blocks, version: _version, title: _title, ...extras } = document;
-  session.extras = extras;
-  const legacyCharts=(extras.result_view_state as {charts?:{configs?:Record<string,unknown>[]}})?.charts?.configs;
-  if(!Array.isArray(extras.charts) && Array.isArray(legacyCharts))session.extras={...extras,charts:legacyCharts.map((config,index)=>({id:newId(),title:String(config.title || `Gráfico ${index+1}`),variable_name:String(config.source_label || "df"),config:{...config}}))};
+  session.extras = restoreCharts(extras);
   const desktop = document.desktop as Record<string, unknown> | undefined;
   if (restoreId && typeof desktop?.session_id === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(desktop.session_id)) session.id = desktop.session_id;
   session.savedConnectionId = typeof desktop?.connection_id === "string" ? desktop.connection_id : undefined;
@@ -82,9 +123,7 @@ export function decodeDocument(input: unknown, title = "Análise importada", res
 }
 
 export function encodeDocument(session: SessionDocument): Record<string, unknown> {
-  const charts=session.extras.charts as Array<{config:Record<string,unknown>;title:string;variable_name:string}>|undefined;
-  const resultViewState=charts ? {...(session.extras.result_view_state as object),charts:{...((session.extras.result_view_state as {charts?:object})?.charts),configs:charts.map((chart,index)=>({...chart.config,...(chart.title !== String(chart.config.title || `Gráfico ${index+1}`)?{title:chart.title}:{}),...(chart.variable_name !== String(chart.config.source_label || "df")?{source_label:chart.variable_name}:{})}))}} : session.extras.result_view_state;
-  return { ...session.extras, result_view_state:resultViewState, version: "1.0", database_context: session.database ?? session.extras.database_context,
+  return { ...encodeCharts(session.extras), version: "1.0", database_context: session.database ?? session.extras.database_context,
     desktop: { ...(session.extras.desktop as object ?? {}), session_id:session.id, connection_id: session.savedConnectionId, schema: session.schema,
       focused_block_key: session.blocks.find(b => b.id === session.focusedBlockId)?.block_key ?? session.focusedBlockId },
     blocks: session.blocks.map(({ id, status, duration_ms, error, results, ...block }) => ({ ...block, block_key: block.block_key ?? id })) };

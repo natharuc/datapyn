@@ -166,7 +166,11 @@ def export_chart(params, namespace, store):
     extensions = {".jpg", ".jpeg"} if format_name in {"jpg", "jpeg"} else {"." + format_name}
     if path.suffix.lower() not in extensions:
         raise ValueError(f"Choose a .{format_name} destination")
-    response = build_chart(params, namespace, store)
+    if params.get("chart_id"):
+        from .chart_snapshots import get
+        response = get(store, params["chart_id"])
+    else:
+        response = build_chart(params, namespace, store)
     if format_name == "html":
         artifact, renderer = _offline_html(response), "plotly-inline"
     elif format_name == "json":
@@ -182,4 +186,5 @@ def export_chart(params, namespace, store):
     with atomic_destination(path) as temporary:
         temporary.write_bytes(artifact)
     return {"path": str(path), "bytes": len(artifact), "format": format_name, "renderer": renderer,
+            "chart_id": response["chart_id"],
             "source_rows": response["source_rows"], "point_count": response["point_count"]}

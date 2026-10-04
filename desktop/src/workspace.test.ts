@@ -199,6 +199,72 @@ describe("execution notification identity", () => {
 });
 
 describe("Documentos .dpw", () => {
+  const chartDocument = (active_index: unknown = 0) => ({blocks: [{language: "python", code: "df"}],
+    result_view_state: {column_formats: {amount: {kind: "decimal", decimals: 2}}, future_view: {version: 7},
+      charts: {active_index, future_charts: "preserved", configs: [
+        {type: "bar", title: "Vendas", source_label: "sales", future_style: {enabled: true}},
+        {type: "line", title: "Custos", source_label: "costs"},
+        {type: "pie", title: "Regiões", source_label: "regions"},
+      ]}},
+  });
+  it("restaura o índice Qt de gráfico sem aplicar o offset das abas de dados", () => {
+    for (const index of [0, 1, 2]) {
+      const session = decodeDocument(chartDocument(index));
+      const charts = session.extras.charts as Array<{id: string; title: string}>;
+      expect(session.extras.desktop_chart_id).toBe(charts[index].id);
+      expect(charts[index].title).toBe(["Vendas", "Custos", "Regiões"][index]);
+      expect((encodeDocument(session).result_view_state as ReturnType<typeof chartDocument>["result_view_state"]).charts.active_index).toBe(index);
+    }
+  });
+  it("exporta a seleção moderna na lista Qt e preserva configurações e extensões", () => {
+    const source = chartDocument(0), session = decodeDocument(source);
+    const charts = session.extras.charts as Array<{id: string; title: string; variable_name: string; config: Record<string, unknown>}>;
+    charts[2] = {...charts[2], title: "Regiões atualizadas", variable_name: "current_regions",
+      config: {...charts[2].config, title: "Título anterior", source_label: "old_source", stacking: "grouped", source_mode: "selection", selection_view: {scope: {row_ranges: [[0, 2]]}}}};
+    session.extras.desktop_chart_id = charts[2].id;
+    const encoded = JSON.parse(JSON.stringify(encodeDocument(session)));
+    expect(encoded.result_view_state).toMatchObject({column_formats: source.result_view_state.column_formats,
+      future_view: {version: 7}, charts: {active_index: 2, future_charts: "preserved"}});
+    expect(encoded.result_view_state.charts.configs[0]).toEqual(source.result_view_state.charts.configs[0]);
+    expect(encoded.result_view_state.charts.configs[2]).toMatchObject({title: "Regiões atualizadas", source_label: "current_regions", stacking: "none", source_mode: "selection", selection_view: {scope: {row_ranges: [[0, 2]]}}});
+    expect(charts[2].config.stacking).toBe("grouped");
+    const reopened = decodeDocument(encoded);
+    expect(reopened.extras.desktop_chart_id).toBe(charts[2].id);
+    expect(reopened.extras.charts).toEqual(charts);
+  });
+  it("conserva Dados como seleção explícita ao reabrir JSON sem apagar o último índice Qt", () => {
+    const session = decodeDocument(chartDocument(2));
+    session.extras.desktop_chart_id = undefined;
+    const encoded = JSON.parse(JSON.stringify(encodeDocument(session)));
+    expect(encoded.desktop_chart_id).toBeNull();
+    expect(encoded.result_view_state.charts.active_index).toBe(2);
+    expect(decodeDocument(encoded).extras.desktop_chart_id).toBeNull();
+    session.extras.desktop_chart_id = null;
+    expect(decodeDocument(JSON.parse(JSON.stringify(encodeDocument(session)))).extras.desktop_chart_id).toBeNull();
+  });
+  it("não ressuscita gráfico legado quando o ID moderno está inválido ou pertence a outra sessão", () => {
+    for (const desktop_chart_id of ["closed-chart", null, undefined]) {
+      const session = decodeDocument({...chartDocument(1), desktop_chart_id});
+      expect(session.extras.desktop_chart_id).toBeNull();
+      expect(encodeDocument(session).desktop_chart_id).toBeNull();
+    }
+  });
+  it("mantém IDs modernos e converte apenas a seleção do legado quando não existe seleção privada", () => {
+    const session = decodeDocument(chartDocument("1"));
+    const charts = session.extras.charts as Array<{id: string}>;
+    const encoded = encodeDocument(session);
+    delete encoded.desktop_chart_id;
+    const reopened = decodeDocument(encoded);
+    expect(reopened.extras.charts).toEqual(charts);
+    expect(reopened.extras.desktop_chart_id).toBe(charts[1].id);
+  });
+  it("aceita gráficos vazios e ignora índices fora de faixa sem escolher outra aba", () => {
+    for (const index of [-1, 3, 1.5, "bad"]) expect(decodeDocument(chartDocument(index)).extras.desktop_chart_id).toBeNull();
+    const session = decodeDocument({blocks: [], result_view_state: {charts: {active_index: 8, configs: []}}});
+    expect(session.extras.charts).toEqual([]);
+    expect(session.extras.desktop_chart_id).toBeNull();
+    expect(encodeDocument(session).result_view_state).toEqual({charts: {active_index: 0, configs: []}});
+  });
   it("preserva configurações de blocos, parâmetros, notificações e charts ao salvar", () => {
     const source = { version: "1.0", blocks: [{ language: "sql", code: "SELECT @day", block_name: "sales", is_active: false,
       height: 240, connection_name: "Prod", connection_group: "Company", database_name: "reports", sql_parameters: [{ name: "day", value: "today" }] }],
@@ -208,7 +274,7 @@ describe("Documentos .dpw", () => {
     const encoded = encodeDocument(document);
     expect(encoded.shared_parameters_enabled).toBe(false);
     expect(encoded.notification_config).toEqual(source.notification_config);
-    expect(encoded.result_view_state).toEqual(source.result_view_state);
+    expect(encoded.result_view_state).toEqual({charts: {...source.result_view_state.charts, active_index: 0}});
     expect((encoded.blocks as Record<string, unknown>[])[0]).toMatchObject(source.blocks[0]);
     expect((encoded.blocks as Record<string, unknown>[])[0]).not.toHaveProperty("status");
     expect((encoded.blocks as Record<string, unknown>[])[0]).not.toHaveProperty("duration_ms");

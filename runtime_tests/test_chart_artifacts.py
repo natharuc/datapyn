@@ -55,7 +55,7 @@ def test_json_preserves_the_rendered_figure_and_styles(chart, tmp_path):
     assert response["figure"]["layout"]["font"]["family"].startswith("Segoe UI, Roboto")
     assert response["figure"]["layout"]["font"]["size"] == 12
     assert response["figure"]["layout"]["title"]["font"]["size"] == 16
-    assert response["figure"]["layout"]["margin"] == {"l": 56, "r": 24, "t": 56, "b": 72}
+    assert response["figure"]["layout"]["margin"] == {"l": 56, "r": 24, "t": 86, "b": 72}
     assert response["figure"]["layout"]["xaxis"]["tickfont"]["size"] == 11
     assert trace["textposition"] == "outside"
 

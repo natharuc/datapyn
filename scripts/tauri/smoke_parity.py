@@ -115,6 +115,28 @@ def smoke(executable=None, timeout=90, report=None):
                 assert path.stat().st_size > 100
                 if extension in ("jpg", "jpeg"):
                     assert path.read_bytes().startswith(b"\xff\xd8\xff")
+            preview = client.request("result.chart", {"session_id": "parity", "result_id": ref["result_id"],
+                "config": {"type": "bar", "x_column": "title", "y_columns": ["value"], "sort": "original"}})
+            assert preview["chart_id"] and preview["bounded"] is False
+            original_figure = preview["figure"]
+            client.execute("parity", "chart-source-mutation", "python", "df['value'] = [300, 600]")
+            captured_path = root / "captured-chart.json"
+            client.request("result.chart_export", {"session_id": "parity", "chart_id": preview["chart_id"], "path": str(captured_path), "format": "json"})
+            captured = json.loads(captured_path.read_text(encoding="utf-8"))
+            assert captured["figure"]["data"] == original_figure["data"]
+            styled = client.request("result.chart", {"session_id": "parity", "chart_id": preview["chart_id"],
+                "config": {**preview["config"], "title": "Captured title", "font_size": 18, "palette": "ocean"}})
+            assert styled["chart_id"] != preview["chart_id"] and styled["figure"]["data"][0]["y"] == original_figure["data"][0]["y"]
+            assert styled["figure"]["layout"]["font"]["size"] == 18
+            # Scalar output does not publish a new result tab after reassignment.
+            reassigned = client.execute("parity", "chart-source-reassignment", "python", "df = df.assign(value=[30, 60])\nlen(df)")
+            assert not reassigned["results"]
+            canonical = client.request("variable.inspect", {"session_id": "parity", "name": "df", "limit": 1})["result"]
+            refreshed = client.request("result.chart", {"session_id": "parity", "result_id": canonical["result_id"], "config": preview["config"]})
+            assert refreshed["figure"]["data"][0]["y"] == [30, 60]
+            client.request("result.release", {"session_id": "parity", "result_id": canonical["result_id"]})
+            unpinned = client.request("result.chart", {"session_id": "parity", "variable_name": "df", "config": preview["config"]})
+            assert unpinned["figure"]["data"][0]["y"] == [30, 60]
             rich = client.execute("parity", "rich", "python", "import matplotlib.pyplot as plt\nplt.plot([1,2],[2,4])\nplt.show()")
             artifact = next(item for item in rich["rich_outputs"] if item["type"] == "image")
             path = root / "figure.png"
@@ -169,6 +191,18 @@ def smoke(executable=None, timeout=90, report=None):
                 assert len(page["rows"]) == 100 and page["total_rows"] == 1_000_000
             metrics.update({"rows": 10_000_000, "page_rows": 100, "filter_sort_cold_ms": round(measurements[0], 2),
                             "filter_sort_cached_median_ms": round(statistics.median(measurements[1:]), 2)})
+            chart_started = time.perf_counter()
+            large_chart = client.request("result.chart", {"session_id": "parity", "result_id": ref["result_id"],
+                "config": {"type": "bar", "x_column": "group", "y_columns": ["id"], "aggregation": "count"}})
+            metrics["chart_10m_ms"] = round((time.perf_counter() - chart_started) * 1000, 2)
+            assert large_chart["source_rows"] == 10_000_000 and large_chart["point_count"] == 10 and large_chart["bounded"] is False
+            assert large_chart["figure"]["data"][0]["y"] == [1_000_000] * 10
+            chart_started = time.perf_counter()
+            large_restyle = client.request("result.chart", {"session_id": "parity", "chart_id": large_chart["chart_id"],
+                "config": {**large_chart["config"], "title": "Restyled ten million", "palette": "warm"}})
+            metrics["chart_restyle_10m_ms"] = round((time.perf_counter() - chart_started) * 1000, 2)
+            metrics["chart_10m_payload_bytes"] = len(json.dumps(large_chart).encode())
+            assert large_restyle["source_rows"] == 10_000_000 and large_restyle["point_count"] == 10
             client.request("result.release", {"session_id": "parity", "result_id": ref["result_id"]})
             client.execute("parity", "release", "python", "assert large.shape == (10000000,2)")
             native = client.execute("parity", "native-polars", "python", "native_large = pl.from_pandas(large)\nnative_large")
