@@ -1,4 +1,7 @@
 {
+  "build": {
+    "features": ["tauri/custom-protocol"]
+  },
   "bundle": {
     "externalBin": ["binaries/datapyn-runtime"]
   }
