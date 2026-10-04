@@ -116,6 +116,8 @@ function resolveTable(name: string | undefined, context: CompletionContext | und
   const keys=[...names],folded=strictCase?[]:keys.filter(key=>key.toLowerCase()===query);
   if(folded.length)return folded.length===1?folded[0]:undefined;
   const chooseScope=(candidates:string[])=>{
+    const temporary=candidates.filter(key=>tables[key]?.temporary);
+    if(temporary.length)return temporary.length===1?temporary[0]:undefined;
     const schemaOf=(key:string)=>tables[key]?.schema??key.split(".").at(-2);
     if(context?.schema!==undefined){
       const exactScope=candidates.filter(key=>schemaOf(key)===context.schema);

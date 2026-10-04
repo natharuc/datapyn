@@ -13,6 +13,7 @@ import uuid
 
 from . import PROTOCOL_VERSION
 from .kernel import kernel_main
+from .export_control import EXPORT_METHODS
 from .process_group import own_process_group
 from .workspace import read_document, write_document
 from .background import BackgroundJobs
@@ -58,6 +59,7 @@ class SessionRuntime:
         self._pending_reset = None
         self._states: OrderedDict[str, str] = OrderedDict()
         self._context = multiprocessing.get_context("spawn")
+        self._export_cancel = self._context.Event()
         self._process = None
         self._group = None
         self._commands = None
@@ -80,6 +82,11 @@ class SessionRuntime:
                 raise RuntimeErrorResponse("session_unavailable", "This session is unavailable; create a new session")
             if len(self._queue) >= MAX_QUEUED_JOBS:
                 raise RuntimeErrorResponse("queue_full", "This session already has 64 queued operations")
+            operation_id = params.get("operation_id")
+            if method in EXPORT_METHODS and operation_id:
+                pending = ([self._active] if self._active else []) + list(self._queue)
+                if any(job.method in EXPORT_METHODS and job.params.get("operation_id") == operation_id for job in pending):
+                    raise RuntimeErrorResponse("duplicate_operation", "operation_id must be unique among pending exports")
             if method == "execution.run":
                 execution_id = params["execution_id"]
                 if execution_id in self._states:
@@ -121,12 +128,31 @@ class SessionRuntime:
         self._finish_interrupted(queued, "cancelled", "Execution cancelled before starting")
         return {"execution_id": execution_id, "status": "cancelled"}
 
+    def cancel_export(self, operation_id):
+        queued = None
+        with self._lock:
+            if self._active and self._active.method in EXPORT_METHODS and self._active.params.get("operation_id") == operation_id:
+                self._export_cancel.set()
+                return {"operation_id": operation_id, "status": "cancelling"}
+            for job in self._queue:
+                if job.method in EXPORT_METHODS and job.params.get("operation_id") == operation_id:
+                    queued = job
+                    self._queue.remove(job)
+                    break
+        if queued is None:
+            return {"operation_id": operation_id, "status": "already_finished"}
+        self.emit({"event": "result.export_progress", "payload": {"session_id": self.session_id,
+                   "operation_id": operation_id, "phase": "cancelled", "current": 0, "total": 0}})
+        if queued.request_id is not None:
+            self.emit({"id": queued.request_id, "error": {"code": "cancelled", "message": "Export cancelled before starting"}})
+        return {"operation_id": operation_id, "status": "cancelled"}
+
     def _launch(self):
         commands_recv, commands_send = self._context.Pipe(duplex=False)
         events_recv, events_send = self._context.Pipe(duplex=False)
         process = self._context.Process(
             target=kernel_main,
-            args=(self.session_id, commands_recv, events_send, self.idle_timeout),
+            args=(self.session_id, commands_recv, events_send, self.idle_timeout, self._export_cancel),
             name=f"datapyn-kernel-{self.session_id}",
         )
         try:
@@ -346,6 +372,8 @@ class SessionRuntime:
                     if self._ready and self._active is None and self._queue and self._pending_reset is None:
                         job = self._queue.popleft()
                         job.started_at = time.monotonic()
+                        if job.method in EXPORT_METHODS:
+                            self._export_cancel.clear()
                         self._active = job
                         if job.method == "execution.run":
                             self._states[job.params["execution_id"]] = "running"
@@ -782,7 +810,11 @@ class Supervisor:
                 self._identifier(params.get("result_id"), "result_id")
             self._session(params).enqueue(method, routed, request_id)
             return None
-        if method in {"data.import", "variable.inspect", "variable.delete", "result.export", "result.summary", "result.chart", "result.chart_export", "result.artifact_write", "result.export_table", "document.read", "document.script_export"}:
+        if method == "result.export_cancel":
+            return self._session(params).cancel_export(self._identifier(params.get("operation_id"), "operation_id"))
+        if method in {"data.import", "variable.inspect", "variable.delete", "result.export", "result.export_text", "result.summary", "result.chart", "result.chart_export", "result.artifact_write", "result.export_table", "document.read", "document.script_export", "variable.archive.list", "variable.archive.export", "variable.archive.import"}:
+            if params.get("operation_id") is not None:
+                self._identifier(params["operation_id"], "operation_id")
             self._session(params).enqueue(method, self._route(params), request_id)
             return None
         if method in {"workspace.read", "workspace.write"}:

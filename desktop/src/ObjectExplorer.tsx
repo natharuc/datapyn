@@ -82,8 +82,10 @@ export function ObjectExplorer({ sessionId, connectionId, database, schema, dbTy
   async function definition(node: ExplorerNode, drop = false) {
     const info = await runtime.request<ExplorerDetails>("explorer.details", nodeParams(node));
     if (!info.definition) throw new Error(t("O driver não disponibilizou a definição deste objeto."));
-    onInsert(`${drop ? `DROP ${node.kind.toUpperCase()} ${quoted(node)};\n\n` : ""}${info.definition}`, "sql", true);
+    const guard=dbType === "sqlserver" ? `IF OBJECT_ID(N'${quoted(node).replaceAll("'","''")}', N'U') IS NOT NULL\n    DROP TABLE ${quoted(node)};` : `DROP ${node.kind.toUpperCase()} IF EXISTS ${quoted(node)};`;
+    onInsert(`${drop ? `${guard}\n\n` : ""}${info.definition}`, "sql", true);
   }
+  const columnTable=menu?.kind === "column" ? [...roots,...Object.values(children).flat()].find(node=>objectKinds.has(node.kind) && children[node.id]?.includes(menu)) : undefined;
   async function useContext(node: ExplorerNode) {
     const context = { database: ["database", "catalog"].includes(node.kind) ? node.name : node.database || database, schema: node.kind === "schema" ? node.name : schema };
     if (onContextChange) await onContextChange(context);
@@ -112,7 +114,7 @@ export function ObjectExplorer({ sessionId, connectionId, database, schema, dbTy
       {menu.kind !== "category" && <button onClick={() => { insert(menu); setMenu(undefined); }}><ChevronsRight size={14} />{t("Inserir nome no bloco em foco")}</button>}<button onClick={() => void action(() => copy(menu.name))}><Copy size={14} />{t("Copiar nome")}</button>{menu.qualified_name && <button onClick={() => void action(() => copy(menu.qualified_name!))}><Copy size={14} />{t("Copiar nome qualificado")}</button>}
       {objectKinds.has(menu.kind) && <><button onClick={() => void action(() => showDetails(menu))}><Braces size={14} />{t("Detalhes, colunas e índices")}</button><button onClick={() => void action(() => definition(menu))}><Code2 size={14} />{t("Definição / CREATE")}</button></>}
       {["table", "view"].includes(menu.kind) && <><button onClick={() => void action(() => selectQuery(menu))}><Table2 size={14} />{t("SELECT primeiras 1000 linhas")}</button><button onClick={() => void action(() => allColumns(menu))}><Table2 size={14} />{t("SELECT com todas as colunas")}</button><button onClick={() => { onInsert(`SELECT COUNT(*) FROM ${quoted(menu)};`, "sql", true); setMenu(undefined); }}><Table2 size={14} />COUNT(*)</button>{menu.kind === "table" && <button onClick={() => void action(() => definition(menu, true))}><Code2 size={14} />{t("Script DROP e CREATE")}</button>}</>}
-      {menu.kind === "column" && <>{["WHERE", "GROUP BY", "ORDER BY"].map((clause) => <button key={clause} onClick={() => { onInsert(`${clause} ${quoteIdentifierPart(menu.name, dbType)}${clause === "WHERE" ? " = " : ""}`); setMenu(undefined); }}>{clause}</button>)}</>}
+      {menu.kind === "column" && <>{columnTable && <button onClick={()=>void action(()=>copy(`${columnTable.name}.${menu.name}`))}><Copy size={14}/>{t("Copiar como")} {columnTable.name}.{menu.name}</button>}{["WHERE", "GROUP BY", "ORDER BY"].map((clause) => <button key={clause} onClick={() => { onInsert(`${clause} ${quoteIdentifierPart(menu.name, dbType)}${clause === "WHERE" ? " = " : ""}`); setMenu(undefined); }}>{clause}</button>)}</>}
       {["database", "catalog", "schema"].includes(menu.kind) && <button disabled={disabled} onClick={() => void action(() => useContext(menu))}><Database size={14} />{t("Usar")} {menu.kind === "schema" ? "schema" : t("banco / catálogo")} {t("no bloco")}</button>}
       {menu.has_children && <button onClick={() => void action(() => load(menu, true))}><RefreshCw size={14} />{t("Atualizar este grupo")}</button>}
     </div></Modal>}

@@ -13,9 +13,9 @@ import tempfile
 
 from .values import describe_variables, preview, scalar
 
-METHODS = frozenset({"data.import", "variable.inspect", "variable.delete", "result.export",
+METHODS = frozenset({"data.import", "variable.inspect", "variable.delete", "result.export", "result.export_text",
                      "result.summary", "result.chart", "result.chart_export", "result.export_table", "document.read",
-                     "document.script_export"})
+                     "document.script_export", "variable.archive.list", "variable.archive.export", "variable.archive.import"})
 RUNTIME_VARIABLES = frozenset({"pd", "np", "pl", "db_engine", "db_type", "db_database", "db_host", "db_username"})
 
 
@@ -254,83 +254,41 @@ def delete_variable(params, namespace, store):
     return {"variables": describe_variables(namespace)}
 
 
-def _quote_identifier(name, dialect):
-    name = str(name)
-    if not name or "\0" in name:
-        raise ValueError("SQL identifiers cannot be empty or contain a null character")
-    if dialect in {"mysql", "mariadb", "databricks"}:
-        return "`" + name.replace("`", "``") + "`"
-    if dialect in {"sqlserver", "mssql"}:
-        return "[" + name.replace("]", "]]") + "]"
-    return '"' + name.replace('"', '""') + '"'
+def _export_options(params):
+    options = params.get("options") or {}
+    if not isinstance(options, dict):
+        raise ValueError("Export options must be an object")
+    return options
 
 
-def export_result(params, namespace, store):
+def export_result(params, namespace, store, progress=None, cancelled=None):
+    from .export_control import ExportControl
+    from .export_formats import write_file
     frame = selected_frame(params, namespace, store)
     path = _destination(params)
     export_format = str(params.get("format") or path.suffix.lstrip(".")).lower()
-    options = params.get("options") or {}
+    control = ExportControl(len(frame), progress, cancelled)
+    control.check()
     with atomic_destination(path) as temporary:
-        if export_format in {"csv", "tsv"}:
-            delimiter = options.get("delimiter", "\t" if export_format == "tsv" else ";")
-            if not isinstance(delimiter, str) or len(delimiter) != 1:
-                raise ValueError("Delimiter must be exactly one character")
-            frame.to_csv(temporary, sep=delimiter, index=False, header=options.get("include_header", True),
-                         encoding=options.get("encoding", "utf-8-sig"), decimal=options.get("decimal", "."), chunksize=10_000)
-        elif export_format == "xlsx":
-            if len(frame) > 1_048_575 or len(frame.columns) > 16_384:
-                raise ValueError("Excel supports at most 1,048,575 data rows and 16,384 columns; use CSV or Parquet")
-            from openpyxl import Workbook
-            from openpyxl.cell import WriteOnlyCell
-            from datetime import datetime, date
-            book = Workbook(write_only=True)
-            sheet = book.create_sheet("DataPyn")
-            def cell(value):
-                temporal = isinstance(value, (datetime, date)) and not (isinstance(value, datetime) and value.tzinfo)
-                item = WriteOnlyCell(sheet, value=value if temporal else scalar(value))
-                if temporal:
-                    item.number_format = "yyyy-mm-dd hh:mm:ss"
-                elif isinstance(item.value, str):
-                    # Plain data strings must not turn into executable Excel formulas.
-                    item.data_type = "s"
-                return item
-            try:
-                sheet.append([cell(str(column)) for column in frame.columns])
-                for row in frame.itertuples(index=False, name=None):
-                    sheet.append([cell(value) for value in row])
-                book.save(temporary)
-            finally:
-                book.close()
-        elif export_format == "parquet":
-            from src.utils.data_formats import PARQUET_COMPRESSION
-            frame.to_parquet(temporary, index=False, compression=PARQUET_COMPRESSION)
-        elif export_format == "json":
-            # Preserve Decimal/bigint precision rather than pandas' lossy JSON conversion.
-            columns = [str(column) for column in frame.columns]
-            if len(columns) != len(set(columns)):
-                raise ValueError("JSON records requires distinct column names")
-            with temporary.open("w", encoding="utf-8") as output:
-                output.write("[\n")
-                for index, row in enumerate(frame.itertuples(index=False, name=None)):
-                    if index:
-                        output.write(",\n")
-                    json.dump(dict(zip(columns, map(scalar, row))), output, ensure_ascii=False, allow_nan=False)
-                output.write("\n]\n")
-        elif export_format == "sql":
-            from src.utils.sql_insert_generator import format_value
-            dialect = options.get("db_type", "sqlserver")
-            table = _quote_identifier(options.get("table_name", "data"), dialect)
-            if options.get("schema_name"):
-                table = _quote_identifier(options["schema_name"], dialect) + "." + table
-            columns = ", ".join(_quote_identifier(column, dialect) for column in frame.columns)
-            with temporary.open("w", encoding="utf-8") as output:
-                output.write(f"-- DataPyn: {len(frame)} rows\n")
-                for row in frame.itertuples(index=False, name=None):
-                    values = ", ".join("NULL" if scalar(value) is None else format_value(value, dialect) for value in row)
-                    output.write(f"INSERT INTO {table} ({columns}) VALUES ({values});\n")
-        else:
-            raise ValueError(f"Unsupported export format: {export_format}")
+        write_file(frame, temporary, export_format, _export_options(params), control)
+        control.check()
+    control.complete()
     return {"path": str(path), "format": export_format, "row_count": len(frame), "column_count": len(frame.columns)}
+
+
+def export_text(params, namespace, store, progress=None, cancelled=None):
+    from .export_control import ExportControl
+    from .export_formats import BoundedText, write_text
+    frame = selected_frame(params, namespace, store)
+    export_format = str(params.get("format", "csv")).lower()
+    control = ExportControl(len(frame), progress, cancelled)
+    control.check()
+    with BoundedText() as output:
+        write_text(frame, output, export_format, _export_options(params), control)
+        content = output.getvalue()
+    control.check()
+    control.complete()
+    return {"text": content, "format": export_format, "row_count": len(frame), "column_count": len(frame.columns)}
 
 
 def summarize_result(params, namespace, store):
@@ -438,25 +396,10 @@ def build_chart(params, namespace, store):
             "source_rows": len(frame), "point_count": len(data), "bounded": len(data) >= chart_max_points(config)}
 
 
-def export_to_table(params, namespace, store, connector):
-    if connector is None or getattr(connector, "engine", None) is None:
-        raise ConnectionError("Connect to the destination database first")
-    table = params.get("table")
-    if not isinstance(table, str) or not table.strip() or len(table) > 255 or "\0" in table:
-        raise ValueError("Choose a valid table name")
-    schema = params.get("schema") or None
-    if schema is not None and (not isinstance(schema, str) or "\0" in schema or len(schema) > 255):
-        raise ValueError("Choose a valid schema")
-    mode = params.get("if_exists", "fail")
-    if mode not in {"fail", "append", "replace"}:
-        raise ValueError("if_exists must be fail, append or replace")
+def export_to_table(params, namespace, store, connector, progress=None, cancelled=None):
+    from .table_export import export_table
     frame = selected_frame(params, namespace, store)
-    chunksize = _integer(params.get("chunksize", 1000), "chunksize", 100, 100_000)
-    # SQLAlchemy quotes identifiers and binds values; insert batches share a
-    # transaction instead of leaving partial data after a failed batch.
-    with connector.engine.begin() as connection:
-        frame.to_sql(table, connection, schema=schema, if_exists=mode, index=False, chunksize=chunksize)
-    return {"table": table, "schema": schema, "row_count": len(frame), "if_exists": mode}
+    return export_table(frame, params, connector, progress, cancelled)
 
 
 def read_document(params):
@@ -493,16 +436,23 @@ def read_document(params):
 
 
 def export_script(params):
+    from src.core.parameter_settings import use_shared_parameter_delimiter
+    with use_shared_parameter_delimiter(params.get("shared_delimiter", "{{name}}")):
+        return _export_script(params)
+
+
+def _export_script(params):
     path = _destination(params)
     blocks = params.get("blocks")
     if not isinstance(blocks, list):
         raise ValueError("blocks must be an array")
+    shared = params.get("shared_parameters") or [] if params.get("shared_parameters_enabled", True) else []
     export_format = params.get("format") or path.suffix.lstrip(".").lower()
     if export_format == "ipynb":
         if any(block.get("language", "python") == "sql" for block in blocks):
             raise ValueError("SQL blocks cannot be exported to a Python notebook; export the analysis as .py")
         cells = [{"cell_type": block.get("cell_type", "code"), "metadata": block.get("notebook_metadata", {}),
-                  "source": str(block.get("code", "")).splitlines(keepends=True),
+                  "source": (_prepared_python(str(block.get("code", "")), shared) if block.get("cell_type", "code") == "code" else str(block.get("code", ""))).splitlines(keepends=True),
                   **({"outputs": [], "execution_count": None} if block.get("cell_type", "code") == "code" else {})}
                  for block in blocks]
         metadata = params.get("notebook_metadata")
@@ -511,7 +461,9 @@ def export_script(params):
         document = {"nbformat": 4, "nbformat_minor": 5, "metadata": metadata, "cells": cells}
         content = json.dumps(document, ensure_ascii=False, indent=2) + "\n"
     elif export_format == "sql":
-        content = "\n\n".join(str(block.get("code", "")) for block in blocks if block.get("language") == "sql") + "\n"
+        from .script_parameters import literal_sql
+        content = "\n\n".join(literal_sql(str(block.get("code", "")), (block.get("sql_parameters") or block.get("parameters") or []) + shared,
+                                        params.get("db_type", "sqlserver")) for block in blocks if block.get("language") == "sql") + "\n"
     elif export_format == "py":
         lines = ["# Exported from DataPyn", "import pandas as pd", "import numpy as np", "import polars as pl",
                  "import datetime", "from decimal import Decimal", "from uuid import UUID"]
@@ -526,7 +478,7 @@ def export_script(params):
                 lines.extend("# " + line for line in code.splitlines())
             elif block.get("language") == "sql":
                 name = _variable_name(name)
-                parameters = block.get("sql_parameters") or block.get("parameters")
+                parameters = (block.get("sql_parameters") or block.get("parameters") or []) + shared
                 if parameters:
                     from src.utils.sql_parameter_service import prepare_generic_sql
                     prepared = prepare_generic_sql(code, parameters)
@@ -534,7 +486,7 @@ def export_script(params):
                 else:
                     lines += [f"{name} = pd.read_sql(text({code!r}), db_engine)"]
             else:
-                lines.append(code)
+                lines.append(_prepared_python(code, shared))
         content = "\n".join(lines) + "\n"
     else:
         raise ValueError("Export a .py, .sql or .ipynb script")
@@ -543,14 +495,26 @@ def export_script(params):
     return {"path": str(path), "format": export_format, "block_count": len(blocks)}
 
 
-def dispatch(method, params, namespace, store, connector=None):
+def _prepared_python(code, shared):
+    from src.utils.sql_parameter_service import prepare_python_code_with_shared_parameters
+    return prepare_python_code_with_shared_parameters(code, shared)
+
+
+def dispatch(method, params, namespace, store, connector=None, progress=None, cancelled=None):
     handlers = {"data.import": import_data, "variable.inspect": inspect_variable,
-                "variable.delete": delete_variable, "result.export": export_result,
+                "variable.delete": delete_variable,
                 "result.summary": summarize_result, "result.chart": build_chart}
     if method in handlers:
         return handlers[method](params, namespace, store)
+    if method == "result.export":
+        return export_result(params, namespace, store, progress, cancelled)
+    if method == "result.export_text":
+        return export_text(params, namespace, store, progress, cancelled)
     if method == "result.export_table":
-        return export_to_table(params, namespace, store, connector)
+        return export_to_table(params, namespace, store, connector, progress, cancelled)
+    if method.startswith("variable.archive."):
+        from .variable_archive import dispatch as archive_dispatch
+        return archive_dispatch(method, params, namespace, store, progress=progress, cancelled=cancelled)
     if method == "result.chart_export":
         from .chart_artifacts import export_chart
         return export_chart(params, namespace, store)

@@ -8,6 +8,11 @@ const update=(version:number,connection="a",database="db",schema="public",tables
   schema_snapshot:{db_type:"postgresql",tables:tables.map(name=>({key:`${schema}.${name}`,name,schema})),columns:{[`${schema}.${tables[0]}`]:[{name:"Id",data_type:"integer"}]}}}});
 
 describe("language metadata delivery",()=>{
+  it("retains temporary table metadata from the kernel",()=>{
+    const contexts=new SessionLanguageContexts();
+    contexts.accept({event:"language.context_updated",payload:{session_id:"s",version:1,variables:{},schema_snapshot:{db_type:"sqlite",tables:[{key:"temp.sales",name:"sales",schema:"temp",temporary:true}],columns:{"temp.sales":[{name:"value"}]}}}});
+    expect(contexts.get("s")?.schemaSnapshot?.tables?.["temp.sales"]).toMatchObject({temporary:true,columns:[{name:"value"}]});
+  });
   it("admits context updates before execution-id validation and rejects malformed versions",()=>{
     expect(isRuntimeEvent(update(1))).toBe(true);
     expect(isRuntimeEvent({...update(1),payload:{...update(1).payload,version:NaN}})).toBe(false);

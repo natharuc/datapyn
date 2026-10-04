@@ -17,6 +17,15 @@ const site = (language: "python" | "sql", line: string, marker = "|") => {
 };
 
 describe("completion ranges and insertion", () => {
+  it("prefers a temporary shadow for unqualified SQL names and preserves explicit schemas", () => {
+    const scoped:CompletionContext={variables:[],tables:[],schema:"main",schemaSnapshot:{db_type:"sqlite",tables:{
+      "main.sales":{name:"sales",schema:"main",columns:[{name:"permanent_only"}]},
+      "temp.sales":{name:"sales",schema:"temp",temporary:true,columns:[{name:"temporary_only"}]},
+    }}};
+    expect(localCompletions("sql",site("sql","sales.|"),scoped,"sales.").map(item=>item.label)).toEqual(["temporary_only"]);
+    expect(localCompletions("sql",site("sql","main.sales.|"),scoped,"main.sales.").map(item=>item.label)).toEqual(["permanent_only"]);
+    expect(localCompletions("sql",site("sql","SELECT s.|"),scoped,"SELECT s.",[],"SELECT s. FROM sales s").map(item=>item.label)).toEqual(["temporary_only"]);
+  });
   it("replaces the entire identifier when the cursor is in its middle", () => {
     expect(site("python", "pri|nt")).toMatchObject({ prefix: "pri", startColumn: 1, endColumn: 6 });
     expect(site("sql", "SELECT ord|ers FROM orders")).toMatchObject({ prefix: "ord", startColumn: 8, endColumn: 14 });

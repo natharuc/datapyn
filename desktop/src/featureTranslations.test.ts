@@ -28,4 +28,13 @@ describe("Data, chart and workspace translations", () => {
     expect(featureTranslate("categorical")).toBe("Categorical");
     expect(featureTranslate("{{result[0][0]}} custom SQL label")).toBe("{{result[0][0]}} custom SQL label");
   });
+  it("translates the new data export and query download actions with the live locale", () => {
+    expect(featureTranslate("Tabela temporária")).toBe("Tabela temporária");
+    setLocale("en-US");
+    expect(featureTranslate("Tabela temporária")).toBe("Temporary table");
+    expect(featureTranslate("Gerar prévia")).toBe("Generate preview");
+    expect(featureTranslate("Inserir em novo bloco")).toBe("Insert into new block");
+    expect(featureTranslate("Executar e baixar consulta")).toBe("Run and download query");
+    expect(featureTranslate("{rows} linhas copiadas como {format}",{rows:3,format:"CSV"})).toBe("3 rows copied as CSV");
+  });
 });

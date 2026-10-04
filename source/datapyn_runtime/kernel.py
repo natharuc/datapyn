@@ -258,7 +258,7 @@ def _watch_parent():
         exit_kernel_and_children()
 
 
-def kernel_main(session_id: str, commands, events, idle_timeout=300):
+def kernel_main(session_id: str, commands, events, idle_timeout=300, export_cancel=None):
     initialize_kernel_group()
     # C extensions, os.write() and child subprocesses must never inherit the
     # NDJSON protocol descriptors. Python print() is streamed separately below.
@@ -465,6 +465,8 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300):
                 from .sql_context import changes_metadata
                 invalidated = params["language"] == "sql" and connector is not None and changes_metadata(params["code"])
                 if invalidated:
+                    from .table_export import refresh_temporary_tables
+                    refresh_temporary_tables(connector)
                     pool.explorer().cache.clear()
                     pool.explorer().column_cache.clear()
                 publish_context(invalidated=invalidated)
@@ -518,15 +520,43 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300):
                         key = "|".join(str(params.get(key) or "") for key in ("connection_id", "database", "schema")) or "default"
                         send({"language_context": {"key": key, "variables": namespace_snapshot(namespace)}})
                     result = {"status": "updated"}
-                elif method in {"data.import", "variable.inspect", "variable.delete", "result.export", "result.summary", "result.chart", "result.chart_export", "result.export_table", "document.read", "document.script_export"}:
+                elif method in {"data.import", "variable.inspect", "variable.delete", "result.export", "result.export_text", "result.summary", "result.chart", "result.chart_export", "result.export_table", "document.read", "document.script_export", "variable.archive.list", "variable.archive.export", "variable.archive.import"}:
                     from .data_tools import dispatch as data_dispatch
+                    operation_id = params.get("operation_id")
+                    def export_progress(update):
+                        if operation_id:
+                            emit("result.export_progress", {"session_id": session_id, "operation_id": operation_id, **update})
                     if method == "result.export_table":
-                        activate(params)
-                    if method == "variable.inspect" and params.get("variable_name") == "__namespace__":
+                        previous_connector, previous_key, previous_context = connector, pool.active_key, context_key
+                        connection_names = ("db_engine", "db_type", "db_database", "db_host", "db_username", "db_schema")
+                        previous_variables = {name: namespace[name] for name in connection_names if name in namespace}
+                        try:
+                            routed = dict(params)
+                            routed.pop("schema", None)
+                            if params.get("connection_schema"):
+                                routed["schema"] = params["connection_schema"]
+                            activate(routed)
+                            result = data_dispatch(method, params, namespace, store, connector=connector,
+                                                   progress=export_progress, cancelled=export_cancel.is_set if export_cancel else None)
+                            for key, explorer in pool.explorers.items():
+                                if key[0] == pool.active_key[0]:
+                                    explorer.cache.clear()
+                                    explorer.column_cache.clear()
+                            publish_context(invalidated=True)
+                        finally:
+                            connector, context_key = previous_connector, previous_context
+                            pool.active_key = previous_key if previous_key in pool.items else None
+                            for name in connection_names:
+                                namespace.pop(name, None)
+                            namespace.update(previous_variables)
+                            if connector is not None and "db_engine" in previous_variables:
+                                namespace["db_engine"] = connector.engine
+                    elif method == "variable.inspect" and params.get("variable_name") == "__namespace__":
                         result = {"variables": describe_variables(namespace)}
                     else:
-                        result = data_dispatch(method, params, namespace, store, connector=connector)
-                    if method in {"data.import", "variable.delete"}:
+                        result = data_dispatch(method, params, namespace, store, connector=connector,
+                                               progress=export_progress, cancelled=export_cancel.is_set if export_cancel else None)
+                    if method in {"data.import", "variable.delete", "variable.archive.import"}:
                         snapshot_dirty = True
                         store.invalidate_views()
                         publish_context()
@@ -550,7 +580,8 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300):
                     raise ValueError(f"Unknown kernel method: {method}")
                 send({"job_id": job_id, "result": result})
             except BaseException as exc:
-                send({"job_id": job_id, "error": {"code": "operation_failed", "message": f"{type(exc).__name__}: {exc}"}})
+                from .export_control import ExportCancelled
+                send({"job_id": job_id, "error": {"code": "cancelled" if isinstance(exc, ExportCancelled) else "operation_failed", "message": f"{type(exc).__name__}: {exc}"}})
     finally:
         pool.disconnect()
         commands.close()

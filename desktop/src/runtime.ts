@@ -10,8 +10,13 @@ export interface LanguageContextUpdate {
   session_id: string; connection_id?: string; database?: string; schema?: string; version: number;
   variables: Record<string, {type: string; module?: string; columns?: string[]}>;
   metadata_invalidated?: boolean;
-  schema_snapshot?: {db_type?: string; tables?: Array<{key?: string; name: string; schema?: string}>;
+  schema_snapshot?: {db_type?: string; tables?: Array<{key?: string; name: string; schema?: string; temporary?: boolean}>;
     columns?: Record<string, Array<{name: string; type?: string; data_type?: string}>>};
+}
+export interface ResultExportProgress {
+  session_id: string; operation_id: string;
+  phase: "preparing" | "writing" | "completed" | "cancelled";
+  current: number; total: number;
 }
 export interface ResultPage { columns: Column[]; rows: Primitive[][]; total_rows: number; offset: number }
 export interface RuntimeInfo { protocol_version: number; python_version: string; capabilities: Record<string, unknown> | string[] }
@@ -32,6 +37,7 @@ export type RuntimeEvent =
   | { event: "session.reset"; payload: { session_id: string; reason?: string } }
   | { event: "namespace.changed"; payload: {session_id:string;variables:Variable[];results:ResultRef[]} }
   | { event: "language.context_updated"; payload: LanguageContextUpdate }
+  | { event: "result.export_progress"; payload: ResultExportProgress }
   | { event: "backend.exited"; payload: { message: string } };
 
 export function isRuntimeEvent(value: unknown): value is RuntimeEvent {
@@ -45,6 +51,10 @@ export function isRuntimeEvent(value: unknown): value is RuntimeEvent {
   if (event === "namespace.changed") return Array.isArray(payload.variables) && Array.isArray(payload.results);
   if (event === "language.context_updated") return typeof payload.version === "number" && Number.isFinite(payload.version)
     && Boolean(payload.variables && typeof payload.variables === "object" && !Array.isArray(payload.variables));
+  if (event === "result.export_progress") return typeof payload.operation_id === "string" && Boolean(payload.operation_id)
+    && ["preparing", "writing", "completed", "cancelled"].includes(String(payload.phase))
+    && typeof payload.current === "number" && Number.isFinite(payload.current) && payload.current >= 0
+    && typeof payload.total === "number" && Number.isFinite(payload.total) && payload.total >= 0;
   if (typeof payload.execution_id !== "string") return false;
   if (event === "execution.started") return true;
   if (event === "execution.output") return typeof payload.stream === "string" && typeof payload.text === "string";

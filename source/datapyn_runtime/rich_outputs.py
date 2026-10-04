@@ -128,16 +128,25 @@ class RichOutputs:
         if identifier not in self.artifacts:
             raise KeyError("Artifact is unavailable; its kernel may have restarted")
         artifact = self.artifacts[identifier][0]
-        export_format = params.get("format") or {"image": "png", "html": "html", "json": "json", "plotly": "html"}[artifact["type"]]
         if not isinstance(params.get("path"), str) or not params["path"].strip():
             raise ValueError("Choose an artifact destination")
         path = Path(params["path"]).expanduser().resolve()
         if not path.parent.is_dir() or path.is_dir():
             raise ValueError("Choose a file inside an existing directory")
+        supported = {"image": {"png", "jpg", "jpeg"}, "html": {"html"},
+                     "json": {"json"}, "plotly": {"html", "json"}}[artifact["type"]]
+        requested = params.get("format")
+        if requested is not None and not isinstance(requested, str):
+            raise ValueError("Choose an export format supported by this artifact")
+        # The stdio API and UI can choose a format through the destination.
+        # An explicit format remains authoritative and must match the suffix.
+        suffix = path.suffix.lower().lstrip(".")
+        export_format = requested.lower() if requested else suffix if suffix in supported else {"image": "png", "html": "html", "json": "json", "plotly": "html"}[artifact["type"]]
         if path.suffix.lower() != "." + export_format:
             raise ValueError(f"Choose a .{export_format} destination")
-        if artifact["type"] == "image" and export_format == "png":
-            data = base64.b64decode(artifact["data"], validate=True)
+        if artifact["type"] == "image" and export_format in {"png", "jpg", "jpeg"}:
+            from .image_export import image_bytes
+            data = image_bytes(base64.b64decode(artifact["data"], validate=True), export_format)
         elif artifact["type"] == "html" and export_format == "html":
             data = artifact["data"].encode("utf-8")
         elif artifact["type"] in {"json", "plotly"} and export_format == "json":

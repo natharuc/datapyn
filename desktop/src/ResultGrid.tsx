@@ -1,4 +1,5 @@
 import { translate as t, useLocale, getLocale } from "./i18n";
+import { featureTranslate as featureText } from "./featureTranslations";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import DataEditor, { CompactSelection, GridCellKind, type GridCell, type GridColumn, type GridSelection, type Item, type Rectangle } from "@glideapps/glide-data-grid";
 import "@glideapps/glide-data-grid/dist/index.css";
@@ -7,7 +8,8 @@ import { errorText, type Column, type Primitive, type ResultPage, type ResultRef
 import { selectionRectangles,selectedCellCount } from "./gridSelection";
 import type { DataView } from "./dataTypes";
 import { formatCell, type ColumnFormat, type ColumnFormats } from "./gridFormat";
-import { boundedClipboard, cellSelected, htmlClipboard, jsonClipboard, MAX_COPY_CELLS, plainClipboard, selectedLayout, sqlClipboard, type CopyFormat, type CopyTable } from "./gridClipboard";
+import { boundedClipboard, cellSelected, htmlClipboard, jsonClipboard, MAX_COPY_CELLS, plainClipboard, selectedLayout, type CopyFormat, type CopyTable } from "./gridClipboard";
+import { exportSource, requestSqlText } from "./dataExport";
 import { Modal } from "./PanelControls";
 import { useOwnerDocumentRevision } from "./useOwnerDocument";
 import "./resultGrid.css";
@@ -25,12 +27,12 @@ export interface ResultGridProps { sessionId: string; result: ResultRef; transpo
   theme?: "dark" | "light" | "system"; uiFont?: string; uiFontSize?: number; dbType?: string;
   columnFormats?: ColumnFormats; onColumnFormatsChange?: (formats: ColumnFormats) => void;
   copySeparator?: string; nullDisplay?: string; onCopySettingsChange?: (settings: CopySettings) => void; onFontSizeChange?:(size:number)=>void;
-  formatColumnRequest?: {column:string;revision:number} }
+  formatColumnRequest?: {column:string;revision:number}; onInsertSql?: (code: string) => void }
 
 export function ResultGrid({ sessionId, result, transport, onMessage, copySignal, onViewChange, displayRowLimit = 100,
   initialView,refreshRevision=0,
   theme = "dark", uiFont = "Ubuntu", uiFontSize = 12, dbType = "postgresql", columnFormats, onColumnFormatsChange,
-  copySeparator = "\t", nullDisplay = "", onCopySettingsChange,onFontSizeChange,formatColumnRequest }: ResultGridProps) {
+  copySeparator = "\t", nullDisplay = "", onCopySettingsChange,onFontSizeChange,formatColumnRequest,onInsertSql }: ResultGridProps) {
   useLocale();
   const panelRef = useRef<HTMLDivElement>(null);
   const ownerDocumentRevision = useOwnerDocumentRevision(panelRef);
@@ -135,22 +137,34 @@ export function ResultGrid({ sessionId, result, transport, onMessage, copySignal
     }
     return {columns:layout.columns.map(index=>columns[index].title),rows:layout.rows.map(row=>{const page=pages.get(Math.floor(row/PAGE_SIZE))!;return layout.columns.map(column=>cellSelected(column,row,selected)?page.rows[row-page.offset]?.[column]??null:undefined);})};
   },[rectangles,totalRows,columns,requestPage]);
+  const readSql = useCallback(async (tableName: string) => {
+    const version = generation.current;
+    return requestSqlText(transport,exportSource(sessionId,result.result_id,{filter:effectiveFilter,sort,scope:rectangles.length?{rectangles}:undefined},rectangles.length>0),tableName,dbType,()=>version===generation.current);
+  },[sessionId,result.result_id,transport,effectiveFilter,sort,rectangles,dbType]);
   const copy = useCallback(async (format: CopyFormat="excel",headers=false,tableName?:string) => {
     if(copying||!ready) return; setCopying(true);
     try {
-      const table=await readSelection(),options={headers,separator,nullDisplay:copyNull,formats};
-      const plain=boundedClipboard(format==="json"?jsonClipboard(table):format==="sql"?sqlClipboard(table,tableName??"",dbType):plainClipboard(table,options));
+      const sql=format==="sql"?await readSql(tableName??""):undefined;
+      const table=format==="sql"?undefined:await readSelection(),options={headers,separator,nullDisplay:copyNull,formats};
+      const plain=sql?sql.text:boundedClipboard(format==="json"?jsonClipboard(table!):plainClipboard(table!,options));
       const view=panelRef.current?.ownerDocument.defaultView as (Window & typeof globalThis)|null|undefined;
       const clipboard=view?.navigator.clipboard;
       if(!clipboard)throw new Error(t("Área de transferência indisponível nesta janela."));
       if(format==="excel"&&view?.ClipboardItem&&clipboard.write) {
-        const html=boundedClipboard(htmlClipboard(table,options));
+        const html=boundedClipboard(htmlClipboard(table!,options));
         try {await clipboard.write([new view.ClipboardItem({"text/plain":new view.Blob([plain],{type:"text/plain"}),"text/html":new view.Blob([html],{type:"text/html"})})]);} catch {await clipboard.writeText(plain);}
       } else await clipboard.writeText(plain);
-      message.current(t("{count} linhas copiadas{headers} ({format}).",{count:table.rows.length.toLocaleString(getLocale()),headers:headers?t(" com cabeçalhos"):"",format:format==="sql"?"INSERT":format==="json"?"JSON":format==="excel"?"Excel":t("texto")}));
+      message.current(t("{count} linhas copiadas{headers} ({format}).",{count:(sql?.row_count??table!.rows.length).toLocaleString(getLocale()),headers:headers?t(" com cabeçalhos"):"",format:format==="sql"?"INSERT":format==="json"?"JSON":format==="excel"?"Excel":t("texto")}));
       if(format==="sql") {setSqlDialog(false);setSqlError("");}
     } catch(failure) {if(format==="sql")setSqlError(errorText(failure));message.current(errorText(failure));} finally {setCopying(false);}
-  },[copying,ready,readSelection,separator,copyNull,formats,dbType]);
+  },[copying,ready,readSelection,readSql,separator,copyNull,formats]);
+  async function insertSelectedSql() {
+    if (copying || !ready || !onInsertSql) return;
+    setCopying(true); setSqlError("");
+    try { onInsertSql((await readSql(sqlTable)).text); setSqlDialog(false); }
+    catch (failure) {setSqlError(errorText(failure));message.current(errorText(failure));}
+    finally {setCopying(false);}
+  }
   const copyRef = useRef(copy); copyRef.current = copy;
   const previousCopySignal = useRef(copySignal);
   useEffect(() => {
@@ -195,7 +209,7 @@ export function ResultGrid({ sessionId, result, transport, onMessage, copySignal
       onFormat={format=>{const next={...formats};if(format.type==="default")delete next[resultColumns[columnDialog].name];else next[resultColumns[columnDialog].name]=format;setFormats(next);formatChange.current?.(next);setColumnDialog(undefined);}}
       onFilter={next=>{setColumnFilters(previous=>{const kept=previous.filter(item=>item.column!==resultColumns[columnDialog].name);return next?.column?[...kept,{column:next.column,operator:next.operator,value:next.value}]:kept;});setColumnDialog(undefined);}}/>}
     {settingsDialog&&<Modal title={t("Preferências de cópia")} onClose={()=>setSettingsDialog(false)} className="grid-settings-modal"><div className="grid-settings-body"><label>{t("Separador")}<select value={separator} onChange={event=>setSeparator(event.target.value)}><option value={"\t"}>{t("Tabulação · Excel")}</option><option value=",">{t("Vírgula")}</option><option value=";">{t("Ponto e vírgula")}</option></select></label><label>{t("Valores nulos")}<select value={copyNull} onChange={event=>setCopyNull(event.target.value)}><option value="">{t("Em branco")}</option><option value="NULL">{t("NULL")}</option><option value="None">{t("None")}</option></select></label><p>{t("Texto e Excel usam a formatação visível. JSON e INSERT preservam os valores originais. Sem seleção, a cópia usa todas as linhas filtradas.")}</p></div><footer><button onClick={()=>{onCopySettingsChange?.({copySeparator:separator,nullDisplay:copyNull});setSettingsDialog(false);}}>{t("Salvar")}</button></footer></Modal>}
-    {sqlDialog&&<Modal title={t("Copiar como SQL INSERT")} onClose={()=>{if(!copying)setSqlDialog(false);}} className="grid-settings-modal"><div className="grid-settings-body"><label>{t("Tabela de destino")}<input autoFocus value={sqlTable} onChange={event=>setSqlTable(event.target.value)} placeholder="schema.tabela"/></label><p>{t("Os comandos serão copiados para revisão.")}</p>{sqlError&&<p className="data-error" role="alert">{t(sqlError)}</p>}</div><footer><button disabled={copying} onClick={()=>setSqlDialog(false)}>{t("Cancelar")}</button><button disabled={copying||!sqlTable.trim()} onClick={()=>void copy("sql",false,sqlTable)}>{copying?t("Copiando…"):t("Copiar INSERT")}</button></footer></Modal>}
+    {sqlDialog&&<Modal title={t("Copiar como SQL INSERT")} onClose={()=>{if(!copying)setSqlDialog(false);}} className="grid-settings-modal"><div className="grid-settings-body"><label>{t("Tabela de destino")}<input autoFocus value={sqlTable} onChange={event=>setSqlTable(event.target.value)} placeholder="schema.tabela"/></label><p>{t("Os comandos serão copiados para revisão.")}</p>{sqlError&&<p className="data-error" role="alert">{t(sqlError)}</p>}</div><footer><button disabled={copying} onClick={()=>setSqlDialog(false)}>{t("Cancelar")}</button>{onInsertSql&&<button disabled={copying||!sqlTable.trim()} onClick={()=>void insertSelectedSql()}>{featureText("Inserir em novo bloco")}</button>}<button disabled={copying||!sqlTable.trim()} onClick={()=>void copy("sql",false,sqlTable)}>{copying?t("Copiando…"):t("Copiar INSERT")}</button></footer></Modal>}
   </div>;
 }
 

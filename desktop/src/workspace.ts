@@ -89,7 +89,7 @@ export function encodeDocument(session: SessionDocument): Record<string, unknown
 }
 
 export function eventBelongsToSession(session: SessionDocument, event: RuntimeEvent): boolean {
-  if (event.event === "backend.exited" || event.event === "language.context_updated") return false;
+  if (event.event === "backend.exited" || event.event === "language.context_updated" || event.event === "result.export_progress") return false;
   if (event.payload.session_id !== session.id) return false;
   return event.event === "session.reset" || event.event === "session.error" || event.event === "session.ready" || event.event === "namespace.changed" || event.payload.execution_id === session.currentExecutionId;
 }
@@ -104,7 +104,7 @@ function appendLog(session: SessionDocument, stream: string, text: string, block
 
 export function applyRuntimeEvent(session: SessionDocument, event: RuntimeEvent): SessionDocument {
   if (!isRuntimeEvent(event)) return session;
-  if (event.event === "backend.exited" || event.event === "language.context_updated") return session;
+  if (event.event === "backend.exited" || event.event === "language.context_updated" || event.event === "result.export_progress") return session;
   if (!eventBelongsToSession(session, event)) return session;
   if (event.event === "session.ready") return session;
   if (event.event === "namespace.changed") return {...session,variables:event.payload.variables,results:event.payload.results,resultRevision:session.resultRevision+1};

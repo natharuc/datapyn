@@ -4,6 +4,22 @@ from src.services.sql_autocomplete_service import DEFAULT_SCHEMA_PRIORITY, SqlAu
 
 
 class RuntimeSqlAutoCompleteService(SqlAutoCompleteService):
+    def _rebuild_schema_index(self):
+        super()._rebuild_schema_index()
+        temporary = {table.get("key", table.get("name")): table for table in self._schema.get("tables", [])
+                     if isinstance(table, dict) and table.get("temporary")}
+        if not temporary:
+            return
+        self._table_lookup = {}
+        for entry in self._table_entries:
+            metadata = temporary.get(entry["key"])
+            if metadata:
+                entry.update({"temporary": True, "schema": metadata.get("schema", ""), "catalog": ""})
+                entry["detail"] = ".".join(part for part in (entry["schema"], entry["name"]) if part)
+                entry["lookup_names"] = {self._normalize_relation_key(entry["name"]), self._normalize_relation_key(entry["key"])}
+            for lookup in entry["lookup_names"]:
+                self._table_lookup.setdefault(lookup, []).append(entry)
+
     def _relation_from_table_expression(self, table_expression, alias_name, script_state):
         if self._schema_db_type in {"postgres", "postgresql"}:
             # PostgreSQL folds unquoted identifiers. sqlglot keeps both their
@@ -48,6 +64,10 @@ class RuntimeSqlAutoCompleteService(SqlAutoCompleteService):
                           if self._normalize_name(entry["schema"]) == self._normalize_name(fallback["schema"])
                           and self._normalize_name(entry["catalog"]) == self._normalize_name(fallback["catalog"])]
             return fallback if len(same_scope) == 1 else None
+        if not schema_name and not catalog_name:
+            temporary = [entry for entry in exact if entry.get("temporary")]
+            if temporary:
+                return temporary[0] if len(temporary) == 1 else None
         current_catalog = self._normalize_name(self._schema.get("database", ""))
         current_schema = self._normalize_name(self._schema.get("current_schema", ""))
         def rank(entry):

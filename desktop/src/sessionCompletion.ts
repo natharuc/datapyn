@@ -27,7 +27,7 @@ export class SessionLanguageContexts {
         const name=table.key || [table.schema,table.name].filter(Boolean).join(".");
         if(!name)continue;
         tables.push(name);
-        schemaSnapshot.tables![name]={name:table.name,schema:table.schema,columns:p.schema_snapshot.columns?.[name] ?? []};
+        schemaSnapshot.tables![name]={name:table.name,schema:table.schema,temporary:table.temporary,columns:p.schema_snapshot.columns?.[name] ?? []};
       }
     }
     scopes.delete(key);scopes.set(key,{version:p.version,schemaSnapshot,tables});

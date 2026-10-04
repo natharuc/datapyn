@@ -109,7 +109,12 @@ fn allowed_method(method: &str) -> bool {
             | "data.import"
             | "variable.inspect"
             | "variable.delete"
+            | "variable.archive.list"
+            | "variable.archive.export"
+            | "variable.archive.import"
             | "result.export"
+            | "result.export_text"
+            | "result.export_cancel"
             | "result.summary"
             | "result.chart"
             | "result.chart_export"
@@ -660,6 +665,11 @@ mod tests {
         assert!(allowed_method("execution.cancel"));
         assert!(allowed_method("language.cancel"));
         assert!(allowed_method("workspace.read"));
+        assert!(allowed_method("result.export_text"));
+        assert!(allowed_method("result.export_cancel"));
+        assert!(allowed_method("result.export_table"));
+        assert!(allowed_method("variable.archive.export"));
+        assert!(allowed_method("variable.archive.import"));
         assert!(!allowed_method("shell.execute"));
         assert!(!allowed_method(""));
     }

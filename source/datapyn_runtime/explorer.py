@@ -109,7 +109,12 @@ class ObjectExplorer:
             from sqlalchemy import inspect
             inspector = inspect(self.connector.engine)
             names = inspector.get_table_names(schema=schema) if category == "table" else inspector.get_view_names(schema=schema)
-            return [self._node(name, category, schema=schema, database=self.context()["database"], children=True) for name in sorted(names)[:10000]]
+            nodes = [self._node(name, category, schema=schema, database=self.context()["database"], children=True) for name in sorted(names)[:10000]]
+            if category == "table" and schema == self.context()["schema"]:
+                for name, metadata in getattr(self.connector, "_datapyn_temporary_tables", {}).items():
+                    nodes = [node for node in nodes if node["name"] != name or node["schema"] != metadata["schema"]]
+                    nodes.append(self._node(name, "table", schema=metadata["schema"], database=self.context()["database"], children=True, temporary=True))
+            return nodes
         if self.db_type == "sqlite":
             return []
         routine_type = "PROCEDURE" if category == "procedure" else "FUNCTION"
@@ -121,6 +126,9 @@ class ObjectExplorer:
         return [self._node(str(row["name"]), category, schema=schema, database=self.context()["database"], children=False) for row in self._records(query)][:10000]
 
     def columns(self, name, schema=""):
+        temporary = getattr(self.connector, "_datapyn_temporary_tables", {}).get(name)
+        if temporary and schema == temporary["schema"]:
+            return deepcopy(temporary["columns"])
         key = (schema, name)
         def load():
             from sqlalchemy import inspect
@@ -142,7 +150,7 @@ class ObjectExplorer:
         kind, name = node.get("kind", "root"), str(node.get("name", ""))
         context = self.context()
         database = str(node.get("database") or params.get("database") or context["database"])
-        schema = str(node.get("schema") or params.get("schema") or context["schema"])
+        schema = str(node.get("schema", "")) if node.get("temporary") else str(node.get("schema") or params.get("schema") or context["schema"])
         if kind == "root":
             loader = lambda: [self._node(value, "database", database=value, children=True) for value in self.databases()]
         elif kind == "database":
@@ -292,9 +300,11 @@ class ObjectExplorer:
         catalog = context["database"] if self.db_type in {"databricks", "sqlserver"} else ""
         result = {**context, "current_schema": schema, "databases": self._cached(("databases",), self.databases),
                   "schemas": schemas,
-                  "tables": [{"name": t["name"], "schema": t["schema"], "catalog": catalog, "key": ".".join(part for part in (catalog, t["schema"], t["name"]) if part), "type": t["kind"].upper()} for t in tables],
+                  "tables": [{"name": t["name"], "schema": t["schema"], "catalog": "" if t.get("temporary") else catalog, "key": ".".join(part for part in (("" if t.get("temporary") else catalog), t["schema"], t["name"]) if part), "type": t["kind"].upper(), **({"temporary": True} if t.get("temporary") else {})} for t in tables],
                   "columns": {".".join(part for part in (catalog, s, name) if part): columns for (s, name), columns in self.column_cache.items()},
                   "routines": [], "metadata_loaded": True}
+        for name, temporary in getattr(self.connector, "_datapyn_temporary_tables", {}).items():
+            result["columns"][".".join(part for part in (temporary["schema"], name) if part)] = deepcopy(temporary["columns"])
         if routines:
             for candidate in requested_schemas[:8]:
                 for kind in ("procedure", "function"):

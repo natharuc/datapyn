@@ -171,6 +171,17 @@ class ConnectorPool:
             config["schema"] = str(schema_override)
         key = (identifier or "transient", hashlib.sha256(json.dumps(config, sort_keys=True, default=str).encode()).hexdigest())
         if key not in self.items:
+            if len(self.items) >= 8:
+                evict = next((item for item, existing in self.items.items()
+                              if item != self.active_key and not getattr(existing, "has_temporary_tables", False)), None)
+                if evict is None:
+                    raise ConnectionError("This session retains eight connections with temporary tables; disconnect one before opening another")
+                old_connector = self.items.pop(evict)
+                self.explorers.pop(evict, None)
+                self.last_used.pop(evict, None)
+                if self.active_key == evict:
+                    self.active_key = None
+                old_connector.disconnect()
             connector = connect(config)
             self.items[key] = connector
         else:
@@ -181,11 +192,6 @@ class ConnectorPool:
         if default:
             self.default_config = dict(config)
             self.default_id = identifier
-        while len(self.items) > 8:
-            old_key, old_connector = self.items.popitem(last=False)
-            self.explorers.pop(old_key, None)
-            self.last_used.pop(old_key, None)
-            old_connector.disconnect()
         return connector
 
     @property
@@ -222,6 +228,8 @@ class ConnectorPool:
             return []
         now, closed = time.monotonic(), []
         for key, connector in list(self.items.items()):
+            if getattr(connector, "has_temporary_tables", False):
+                continue
             # Closing an in-memory SQLite database destroys its contents.
             if isinstance(connector, SQLiteConnector) and connector.database == ":memory:":
                 continue

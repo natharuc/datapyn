@@ -72,6 +72,18 @@ def smoke(executable=None, timeout=90, report=None):
                 path = root / f"export.{extension}"
                 client.request("result.export", {**selected, "path": str(path)})
                 assert path.stat().st_size > 0
+            copied = client.request("result.export_text", {**selected, "operation_id": "copy-csv", "format": "csv", "options": {"delimiter": "\t", "include_header": True}})
+            assert copied["row_count"] == 1 and "value" in copied["text"] and "6" in copied["text"]
+            generated = client.request("result.export_text", {**selected, "operation_id": "generate-sql", "format": "sql", "options": {
+                "db_type": "sqlite", "table_name": "generated_export", "sql_mode": "create_insert", "include_transaction": True, "batch_size": 2}})
+            created = client.execute("parity", "generated", "sql", generated["text"] + "\nSELECT value FROM generated_export;", "generated_result")
+            created_page = client.request("result.page", {"session_id": "parity", "result_id": created["results"][0]["result_id"]})
+            assert created_page["rows"] == [[6]]
+            client.request("result.export_table", {**selected, "operation_id": "export-temp", "connection_id": profile["id"],
+                "table": "export_temp", "temporary": True, "if_exists": "fail", "chunksize": 100})
+            temporary = client.execute("parity", "temporary", "sql", "SELECT value FROM temp.export_temp;", "temporary_result")
+            temporary_page = client.request("result.page", {"session_id": "parity", "result_id": temporary["results"][0]["result_id"]})
+            assert temporary_page["rows"] == [[6]]
             imported = client.request("data.import", {"session_id": "parity", "path": str(root / "export.xlsx"), "variable_name": "imported"})
             assert imported["result"]["row_count"] == 1
             for extension in ("html", "png", "json", "jpg", "jpeg"):
@@ -85,6 +97,15 @@ def smoke(executable=None, timeout=90, report=None):
             path = root / "figure.png"
             client.request("result.artifact_write", {"session_id": "parity", "artifact_id": artifact["artifact_id"], "path": str(path)})
             assert path.read_bytes().startswith(b"\x89PNG")
+            jpeg = root / "figure.jpg"
+            client.request("result.artifact_write", {"session_id": "parity", "artifact_id": artifact["artifact_id"], "path": str(jpeg)})
+            assert jpeg.read_bytes().startswith(b"\xff\xd8\xff")
+            archive = root / "public-variables"
+            client.request("variable.archive.export", {"session_id": "parity", "operation_id": "export-archive", "path": str(archive), "names": ["df"]})
+            manifest = json.loads((archive / "manifest.json").read_text(encoding="utf-8"))
+            assert manifest["version"] == 2 and manifest["variables"][0]["name"] == "df"
+            restored_archive = client.request("variable.archive.import", {"session_id": "parity", "path": str(archive), "overwrite": True})
+            assert any(item["variable_name"] == "df" for item in restored_archive["results"])
             client.request("snapshot.settings.set", {"settings": {"enabled": True, "restore_on_startup": True, "max_size_mb": 50}})
             client.request("system.flush_workspace")
             client.request("session.close", {"session_id": "parity"})
