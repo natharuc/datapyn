@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 // @ts-expect-error Maintenance script is an independently executable Node module.
 import { after, before, DOCKVIEW_PATCH_TARGETS, patchDockview, sha256 } from "../scripts/apply-dockview-patch.mjs";
+// @ts-expect-error Maintenance script is an independently executable Node module.
+import { reverseDockviewLifecycle } from "../scripts/apply-dockview-lifecycle-patch.mjs";
 
 const desktop = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const packagePath = "node_modules/dockview-core", manifestName = "dockview-core-8.4.0-pointer-hashes.json";
@@ -20,7 +22,7 @@ function fixture(test: (root: string) => void) {
     for (const path of DOCKVIEW_PATCH_TARGETS) {
       const patched = readFileSync(join(desktop, packagePath, path), "utf8");
       expect(patched.split(after)).toHaveLength(2);
-      const original = patched.replace(after, before);
+      const original = reverseDockviewLifecycle(patched).replace(after, before);
       expect(sha256(original)).toBe(manifest.files[path].original);
       writeFileSync(join(root, packagePath, path), original);
     }

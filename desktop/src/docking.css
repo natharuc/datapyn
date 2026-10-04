@@ -4,7 +4,7 @@
 /* Monaco menus escape dock paint clipping while remaining below app modals. */
 .datapyn-monaco-overflow.monaco-editor {position:fixed;top:0;left:0;width:0;height:0;overflow:visible;z-index:999;}
 .dock-connections .connections-panel,.dock-explorer .object-explorer {height:100%;flex:1;min-height:0;}
-.dock-results>.results-panel {height:100%!important;flex:1;border:0;min-height:0;}
+.dock-results>.results-panel {height:100%!important;max-height:none;flex:1;border:0;min-height:0;}
 .dock-output>.output-log {height:100%;flex:1;}
 .dock-variables {overflow:auto;}
 .dock-pynia .pynia-panel {height:100%;min-height:0;}

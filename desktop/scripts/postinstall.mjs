@@ -7,4 +7,4 @@ const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const glide = patchGlide(desktopRoot);
 console.log(`Glide 6.0.3 native-popout patch: ${glide ? `${glide} verified files patched` : "already applied"}.`);
 const docking = patchDockview(desktopRoot);
-console.log(`Dockview 8.4.0 floating-pointer patch: ${docking ? `${docking} verified files patched` : "already applied"}.`);
+console.log(`Dockview 8.4.0 floating-pointer/popout-lifecycle patch: ${docking ? `${docking} verified files patched` : "already applied"}.`);
