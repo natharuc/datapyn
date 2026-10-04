@@ -53,6 +53,12 @@ def test_sql_metadata_event_and_followup_completion_agree_on_schema_shape(client
     result = complete(client, "a", code, language="sql", column=10)
     assert {item["label"] for item in result["items"]} == {"id", "title"}
     assert result["context_version"] == update["version"]
+    # Real catalog IO + supervisor delivery + the exact editor protocol must
+    # agree for quoted aliases and comments containing statement delimiters.
+    for marked in ['SELECT "s".| /* ; */ FROM main.sample "s"', "SELECT s . | FROM main.sample s", 'SELECT s."ti|tle" FROM main.sample s']:
+        offset = marked.index("|")
+        result = complete(client, "a", marked.replace("|", ""), language="sql", column=offset + 1)
+        assert {item["label"] for item in result["items"]} == ({"title"} if '"ti|' in marked else {"id", "title"})
     # Editing the selected field does not require another metadata generation.
     for prefix in ("t", "ti", "tit"):
         changed = f"SELECT s.{prefix} FROM main.sample s"

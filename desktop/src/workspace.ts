@@ -3,6 +3,7 @@ import type { NativeDocumentRecord, NativeWorkspaceState } from "./nativeDrafts"
 import { flushEditorViewStates,restoreEditorViewState, selectedCode, subscribeEditorViewStates } from "./editorRegistry";
 import type { QueueCompletion } from "./executionNotifications";
 import type { NotificationContext } from "./NotificationsDialog";
+import { completionConnectionScope } from "./sessionCompletion";
 
 export type BlockStatus = "idle" | "queued" | "running" | "cancelling" | "succeeded" | "failed" | "cancelled";
 export interface Block {
@@ -567,7 +568,7 @@ export class WorkspaceController {
         if (this.cancelRequests.has(sessionId)) {succeeded=false;cancelled=true;break;}
         lastBlock = block; if (index) lastExecutionId = newId();
         lastContext = { tab_name: session?.title, block_name: block.block_name, blocks: index + 1,
-          type: block.language === "sql" ? "SQL" : "Python", rows: 0, connection: String(block.connection_name ?? session?.extras.connection_name ?? session?.connection?.name ?? ""), database: block.database_name ?? session?.database };
+          type: block.language === "sql" ? "SQL" : "Python", rows: 0, connection: String(block.connection_name ?? session?.extras.connection_name ?? session?.connection?.name ?? ""), database: session ? completionConnectionScope(session,block).database : block.database_name };
         const result = await this.runOne(sessionId, block, lastExecutionId, {
           config: session?.extras.notification_config, context: { ...lastContext, block_id: block.id, workspace_id: workspaceId }, queue_result:queueResult, emit_notification: index === runnable.length - 1,
         });
@@ -600,11 +601,13 @@ export class WorkspaceController {
     void completion.catch(() => {});
     this.patchSession(sessionId, (session) => ({ ...session, currentExecutionId: executionId, currentBlockId: block.id,
       blocks: session.blocks.map((item) => item.id === block.id ? { ...item, status: "running", error: undefined } : item) }));
+    const current = this.session(sessionId)!;
+    const scope = completionConnectionScope(current, block);
     const acknowledged = this.transport.request("execution.run", { session_id: sessionId, execution_id: executionId,
       language: block.language, code: block.code,
       ...(block.language === "sql" ? { variable_name: block.block_name || undefined } : {}),
-      connection_id: block.connection_id ?? this.session(sessionId)?.savedConnectionId,
-      database: block.database_name ?? this.session(sessionId)?.database, schema: block.schema ?? this.session(sessionId)?.schema,
+      connection_id: scope.connectionId,
+      database: scope.database, schema: scope.schema,
       sql_parameters: block.sql_parameters_enabled === false ? [] : block.sql_parameters ?? [],
       connection_name: block.connection_id ? undefined : block.connection_name ?? this.session(sessionId)?.extras.connection_name,
       connection_group: block.connection_id ? undefined : block.connection_group ?? this.session(sessionId)?.extras.connection_group,

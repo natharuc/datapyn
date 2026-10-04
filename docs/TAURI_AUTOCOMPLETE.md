@@ -2,6 +2,16 @@
 
 O editor retorna sugestões locais imediatamente. Jedi e metadados de bancos são enriquecidos em segundo plano, com caches limitados, debounce e cancelamento por requisição.
 
+## Correções de contexto em 04/10/2026
+
+O índice local SQL agora considera o statement e o escopo da query no cursor. Colunas carregadas são sugeridas em SELECT, WHERE, ON e ORDER BY sem depender de um novo RPC. JOINs usam qualificadores; aliases de CTEs e tabelas derivadas ficam reservados à inferência do runtime e não recebem colunas de tabelas físicas homônimas.
+
+O lexer preserva pontos com espaços, aliases Unicode, identificadores entre aspas e seus escapes. Ponto e ponto-e-vírgula dentro de strings/comentários não alteram o statement. PostgreSQL distingue aliases quoted por caixa e strings comuns de `E'...'`; MySQL/MariaDB mantêm escapes e comentários com `#`. O guard do Monaco e o runtime aplicam as mesmas regras.
+
+Blocos com outra conexão não herdam database/schema da conexão principal. Diagnóstico, execução, Explorer e ferramentas da Pynia seguem essa resolução. Eventos somente de namespace preservam o catálogo já carregado da mesma conexão.
+
+As regressões usam metadados de vários dialetos e integração real SQLite. Bancos externos não foram usados neste aceite. O índice local continua limitado à janela de texto do editor; nesting extremo de 1.500 subqueries levou 43,16 ms em um probe de fonte e não representa a latência usual. Um bloco de 58 KB com 1.700 statements levou 2,93 ms nesse mesmo probe.
+
 ## Funcionalidades
 
 - SQL: keywords, tabelas, colunas, aliases, JOINs, CTEs, schemas e rotinas. Nomes especiais/reservados recebem quoting por dialeto. Catálogos explícitos SQL Server/Databricks carregam sob demanda; DDL invalida os metadados.

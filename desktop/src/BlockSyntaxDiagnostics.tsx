@@ -32,6 +32,7 @@ export const BlockSyntaxDiagnostics = memo(function BlockSyntaxDiagnostics(props
   const first = state.markers.find(marker => marker.severity === "error") ?? state.markers[0];
   const hasDetails = Boolean(first || state.message);
   const message = state.message ? t(state.message) : undefined;
+  if (!first && state.status !== "partial" && state.status !== "unavailable") return null;
   return <div className={`syntax-diagnostics ${tone}`}>
     <div className="syntax-summary">
       <button className="syntax-toggle" disabled={!hasDetails} aria-expanded={expanded && hasDetails} aria-label={t("Diagnósticos de sintaxe do bloco")} onClick={() => { setExpanded(value => !value); setLimit(20); }} title={message ?? first?.message ?? label}>

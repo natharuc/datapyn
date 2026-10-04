@@ -267,8 +267,7 @@ def _sql_complete(code, line, column, schema):
         column_names = cached[3]
         result = []
         before = code.split("\n")[line - 1][:column]
-        prefix_match = re.search(r'(?:\[([^\]]*)|"([^"]*)|`([^`]*)|([@\w$]+))$', before)
-        prefix = next((value for value in prefix_match.groups() if value is not None), "").casefold() if prefix_match else ""
+        prefix = service.completion_prefix(before).casefold()
         raw = service.get_completions(code, line - 1, column)
         if prefix:
             # Filter before the payload bound. A table beyond the first five

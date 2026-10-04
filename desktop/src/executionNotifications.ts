@@ -14,6 +14,8 @@ export interface NotificationEntry {
 }
 interface NotificationState { entries: readonly NotificationEntry[]; toasts: readonly NotificationEntry[]; unread: number }
 type IncomingNotification = Omit<NotificationEntry, "id" | "createdAt" | "read"> & { id?: string };
+interface NotificationPresentation { toast?: boolean; read?: boolean }
+export interface ExecutionNotificationFocus { workspaceId?: string; sessionId?: string; focused: boolean }
 
 /** Only bounded text/identities reach the UI. Each completion owns its own lifetime. */
 export class NotificationCenter {
@@ -30,15 +32,15 @@ export class NotificationCenter {
     if (id === this.workspaceId) return;
     this.workspaceId = id; this.clear(); this.seen.clear();
   }
-  publish(input: IncomingNotification): NotificationEntry | undefined {
+  publish(input: IncomingNotification, presentation: NotificationPresentation = {}): NotificationEntry | undefined {
     if (input.target && input.target.workspace_id !== this.workspaceId) return;
     const id = input.id ?? (input.target ? JSON.stringify(input.target) : crypto.randomUUID());
     if (this.seen.has(id) || (!input.title && !input.message)) return;
     this.seen.add(id);
     while (this.seen.size > 256) this.seen.delete(this.seen.values().next().value!);
-    const entry: NotificationEntry = { ...input, id, title: input.title.slice(0, 256), message: input.message.slice(0, 4096), createdAt: Date.now(), read: false, deliveryError: input.deliveryError ?? this.pendingErrors.get(id) };
+    const entry: NotificationEntry = { ...input, id, title: input.title.slice(0, 256), message: input.message.slice(0, 4096), createdAt: Date.now(), read: presentation.read ?? false, deliveryError: input.deliveryError ?? this.pendingErrors.get(id) };
     this.pendingErrors.delete(id);
-    const entries = [entry, ...this.state.entries].slice(0, 100), toasts = [entry, ...this.state.toasts].slice(0, 3);
+    const entries = [entry, ...this.state.entries].slice(0, 100), toasts = presentation.toast === false ? this.state.toasts : [entry, ...this.state.toasts].slice(0, 3);
     for (const old of this.state.toasts) if (!toasts.some(item => item.id === old.id)) this.clearTimer(old.id);
     this.update(entries, toasts);
     this.resume(id);
@@ -83,6 +85,11 @@ export class NotificationCenter {
 
 export function shouldNotify(result: NotificationResult): boolean {
   return result.enabled && !result.suppressed && Boolean(result.title || result.message);
+}
+
+/** The originating tab is already showing its execution state, regardless of which block has focus. */
+export function shouldDisplayExecutionNotification(target: NotificationTarget, focus: ExecutionNotificationFocus): boolean {
+  return target.workspace_id === focus.workspaceId && (!focus.focused || target.session_id !== focus.sessionId);
 }
 
 /** Notifications navigate only on click, without replacing a document or executing code. */

@@ -1,8 +1,33 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { copyLazyStylesheets, copyRootPresentation, findInDocuments, getFocusedDocument, observeElementDocument, PopoutBindings, refreshOwnerDocuments, registerDocument } from "./documentWindows";
+import { copyLazyStylesheets, copyRootPresentation, findInDocuments, getFocusedDocument, hasFocusedDocument, observeElementDocument, PopoutBindings, refreshOwnerDocuments, registerDocument } from "./documentWindows";
 
-afterEach(() => vi.unstubAllGlobals());
+const documentReleases: Array<() => void> = [];
+afterEach(() => { documentReleases.splice(0).forEach(release => release()); vi.unstubAllGlobals(); });
 describe("Native popout document bridge", () => {
+  it("considers the application focused when either the main window or a detached dock is focused", () => {
+    let mainFocused = true, childFocused = false;
+    const main = { hasFocus: () => mainFocused } as unknown as Document;
+    const child = { hasFocus: () => childFocused, defaultView: { closed: false } } as unknown as Document;
+    documentReleases.push(registerDocument(child));
+    expect(hasFocusedDocument(main)).toBe(true);
+    mainFocused = false;
+    expect(hasFocusedDocument(main)).toBe(false);
+    childFocused = true;
+    expect(hasFocusedDocument(main)).toBe(true);
+    childFocused = false;
+    expect(hasFocusedDocument(main)).toBe(false);
+  });
+  it("ignores closed, hidden or released popouts even if they retain a focus flag", () => {
+    let closed = false, visibilityState = "visible";
+    const main = { hasFocus: () => false } as unknown as Document;
+    const child = { hasFocus: () => true, get visibilityState() { return visibilityState; }, defaultView: { get closed() { return closed; } } } as unknown as Document;
+    const release = registerDocument(child); documentReleases.push(release);
+    expect(hasFocusedDocument(main)).toBe(true);
+    closed = true; expect(hasFocusedDocument(main)).toBe(false);
+    closed = false; visibilityState = "hidden"; expect(hasFocusedDocument(main)).toBe(false);
+    visibilityState = "visible"; expect(hasFocusedDocument(main)).toBe(true);
+    release(); expect(hasFocusedDocument(main)).toBe(false);
+  });
   it("targets a shortcut modal to the focused child document and ignores closed/released windows", () => {
     let mainFocused=false,childFocused=true,closed=false;
     const main={hasFocus:()=>mainFocused} as unknown as Document;

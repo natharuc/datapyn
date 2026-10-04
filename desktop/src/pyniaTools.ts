@@ -3,6 +3,7 @@ import { disposeModel, focusEditor, getRegisteredEditor, insertInEditor, replace
 import { runtime, type Language } from "./runtime";
 import type { ServiceEvent } from "./serviceEvents";
 import { editCodeLines, validateWholeBlockReplace } from "./pyniaEdits";
+import { completionConnectionScope } from "./sessionCompletion";
 
 export interface PyniaToolCallbacks {
   chart?: (arguments_: Record<string, unknown>, sessionId: string) => Promise<unknown> | unknown;
@@ -36,9 +37,10 @@ function resolveBlock(session: SessionDocument, args: Record<string, unknown>): 
   if (!block) throw new Error("Nenhum bloco está em foco nesta sessão."); return block;
 }
 function summary(session: SessionDocument, block: Block) {
+  const scope = completionConnectionScope(session, block);
   return { block_index: session.blocks.indexOf(block), block_id: block.id, block_name: block.block_name, language: block.language, active: block.is_active,
     line_count: block.code.split("\n").length, characters: block.code.length, status: block.status, focused: session.focusedBlockId === block.id,
-    connection_id: block.connection_id ?? session.savedConnectionId, database: block.database_name ?? session.database, schema: block.schema ?? session.schema };
+    connection_id: scope.connectionId, database: scope.database, schema: scope.schema };
 }
 function remember(block: Block) { editHistory.set(block.id, [...(editHistory.get(block.id) ?? []).slice(-19), block.code]); }
 function updateCode(workspace: WorkspaceController, sessionId: string, block: Block, code: string) { remember(block); replaceEditorCode(block.id, code); workspace.updateBlock(sessionId, block.id, { code }); }

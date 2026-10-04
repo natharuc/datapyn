@@ -70,7 +70,7 @@ export function PyniaOutputPanel({ sessionId, sessionTitle, initialState, defaul
       {cut?.sessionId === sessionId && <button className="pynia-output-history-button" onClick={() => { setCut(undefined); setLimit(40); }}>{t("Mostrar histórico")}</button>}
       {history.hasOlder && limit < 200 && <button className="pynia-output-history-button" onClick={() => { nearBottom.current = false; setFollowing(false); setLimit(value => Math.min(200, value + 40)); }}>{t("Mostrar atividades anteriores")}</button>}
       {history.hasOlder && limit >= 200 && <p className="pynia-output-history-limit">{t("Exibindo as 200 atividades mais recentes.")}</p>}
-      {!history.activities.length && !error && <div className="pynia-output-empty"><Code2 size={23} aria-hidden="true" /><strong>{t("Acompanhe a Pynia em tempo real")}</strong><p>{t("Ferramentas, raciocínio e progresso do chat desta aba aparecem aqui.")}</p></div>}
+      {!history.activities.length && !error && <div className="pynia-output-empty"><Code2 size={23} aria-hidden="true" /><span>{t("Sem atividade.")}</span></div>}
       {history.activities.map(entry => <ActivityEntry key={`${sessionId}:${entry.id}`} entry={entry} busy={busy && entry.live} />)}
       {pendingPermission && <p className="pynia-output-permission"><Clock3 size={13} aria-hidden="true" />{t("Aguardando autorização no chat da Pynia.")}</p>}
       {error && <div className="pynia-output-error" role="alert"><TriangleAlert size={14} aria-hidden="true" /><pre>{error}</pre></div>}

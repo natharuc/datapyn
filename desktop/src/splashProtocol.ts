@@ -1,13 +1,13 @@
 export const STARTUP_PHASES = ["frontend", "runtime", "workspace", "editor", "ready"] as const;
 export type StartupPhase = typeof STARTUP_PHASES[number] | "error";
 export interface StartupSnapshot {phase:StartupPhase;message:string;attempt:number;version:string}
-export const INITIAL_STARTUP:StartupSnapshot = {phase:"frontend",message:"Preparando seu ambiente de trabalho…",attempt:0,version:""};
+export const INITIAL_STARTUP:StartupSnapshot = {phase:"frontend",message:"Iniciando DataPyn…",attempt:0,version:""};
 export const STARTUP_MESSAGES:Record<StartupPhase,string> = {
   frontend:"Preparando a interface…",
   runtime:"Iniciando o ambiente Python…",
   workspace:"Restaurando suas análises…",
   editor:"Preparando o editor…",
-  ready:"Seu ambiente está pronto.",
+  ready:"Pronto.",
   error:"Não foi possível iniciar o DataPyn.",
 };
 

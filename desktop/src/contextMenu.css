@@ -1,0 +1,8 @@
+.datapyn-context-menu{position:fixed;z-index:1200;box-sizing:border-box;width:max-content;min-width:min(190px,calc(100vw - 16px));max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);overflow:auto;padding:4px;background:var(--panel);color:inherit;border:1px solid var(--border);border-radius:4px;box-shadow:0 4px 14px #0003;font-size:12px;outline:none}
+.datapyn-context-menu button{display:flex;align-items:center;gap:9px;width:100%;min-height:29px;padding:5px 9px;border:0;border-radius:2px;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.datapyn-context-menu button>svg{flex-shrink:0;color:var(--muted)}
+.datapyn-context-menu button>span{min-width:0;flex:1;overflow-wrap:anywhere}
+.datapyn-context-menu button:not(:disabled):hover,.datapyn-context-menu button:not(:disabled):focus{outline:none;background:var(--card)}
+.datapyn-context-menu button:disabled{opacity:.45;cursor:default}
+.datapyn-context-menu button.danger,.datapyn-context-menu button.danger>svg{color:var(--danger,#c96a6a)}
+.context-menu-separator{height:1px;margin:4px 5px;background:var(--border)}

@@ -34,9 +34,9 @@ monaco.editor.defineTheme("datapyn", {
   base: "vs-dark", inherit: true,
   rules: [{ token: "keyword", foreground: "8eaeff" }, { token: "string", foreground: "80c9a0" },
     { token: "number", foreground: "e7b775" }, { token: "comment", foreground: "657791" }],
-  colors: { "editor.background": "#0e1522", "editor.foreground": "#dce5f3", "editorLineNumber.foreground": "#4b5d77",
-    "editorLineNumber.activeForeground": "#a3b4cb", "editor.lineHighlightBackground": "#141e30", "editor.selectionBackground": "#284785",
-    "editorCursor.foreground": "#80a3ff", "editorIndentGuide.background1": "#1c2940", "editorWidget.background": "#161f30" },
+  colors: { "editor.background": "#1e2024", "editor.foreground": "#d8dce3", "editorLineNumber.foreground": "#7a808b",
+    "editorLineNumber.activeForeground": "#b5bdc8", "editor.lineHighlightBackground": "#282c33", "editor.selectionBackground": "#3b5067",
+    "editorCursor.foreground": "#b8c9da", "editorIndentGuide.background1": "#343840", "editorWidget.background": "#252930" },
 });
 
 monaco.editor.defineTheme("datapyn-light",{base:"vs",inherit:true,rules:[{token:"keyword",foreground:"2854c5"},{token:"string",foreground:"187442"},{token:"number",foreground:"a65508"},{token:"comment",foreground:"778497"}],colors:{"editor.background":"#ffffff","editor.foreground":"#243047","editorLineNumber.foreground":"#a6b0c0","editorLineNumber.activeForeground":"#53647e","editor.lineHighlightBackground":"#f6f8fc","editor.selectionBackground":"#d7e4ff","editorCursor.foreground":"#3369ff","editorIndentGuide.background1":"#e8edf5","editorWidget.background":"#f4f7fc"}});
@@ -60,7 +60,7 @@ for (const language of ["sql", "python"]) monaco.languages.registerCompletionIte
     const id = model.uri.path.split("/").at(-1) ?? "", context = getCompletionContext(id);
     const manual = consumeManualSuggestions(id);
     if ((editorPreferences.get(id)?.autocomplete === false && !manual) || token.isCancellationRequested || model.isDisposed()) return { suggestions: [] };
-    const site = completionSite(language as Language, model.getLineContent(position.lineNumber), position.column);
+    const site = completionSite(language as Language, model.getLineContent(position.lineNumber), position.column, context?.schemaSnapshot?.db_type);
     if (site.blocked) { completionGates.get(id)?.cancel(); return { suggestions: [] }; }
     // Scan a bounded window only when suggestions are requested, never on each model change.
     const firstLine = Math.max(1, position.lineNumber - 200), lastLine = Math.min(model.getLineCount(), position.lineNumber + 200);
@@ -68,7 +68,8 @@ for (const language of ["sql", "python"]) monaco.languages.registerCompletionIte
     const source = model.getValueInRange({ startLineNumber: firstLine, startColumn: 1, endLineNumber: lastLine, endColumn: model.getLineMaxColumn(lastLine) }).slice(0, 64_000);
     let symbols = symbolCache.get(model);
     if (language === "python" && (!symbols || symbols.version !== model.getVersionId() || symbols.firstLine !== firstLine)) { symbols = { version: model.getVersionId(), firstLine, items: pythonSymbols(source) }; symbolCache.set(model, symbols); }
-    const entries = localCompletions(language as Language, site, context, before, symbols?.items, source);
+    const sourceCursor = model.getOffsetAt(position) - model.getOffsetAt({ lineNumber: firstLine, column: 1 });
+    const entries = localCompletions(language as Language, site, context, before, symbols?.items, source, sourceCursor);
     const version = model.getVersionId(), contextVersion = contextVersions.get(id), gate = completionGates.get(id) ?? new LanguageRequestGate(); completionGates.set(id, gate);
     const record = models.get(id), editor = record?.editor, intent = record?.completionIntent, navigation = record?.completionNavigation;
     if (record) record.completionQuery = { version, line: position.lineNumber, column: position.column, intent, navigation };

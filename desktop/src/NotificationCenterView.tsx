@@ -27,7 +27,7 @@ export function NotificationHistory({ center, entries, onActivate, onSettings, o
     <div className="notification-history-list">
       {entries.length ? entries.map(entry => <article key={entry.id} className={`notification-history-entry ${entry.read ? "read" : "unread"}`} style={{ borderLeftColor: entry.color || (entry.status === "cancelled" ? "var(--muted)" : entry.success ? "#4ba979" : "#df646b") }}>
         <button className="notification-history-open" disabled={!entry.target} onClick={() => onActivate(entry)}><StatusIcon entry={entry}/><div><NotificationText entry={entry}/><time>{new Date(entry.createdAt).toLocaleTimeString()}</time>{entry.deliveryError && <span className="notification-delivery-error">{entry.deliveryError}</span>}</div></button>
-      </article>) : <div className="notification-history-empty"><Bell size={26}/><strong>{t("Nenhuma execução recente")}</strong><p>{t("Os avisos de conclusão aparecem aqui.")}</p></div>}
+      </article>) : <div className="notification-history-empty"><Bell size={26}/><strong>{t("Nenhuma execução recente")}</strong></div>}
     </div>
     {entries.length > 0 && <div className="notification-history-footer"><button onClick={() => center.markRead()}>{t("Marcar todas como lidas")}</button><button onClick={() => center.clear()}>{t("Limpar histórico")}</button></div>}
   </Modal>;

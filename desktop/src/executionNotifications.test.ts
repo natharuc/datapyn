@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { activateNotificationTarget, NotificationCenter, shouldNotify, type NotificationTarget } from "./executionNotifications";
+import { activateNotificationTarget, NotificationCenter, shouldDisplayExecutionNotification, shouldNotify, type NotificationTarget } from "./executionNotifications";
 import type { NotificationResult } from "./NotificationsDialog";
 import type { RuntimeTransport } from "./runtime";
 import { WorkspaceController } from "./workspace";
@@ -183,6 +183,29 @@ describe("execution notification history and independent lifetimes", () => {
     expect(value.getSnapshot().entries).toEqual([]);
     expect(value.publish(completed())).toBeUndefined();
   });
+
+  it("records an observed completion as read without a toast, timeout or unread badge", () => {
+    const value = center(), entry = value.publish(completed(), { toast: false, read: true })!;
+    expect(value.getSnapshot()).toEqual({ entries: [entry], toasts: [], unread: 0 });
+    expect(entry.read).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+    value.deliveryError(target(), "Entrega externa indisponível");
+    expect(value.getSnapshot().entries[0].deliveryError).toBe("Entrega externa indisponível");
+    expect(value.getSnapshot().toasts).toEqual([]);
+    expect(value.publish(completed())).toBeUndefined();
+  });
+
+  it("preserves another execution's toast and its lifetime when a focused completion is recorded", () => {
+    const value = center(), pending = value.publish(completed(target("background")))!;
+    vi.advanceTimersByTime(3000);
+    value.publish({ ...completed(target("observed")), success: false, status: "failed" }, { toast: false, read: true });
+    expect(value.getSnapshot().toasts).toEqual([pending]);
+    expect(value.getSnapshot().unread).toBe(1);
+    expect(vi.getTimerCount()).toBe(1);
+    vi.advanceTimersByTime(3500);
+    expect(value.getSnapshot().toasts).toEqual([]);
+    expect(value.getSnapshot().entries).toHaveLength(2);
+  });
 });
 
 describe("execution notification eligibility", () => {
@@ -196,6 +219,34 @@ describe("execution notification eligibility", () => {
     ["local without external channels or sound", { send_external: false, sound: false }, true],
   ] as Array<[string, Partial<NotificationResult>, boolean]>)("%s", (_label, overrides, expected) => {
     expect(shouldNotify(result(overrides))).toBe(expected);
+  });
+
+  it.each([
+    ["originating tab in a focused main window", "profile-1", "session-1", true, false],
+    ["originating tab with another block focused", "profile-1", "session-1", true, false],
+    ["another tab in a focused main window", "profile-1", "session-2", true, true],
+    ["originating tab while the app is unfocused", "profile-1", "session-1", false, true],
+    ["another tab while the app is unfocused", "profile-1", "session-2", false, true],
+    ["originating tab in a focused detached dock", "profile-1", "session-1", true, false],
+    ["another tab in a focused detached dock", "profile-1", "session-2", true, true],
+    ["previous workspace while focused", "profile-2", "session-1", true, false],
+    ["previous workspace while unfocused", "profile-2", "session-1", false, false],
+    ["unloaded workspace", undefined, undefined, false, false],
+  ] as Array<[string, string | undefined, string | undefined, boolean, boolean]>)("%s", (_label, workspaceId, sessionId, focused, expected) => {
+    expect(shouldDisplayExecutionNotification(target(), { workspaceId, sessionId, focused })).toBe(expected);
+  });
+
+  it.each(["succeeded", "failed", "cancelled"] as const)("keeps %s completion history while deciding visibility from the tab at completion", status => {
+    const value = center(), destination = target(status);
+    const focus = { workspaceId: "profile-1", sessionId: "session-2", focused: true };
+    // The user returned to the originating tab while the execution was running.
+    focus.sessionId = "session-1";
+    const display = shouldDisplayExecutionNotification(destination, focus);
+    value.publish({ ...completed(destination), status, success: status === "succeeded" }, { toast: display, read: !display });
+    expect(value.getSnapshot().entries[0].status).toBe(status);
+    expect(value.getSnapshot().toasts).toEqual([]);
+    expect(value.getSnapshot().unread).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 

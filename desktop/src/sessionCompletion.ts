@@ -15,19 +15,26 @@ export class SessionLanguageContexts {
     if(event.event !== "language.context_updated")return false;
     const p=event.payload,previous=this.sessions.get(p.session_id);
     if(previous && p.version<=previous.version)return false;
-    const scopes=previous?.scopes ?? new Map<string,Snapshot>(),key=scopeKey(p.connection_id,p.database,p.schema);
+    const scopes=previous?.scopes ?? new Map<string,Snapshot>();let key=scopeKey(p.connection_id,p.database,p.schema);
     if(p.metadata_invalidated)for(const oldKey of scopes.keys())if((JSON.parse(oldKey) as string[])[0]===(p.connection_id ?? ""))scopes.delete(oldKey);
+    // A namespace-only event does not define a new unresolved SQL scope. Keep
+    // the most recent metadata for this connection instead of shadowing it
+    // with an empty [connection,"",""] entry after an execution.
+    if(!p.schema_snapshot && !p.metadata_invalidated && !scopes.has(key) && (!p.database || !p.schema))for(const existing of scopes.keys()){
+      const [connection,database,schema]=JSON.parse(existing) as string[];
+      if(connection===(p.connection_id ?? "") && (!p.database || database===p.database) && (!p.schema || schema===p.schema))key=existing;
+    }
     const old=scopes.get(key);
     let schemaSnapshot=old?.schemaSnapshot,tables=old?.tables ?? [];
     if(p.schema_snapshot){
       const entries=p.schema_snapshot.tables ?? [];
-      schemaSnapshot={db_type:p.schema_snapshot.db_type,tables:{}};
+      schemaSnapshot={db_type:p.schema_snapshot.db_type,database:p.schema_snapshot.database ?? p.database,current_schema:p.schema_snapshot.current_schema ?? p.schema,tables:{}};
       tables=[];
       for(const table of entries){
         const name=table.key || [table.schema,table.name].filter(Boolean).join(".");
         if(!name)continue;
         tables.push(name);
-        schemaSnapshot.tables![name]={name:table.name,schema:table.schema,temporary:table.temporary,columns:p.schema_snapshot.columns?.[name] ?? []};
+        schemaSnapshot.tables![name]={name:table.name,schema:table.schema,catalog:table.catalog,temporary:table.temporary,columns:p.schema_snapshot.columns?.[name] ?? []};
       }
     }
     // Namespace-only publishes keep the loaded schema's revision stable.
@@ -51,6 +58,12 @@ export class SessionLanguageContexts {
 }
 
 interface ParsedBlock {code:string;language:string;cellType?:string;imports:string[];hasCode:boolean;preamble:string}
+/** A block routed elsewhere inherits that connection's defaults, never another connection's database. */
+export function completionConnectionScope(session:SessionDocument,block:Block) {
+  const inherits=block.connection_id===undefined || block.connection_id===session.savedConnectionId;
+  return {connectionId:block.connection_id ?? session.savedConnectionId,
+    database:block.database_name ?? (inherits?session.database:undefined),schema:block.schema ?? (inherits?session.schema:undefined)};
+}
 const MAX_PREAMBLE=200_000,MAX_IMPORTS=32_000;
 export interface SessionDiagnosticsContext { globalImports:string; preamble:string }
 interface DiagnosticBlockSource {id:string;code:string;language:string;cellType?:string;sqlName?:string}
@@ -159,7 +172,7 @@ export class SessionCompletionIndex {
   context(session:SessionDocument,blockId:string,contexts:SessionLanguageContexts):CompletionContext|undefined {
     const block=session.blocks.find(b=>b.id===blockId);if(!block)return undefined;
     this.diagnosticsRevision(session);
-    const connectionId=block.connection_id ?? session.savedConnectionId,database=block.database_name ?? session.database,schema=block.schema ?? session.schema;
+    const {connectionId,database,schema}=completionConnectionScope(session,block);
     const snapshot=contexts.get(session.id,connectionId,database,schema);
     const variables=new Map((snapshot ? [] : session.variables).map(v=>[v.name,{name:v.name,type:v.type} as CompletionContext["variables"][number]]));
     for(const [name,v] of Object.entries(snapshot?.variables ?? {}))variables.set(name,{name,...v});

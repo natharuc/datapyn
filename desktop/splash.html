@@ -9,23 +9,20 @@
   </head>
   <body>
     <main class="splash" data-phase="frontend" aria-label="Inicialização do DataPyn">
-      <div class="ambient" aria-hidden="true"></div>
       <header class="splash-top" data-tauri-drag-region>
-        <span class="edition" data-tauri-drag-region><i aria-hidden="true"></i> SEU WORKSPACE DE DADOS</span>
+        <span class="edition" data-tauri-drag-region>DataPyn</span>
         <button id="exit" class="close" type="button" aria-label="Fechar DataPyn" title="Fechar DataPyn"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg></button>
       </header>
       <section class="identity" aria-label="DataPyn">
         <div class="logo-frame"><img src="/src/assets/datapyn-logo.svg" alt="Logo do DataPyn" width="88" height="88" draggable="false" /></div>
-        <div class="wordmark">DataPyn<span class="brand-dot">.</span></div>
-        <p class="tagline">Do primeiro bloco ao próximo insight.</p>
-        <div class="languages" aria-label="SQL e Python"><span>SQL</span><i aria-hidden="true">+</i><span>Python</span></div>
+        <div class="wordmark">DataPyn</div>
       </section>
       <footer class="startup">
-        <div class="status-line"><span class="status-indicator" aria-hidden="true"></span><p id="status" role="status" aria-live="polite">Preparando seu ambiente de trabalho…</p><span class="version" id="version">DESKTOP</span></div>
+        <div class="status-line"><span class="status-indicator" aria-hidden="true"></span><p id="status" role="status" aria-live="polite">Iniciando DataPyn…</p><span class="version" id="version">DESKTOP</span></div>
         <div class="progress" aria-label="Etapas de inicialização">
           <span data-step="frontend" title="Interface"></span><span data-step="runtime" title="Ambiente Python"></span><span data-step="workspace" title="Análises salvas"></span><span data-step="editor" title="Editor"></span>
         </div>
-        <div class="startup-meta"><span id="detail">Tudo começa com uma boa pergunta.</span><span class="build-mark" aria-hidden="true">DATA / CODE / INSIGHT</span></div>
+        <div class="startup-meta"><span id="detail"></span></div>
         <div class="error-actions" id="error-actions" hidden><button id="retry" class="retry" type="button">Tentar novamente <span aria-hidden="true">↗</span></button><button id="quit" class="quit" type="button">Fechar aplicativo</button></div>
       </footer>
     </main>

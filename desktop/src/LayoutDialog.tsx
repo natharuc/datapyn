@@ -1,5 +1,5 @@
 import {useState} from "react";
-import {ExternalLink,Layers3,LayoutDashboard,LoaderCircle,RotateCcw,Save} from "lucide-react";
+import {ExternalLink,Layers3,LoaderCircle,RotateCcw,Save} from "lucide-react";
 import {Modal} from "./PanelControls";
 import {useTranslation} from "./i18n";
 import {errorText} from "./runtime";
@@ -14,7 +14,7 @@ export function LayoutDialog({controls,visiblePanels,restoreShortcut,resetShortc
   const action=(work:()=>void)=>{setError("");try{work();}catch(failure){setError(errorText(failure));}};
   async function save(){setBusy(true);setError("");try{await onSave();onClose();}catch(failure){setError(errorText(failure));}finally{setBusy(false);}}
   return <Modal title={t("Painéis e layout")} onClose={()=>{if(!busy)onClose();}} className="layout-dialog">
-    <div className="layout-intro"><LayoutDashboard size={21}/><div><p>{t("Organize seu espaço de trabalho.")}</p><small>{t("Arraste as abas para mover, dividir ou agrupar painéis. Arraste as divisórias para redimensionar.")}</small></div></div>
+    <details className="layout-intro"><summary>{t("Ajuda")}</summary><p>{t("Arraste as abas para mover, dividir ou agrupar painéis. Arraste as divisórias para redimensionar.")}</p></details>
     <div className="layout-panels">{PANEL_IDS.map(id=>{const visible=visiblePanels.includes(id);return <div className="layout-panel-row" key={id}>
       <label><input type="checkbox" checked={visible} disabled={id === "editor" || busy} onChange={event=>action(()=>event.target.checked ? controls.show(id) : controls.hide(id))}/><span><strong>{t(titles[id])}</strong><small>{t(descriptions[id])}</small></span></label>
       <div className="layout-panel-actions"><select aria-label={`${t("Mover painel")}: ${t(titles[id])}`} disabled={busy || !visible} value="" onChange={event=>action(()=>controls.move(id,event.target.value as DockDirection))}>

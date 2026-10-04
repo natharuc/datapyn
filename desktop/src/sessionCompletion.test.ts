@@ -1,6 +1,6 @@
 import {describe,expect,it,vi} from "vitest";
 import {isRuntimeEvent,type RuntimeEvent} from "./runtime";
-import {SessionCompletionIndex,SessionLanguageContexts} from "./sessionCompletion";
+import {completionConnectionScope,SessionCompletionIndex,SessionLanguageContexts} from "./sessionCompletion";
 import {applyRuntimeEvent,newBlock,newSession} from "./workspace";
 import {completionSite,localCompletions} from "./editorCompletions";
 
@@ -9,6 +9,17 @@ const update=(version:number,connection="a",database="db",schema="public",tables
   schema_snapshot:{db_type:"postgresql",tables:tables.map(name=>({key:`${schema}.${name}`,name,schema})),columns:{[`${schema}.${tables[0]}`]:[{name:"Id",data_type:"integer"}]}}}});
 
 describe("language metadata delivery",()=>{
+  it("routes a block connection without inheriting another connection's database or schema",()=>{
+    const session=newSession();session.id="s";session.savedConnectionId="a";session.database="database_a";session.schema="schema_a";
+    const block={...newBlock("sql","SELECT o."),connection_id:"b"};session.blocks=[block];
+    expect(completionConnectionScope(session,block)).toEqual({connectionId:"b",database:undefined,schema:undefined});
+    expect(completionConnectionScope(session,{...block,connection_id:"a"})).toEqual({connectionId:"a",database:"database_a",schema:"schema_a"});
+    expect(completionConnectionScope(session,{...block,database_name:"explicit",schema:"explicit_schema"})).toEqual({connectionId:"b",database:"explicit",schema:"explicit_schema"});
+    const contexts=new SessionLanguageContexts();contexts.accept(update(1,"b","database_b","schema_b",["orders"]));
+    const value=new SessionCompletionIndex().context(session,block.id,contexts)!;
+    expect(value.tables).toEqual(["schema_b.orders"]);expect(value.database).toBeUndefined();
+    expect(value.schemaSnapshot).toMatchObject({database:"database_b",current_schema:"schema_b"});
+  });
   it("retains temporary table metadata from the kernel",()=>{
     const contexts=new SessionLanguageContexts();
     contexts.accept({event:"language.context_updated",payload:{session_id:"s",version:1,variables:{},schema_snapshot:{db_type:"sqlite",tables:[{key:"temp.sales",name:"sales",schema:"temp",temporary:true}],columns:{"temp.sales":[{name:"value"}]}}}});
@@ -33,6 +44,13 @@ describe("language metadata delivery",()=>{
     expect(contexts.get("s","a")?.tables).toEqual(["public.users"]);expect(contexts.get("s","a")?.variables).toEqual({});
     for(let i=3;i<40;i++)contexts.accept(update(i,`connection-${i}`));expect(contexts.get("s","a")?.tables).toBeUndefined();
     contexts.retain(new Set());expect(contexts.get("s","connection-39")).toBeUndefined();
+  });
+  it("keeps resolved SQL metadata after a namespace publish omits database and schema",()=>{
+    const contexts=new SessionLanguageContexts();contexts.accept(update(1));
+    contexts.accept({event:"language.context_updated",payload:{session_id:"s",connection_id:"a",version:2,variables:{live:{type:"int"}}}});
+    expect(contexts.get("s","a")?.tables).toEqual(["public.users"]);
+    expect(contexts.get("s","a","db","public")?.version).toBe(1);
+    expect(contexts.get("s","a")?.variables).toEqual({live:{type:"int"}});
   });
   it("invalidates all database/schema scopes of the altered connection only",()=>{
     const contexts=new SessionLanguageContexts();contexts.accept(update(1));contexts.accept(update(2,"a","db","other"));contexts.accept(update(3,"b"));

@@ -22,13 +22,21 @@ export function findInDocuments(selector: string, preferred?: Document): HTMLEle
 }
 
 /** Select the actual focused native document when an application-level dialog opens. */
-export function getFocusedDocument(fallback: Document = document): Document {
+function focusedDocument(fallback: Document): Document | undefined {
   const candidates = new Set<Document>([...documents.keys(), fallback]);
   for (const candidate of candidates) {
-    if (candidate.defaultView?.closed) continue;
+    if (candidate.defaultView?.closed || candidate.visibilityState === "hidden") continue;
     if (candidate.hasFocus?.()) return candidate;
   }
-  return fallback;
+}
+
+export function getFocusedDocument(fallback: Document = document): Document {
+  return focusedDocument(fallback) ?? fallback;
+}
+
+/** Main and detached dock documents share the same selected workspace tab. */
+export function hasFocusedDocument(fallback: Document = document): boolean {
+  return focusedDocument(fallback) !== undefined;
 }
 
 export function observeElementDocument(element: HTMLElement, changed: () => void): () => void {

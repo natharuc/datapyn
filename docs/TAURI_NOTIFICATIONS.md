@@ -38,6 +38,12 @@ Testes de `executionNotifications`, `nativeExecutionNotifications` e `workspace`
 
 O smoke de paridade exercita o contrato no sidecar congelado. Build de produção, TypeScript, Ruff, 485 testes frontend (49 arquivos), 510 testes runtime/compatibilidade e 35 testes Rust passaram em 4 de outubro de 2026. Canais externos reais não são acionados pelo aceite.
 
+## Foco da aba de origem
+
+Em 04/10/2026, os avisos locais de conclusão e da Pynia passaram a considerar a aba ativa no momento da entrega. Se a análise de origem estiver ativa e uma janela do DataPyn estiver focada, a entrada fica silenciosa e lida no histórico: sem toast, badge de pendência ou aviso/som Windows. Mudar o foco entre blocos da mesma análise não cria uma notificação.
+
+Outra análise ativa ou o aplicativo sem foco permite o aviso. A identificação do bloco e a navegação pelo histórico continuam disponíveis; nenhuma execução é repetida ao abrir uma entrada. As regras explícitas dos canais externos permanecem no runtime. As regressões verificam foco, múltiplas janelas, histórico silencioso e entrega permitida. O aceite visual dessas regras novas ficou pendente a pedido do usuário para não usar seu computador durante a revisão.
+
 ## Aceite no executável Windows
 
 O roteiro usou SQLite, sessões/arquivos de teste isolados e canais externos desabilitados:

@@ -171,7 +171,7 @@ export function ChartPanel({ sessionId, result, view, initialConfig, title, onCo
       {(validation || error || canvasError) && <p className="data-error chart-error" role="alert">{validation ? t(validation) : error || canvasError}</p>}
       {stale && <div className="chart-stale" role="status">{t("Configuração alterada. Atualize para exportar.")}</div>}
       <ChartCanvas ref={canvas} data={data} layout={layout} uirevision={interaction} onBusyChange={setPainting} onError={setCanvasError} ariaLabel={`${t("Gráfico")}: ${title || result.variable_name}`}/>
-      {!chart && <div className="chart-empty"><BarChart3 size={28}/><strong>{t("Explore seus dados")}</strong><span>{t("Escolha os eixos e gere o gráfico.")}</span></div>}
+      {!chart && <div className="chart-empty"><BarChart3 size={28}/><span>{t("Sem gráfico.")}</span></div>}
       {(busy || painting || exporting) && <div className="chart-loading" role="status"><LoaderCircle size={13} className="spin"/>{t(exporting ? "Exportando…" : "Atualizando gráfico…")}</div>}
       <footer className="chart-metrics">{chart ? <><span>{chart.source_rows.toLocaleString(locale)} {t("linhas de origem")}</span><span>{chart.point_count.toLocaleString(locale)} {t("pontos")}{chart.series_count ? ` · ${chart.series_count} ${t("séries")}` : ""}</span>{chart.geometry_approximate && <span title={t("Valores exatos na inspeção; geometria aproximada.")}>{t("Geometria aproximada")}</span>}{chart.bounded && <strong>{t("Prévia limitada")}{chart.aggregated_point_count ? ` · ${chart.aggregated_point_count.toLocaleString(locale)} ${t("categorias no total")}` : ""}</strong>}</> : <span>{t("A agregação utiliza a fonte escolhida.")}</span>}</footer>
     </main>

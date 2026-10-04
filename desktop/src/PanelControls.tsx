@@ -15,7 +15,7 @@ export function Modal({ title, children, onClose, className = "" }: { title: str
     const panel = container.current;
     const owner = host.owner, view = owner.defaultView;
     let unloading = false;
-    const focusables = () => Array.from(panel?.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex="0"]') ?? []).filter((element) => element.getClientRects().length);
+    const focusables = () => Array.from(panel?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]:not(:disabled)') ?? []).filter((element) => element.getClientRects().length);
     (focusables()[0] ?? panel)?.focus();
     const handle = (event: KeyboardEvent) => {
       if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close.current(); }

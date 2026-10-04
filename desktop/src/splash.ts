@@ -14,7 +14,7 @@ function render(incoming:StartupSnapshot){
   version.textContent=snapshot.version ? `v${snapshot.version}` : "DESKTOP";
   actions.hidden=snapshot.phase !== "error";
   retry.disabled=false;
-  detail.textContent=snapshot.phase === "error" ? "Suas análises salvas continuam disponíveis." : snapshot.phase === "workspace" ? "Abas, blocos e preferências. Do seu jeito." : snapshot.phase === "editor" ? "Preparando os últimos detalhes." : "Tudo começa com uma boa pergunta.";
+  detail.textContent=snapshot.phase === "error" ? "Tente novamente ou feche o aplicativo." : "";
   const index=STARTUP_PHASES.indexOf(snapshot.phase as Exclude<StartupPhase,"error">);
   shell.querySelectorAll<HTMLElement>("[data-step]").forEach((step,i)=>{step.classList.toggle("complete",i < index);step.classList.toggle("current",i === index);});
 }

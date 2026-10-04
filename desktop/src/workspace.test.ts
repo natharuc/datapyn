@@ -466,6 +466,15 @@ describe("Execução e fila", () => {
     expect(controller.session(session.id)?.blocks.find((block) => block.id === third.id)?.status).toBe("cancelled");
     expect(controller.session(session.id)?.results).toEqual([]);
   });
+  it.each([undefined, "block_database"])("does not send another connection's defaults during execution (%s)", async database => {
+    const transport = new FakeTransport(), controller = new WorkspaceController(transport), session = controller.session()!, block = session.blocks[0];
+    controller.patchSession(session.id, current => ({...current,savedConnectionId:"primary",database:"primary_database",schema:"primary_schema"}));
+    controller.updateBlock(session.id, block.id, {code:"SELECT 1",connection_id:"other",database_name:database});
+    const job = controller.runBlock(session.id, block.id);
+    await vi.waitFor(() => expect(transport.executions()).toHaveLength(1));
+    expect(transport.executions()[0].params).toMatchObject({connection_id:"other",database,schema:undefined});
+    transport.finish(0); await job; controller.dispose();
+  });
   it("usa somente seleção recebida e evita execução simultânea na mesma aba", async () => {
     const transport = new FakeTransport(), controller = new WorkspaceController(transport), session = controller.session()!, block = session.blocks[0];
     controller.updateBlock(session.id, block.id, { code: "SELECT 1; SELECT 2;", block_name: "sales" });

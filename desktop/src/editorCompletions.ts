@@ -1,6 +1,7 @@
 import type { CompletionContext, LanguageCompletion } from "./editorLanguage";
 import type { Language } from "./runtime";
 import { dataframeLibrary, dataframeMemberNames, dataframeMembers } from "./dataframeMembers";
+import { sqlCompletionScope, sqlStringEscapesBackslash } from "./sqlCompletionScope";
 
 const SQL_KEYWORDS = "SELECT FROM WHERE AND OR NOT IN BETWEEN LIKE IS NULL JOIN INNER LEFT RIGHT FULL OUTER CROSS ON AS ORDER BY GROUP HAVING LIMIT OFFSET DISTINCT INSERT INTO VALUES UPDATE SET DELETE CREATE TABLE DROP ALTER COUNT SUM AVG MIN MAX CASE WHEN THEN ELSE END EXISTS UNION ALL TOP WITH OVER PARTITION ROW_NUMBER RANK DENSE_RANK LAG LEAD ASC DESC USE EXEC CALL DECLARE BEGIN COMMIT ROLLBACK COALESCE CAST CONVERT".split(" ");
 const PYTHON_KEYWORDS = "def class if elif else for while return import from as try except finally with lambda yield True False None and or not in is pass break continue async await raise assert del global nonlocal match case".split(" ");
@@ -19,7 +20,7 @@ export interface CompletionSite {
 }
 
 /** Columns are Monaco UTF-16 indexes; replacement owns the suffix, not only typed text. */
-export function completionSite(language: Language, line: string, column: number): CompletionSite {
+export function completionSite(language: Language, line: string, column: number, sqlDbType?: string): CompletionSite {
   const offset = Math.max(0, Math.min(line.length, column - 1)), before = line.slice(0, offset), after = line.slice(offset);
   const prefix = before.match(WORD)?.[0] ?? "", suffix = after.match(/^[\p{L}\p{N}_$]*/u)?.[0] ?? "";
   const site: CompletionSite = { prefix, startColumn: offset - prefix.length + 1, endColumn: offset + suffix.length + 1 };
@@ -27,7 +28,7 @@ export function completionSite(language: Language, line: string, column: number)
   for (let index = 0; index < before.length; ++index) {
     const ch = before[index], next = before[index + 1];
     if (quote) {
-      if (language === "python" && ch === "\\") { ++index; continue; }
+      if (ch === "\\" && (language === "python" || (quote === "'" && sqlStringEscapesBackslash(before, quoteStart, sqlDbType)))) { ++index; continue; }
       const end = quote === "[" ? "]" : quote;
       if (ch === end) {
         if (language === "sql" && next === end) { ++index; continue; }
@@ -174,11 +175,14 @@ function resolveTable(name: string | undefined, context: CompletionContext | und
   const chooseScope=(candidates:string[])=>{
     const temporary=candidates.filter(key=>tables[key]?.temporary);
     if(temporary.length)return temporary.length===1?temporary[0]:undefined;
-    const schemaOf=(key:string)=>tables[key]?.schema??key.split(".").at(-2);
-    if(context?.schema!==undefined){
-      const exactScope=candidates.filter(key=>schemaOf(key)===context.schema);
+    const catalogOf=(key:string)=>tables[key]?.catalog;
+    const selectedCatalog=context?.database ?? context?.schemaSnapshot?.database;
+    if(selectedCatalog){const sameCatalog=candidates.filter(key=>!catalogOf(key)|| (strictCase?catalogOf(key)===selectedCatalog:catalogOf(key)?.toLowerCase()===selectedCatalog.toLowerCase()));if(sameCatalog.length)candidates=sameCatalog;}
+    const schemaOf=(key:string)=>tables[key]?.schema??key.split(".").at(-2),selectedSchema=context?.schema ?? context?.schemaSnapshot?.current_schema;
+    if(selectedSchema!==undefined){
+      const exactScope=candidates.filter(key=>schemaOf(key)===selectedSchema);
       if(exactScope.length)return exactScope.length===1?exactScope[0]:undefined;
-      const foldedScope=strictCase?[]:candidates.filter(key=>schemaOf(key)?.toLowerCase()===context.schema!.toLowerCase());
+      const foldedScope=strictCase?[]:candidates.filter(key=>schemaOf(key)?.toLowerCase()===selectedSchema.toLowerCase());
       if(foldedScope.length)return foldedScope.length===1?foldedScope[0]:undefined;
     }
     return candidates.length===1?candidates[0]:undefined;
@@ -189,7 +193,7 @@ function resolveTable(name: string | undefined, context: CompletionContext | und
 }
 
 export function localCompletions(language: Language, site: CompletionSite, context: CompletionContext | undefined,
-  textBefore: string, currentSymbols: LanguageCompletion[] = [], documentSource = textBefore): LanguageCompletion[] {
+  textBefore: string, currentSymbols: LanguageCompletion[] = [], documentSource = textBefore, sourceCursor?: number): LanguageCompletion[] {
   if (site.blocked) return [];
   const items: LanguageCompletion[] = [];
   if (language === "python") {
@@ -207,30 +211,40 @@ export function localCompletions(language: Language, site: CompletionSite, conte
   } else {
     const tables = context?.schemaSnapshot?.tables ?? {}, dbType = context?.schemaSnapshot?.db_type;
     const { names, items: tableItems } = sqlContext(context);
+    const prefixStart = documentSource.indexOf(textBefore);
+    const scope = sqlCompletionScope(documentSource, sourceCursor ?? (prefixStart < 0 ? textBefore.length : prefixStart + textBefore.length), dbType, Boolean(site.quote));
+    if (scope.blocked) return [];
+    const relations = scope.relations.map(relation => ({ ...relation,
+      name: normalizedSqlName(relation.parts, relation.parts.map(part => part.name).join("."), dbType),
+      qualifier: relation.alias ? normalizedSqlName([relation.alias], relation.alias.name, dbType) : normalizedSqlName(relation.parts.slice(-1), relation.parts.at(-1)!.name, dbType),
+    }));
     if (site.member) {
       const member = normalizedSqlName(site.memberParts, site.member, dbType);
-      let tableName = resolveTable(member, context, names);
-      if (!tableName) {
-        // Resolve common aliases immediately; advanced CTE/subquery inference is asynchronous.
-        const source = documentSource.replace(new RegExp(String.raw`(${SQL_IDENTIFIER})|--[^\n]*|'(?:''|[^'])*'|\/\*[\s\S]*?\*\/`, "gu"), (match, identifier: string | undefined) => identifier ?? " ");
-        const aliases = new RegExp(String.raw`\b(?:FROM|JOIN|UPDATE|INTO)\s+(${SQL_IDENTIFIER}(?:\s*\.\s*${SQL_IDENTIFIER})*)\s+(?:AS\s+)?(${SQL_IDENTIFIER})`, "giu");
-        for (const match of source.matchAll(aliases)) {
-          const aliasParts = identifierParts(match[2]), tableParts = identifierParts(match[1]);
-          if (!aliasParts || !tableParts) continue;
-          const alias = normalizedSqlName(aliasParts, match[2], dbType);
-          if (dbType === "postgresql" ? alias === member : alias.toLowerCase() === member.toLowerCase()) tableName = resolveTable(normalizedSqlName(tableParts, match[1], dbType), context, names);
-        }
-      }
+      const binding = [...relations].reverse().find(relation => dbType === "postgresql" ? relation.qualifier === member : relation.qualifier.toLowerCase() === member.toLowerCase());
+      // A CTE or derived table owns its alias even if a physical table shares its name.
+      const tableName = binding ? binding.virtual ? undefined : resolveTable(binding.name, context, names) : resolveTable(member, context, names);
       const metadata = tableName && tables[tableName];
       if (metadata) for (const column of metadata.columns ?? []) items.push({ label: column.name, kind: "column", detail: `${tableName} · ${column.data_type ?? column.type ?? ""}`, insert_text: quoteSqlPart(column.name, dbType), sortText: `0:${column.name}` });
-      if (!metadata) for (const name of names) if (name.toLowerCase().startsWith(`${site.member.toLowerCase()}.`)) {
+      if (!metadata && !binding) for (const name of names) if (name.toLowerCase().startsWith(`${site.member.toLowerCase()}.`)) {
         const tail = name.slice(site.member.length + 1);
         items.push({ label: tail, kind: "table", insert_text: tableInsertion(name,context,site.member), sortText: `0:${tail}` });
       }
       return filterCompletions(items, site.prefix, language);
     }
-    const relation = /\b(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+[^\s]*$/i.test(textBefore);
-    items.push(...tableItems);
+    const relation = /\b(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+[^\s]*$/i.test(scope.before);
+    // Once metadata is loaded, SELECT/WHERE/ON suggestions never need an IPC
+    // round trip for ordinary FROM/JOIN columns, including unqualified names.
+    if (!relation && /\b(?:SELECT|WHERE|ON|HAVING|SET|(?:ORDER|GROUP|PARTITION)\s+BY)\b/i.test(scope.before)) {
+      for (const visible of relations) {
+        const name = !visible.virtual && resolveTable(visible.name, context, names), metadata = name && tables[name];
+        for (const column of metadata ? metadata.columns ?? [] : []) {
+          const detail = `${name} · ${column.data_type ?? column.type ?? ""}`;
+          items.push({ label: column.name, kind: "column", detail, insert_text: quoteSqlPart(column.name, dbType), sortText: `0:${column.name}` });
+          if (relations.length > 1) items.push({ label: `${visible.qualifier}.${column.name}`, filterText: column.name, kind: "column", detail,
+            insert_text: `${quoteSqlPart(visible.qualifier, dbType)}.${quoteSqlPart(column.name, dbType)}`, sortText: `0:${column.name}:${visible.qualifier}` });
+        }
+      }
+    } else items.push(...tableItems);
     if (!relation) items.push(...SQL_KEYWORDS.map(label => ({ label, kind: "keyword", sortText: `2:${label}` })));
   }
   if (!site.member) for (const sibling of context?.siblings ?? []) {
