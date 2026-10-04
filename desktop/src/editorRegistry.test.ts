@@ -97,6 +97,13 @@ describe("Editor focus across viewport virtualization",()=>{
     setCompletionContext("b",{...context,database:"other"});expect(contextVersions.get("b")).toBe(version!+1);
     setCompletionContext("b",{...context,preamble:context.preamble+"\nnew code"});expect(contextVersions.get("b")).toBe(version!+2);
   });
+  it("invalidates completion dialect before metadata is available without manufacturing a schema snapshot",()=>{
+    const context={variables:[],tables:[],sessionId:"s",connectionId:"c",database:"db",dbType:"mysql"};
+    setCompletionContext("dialect",context);const version=contextVersions.get("dialect");
+    setCompletionContext("dialect",{...context});expect(contextVersions.get("dialect")).toBe(version);
+    setCompletionContext("dialect",{...context,dbType:"postgresql"});expect(contextVersions.get("dialect")).toBe(version!+1);
+    expect(getCompletionContext("dialect")?.schemaSnapshot).toBeUndefined();
+  });
   it("forces ACP ghost completion when enabled, closing local suggestions so Tab accepts the inline result",()=>{
     const editor={focus:vi.fn(),trigger:vi.fn()};models.set("ai",{editor} as never);editorPreferences.set("ai",{aiAutocomplete:true,autocomplete:false});
     forceAutocomplete("ai");expect(editor.focus).toHaveBeenCalledOnce();

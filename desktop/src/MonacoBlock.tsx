@@ -60,7 +60,7 @@ for (const language of ["sql", "python"]) monaco.languages.registerCompletionIte
     const id = model.uri.path.split("/").at(-1) ?? "", context = getCompletionContext(id);
     const manual = consumeManualSuggestions(id);
     if ((editorPreferences.get(id)?.autocomplete === false && !manual) || token.isCancellationRequested || model.isDisposed()) return { suggestions: [] };
-    const site = completionSite(language as Language, model.getLineContent(position.lineNumber), position.column, context?.schemaSnapshot?.db_type);
+    const site = completionSite(language as Language, model.getLineContent(position.lineNumber), position.column, context?.dbType ?? context?.schemaSnapshot?.db_type);
     if (site.blocked) { completionGates.get(id)?.cancel(); return { suggestions: [] }; }
     // Scan a bounded window only when suggestions are requested, never on each model change.
     const firstLine = Math.max(1, position.lineNumber - 200), lastLine = Math.min(model.getLineCount(), position.lineNumber + 200);

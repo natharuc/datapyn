@@ -314,12 +314,16 @@ class SessionRuntime:
                     old_key, _old_context = self.language_contexts.popitem(last=False)
                     self._context_codes.pop(old_key, None)
                 self.language_variables = context.get("variables", self.language_variables)
-                self._context_requests.discard(key)
+                if not any(job.method == "language.context" and self.context_key(job.params) == key for job in self._queue):
+                    self._context_requests.discard(key)
                 self.emit({"event": "language.context_updated", "payload": {
                     "session_id": self.session_id, "connection_id": merged.get("connection_id"),
                     "database": merged.get("database", ""), "schema": merged.get("schema_name", ""),
                     "version": self.language_version, "variables": self.language_variables,
                     **({"schema_snapshot": context["schema"]} if "schema" in context else {}),
+                    **({"metadata_state": context["metadata_state"], "schema_error": context.get("schema_error")}
+                       if "metadata_state" in context else {}),
+                    **({"requested_scope": context["requested_scope"]} if "requested_scope" in context else {}),
                     **({"metadata_invalidated": True} if context.get("metadata_invalidated") else {}),
                 }})
                 return
@@ -424,7 +428,7 @@ class SessionRuntime:
     def context_key(params):
         return "|".join(str(params.get(key) or "") for key in ("connection_id", "database", "schema")) or "default"
 
-    def editor_context(self, params, *, refresh=True):
+    def editor_context(self, params, *, refresh=True, force=False):
         with self._lock:
             key = self.context_key(params)
             context = dict(self.language_contexts.get(key) or {})
@@ -434,21 +438,47 @@ class SessionRuntime:
                 return context
             code = params.get("code", "")
             from .sql_context import metadata_signature
-            signature = metadata_signature(code) if params.get("language") == "sql" and isinstance(code, str) and len(code) <= MAX_CODE_BYTES else ()
+            db_type = str((params.get("_connection_config") or params.get("config") or {}).get("db_type") or "")
+            signature = metadata_signature(code, db_type) if params.get("language") == "sql" and isinstance(code, str) and len(code) <= MAX_CODE_BYTES else ()
             previous_signature, previous_time = self._context_codes.get(key, (None, 0))
             now = time.monotonic()
-            needs_context = signature != previous_signature or now - previous_time >= 60
-            if params.get("language") == "sql" and key not in self._context_requests and needs_context:
+            needs_context = force or signature != previous_signature or now - previous_time >= 60
+            if params.get("language") == "sql" and key in self._context_requests and needs_context:
+                pending = next((job for job in self._queue if job.method == "language.context" and self.context_key(job.params) == key), None)
+                if pending is not None:
+                    # Typing a different relation while metadata waits behind
+                    # user code replaces the pending document rather than
+                    # queueing one database crawl per keystroke.
+                    pending.params = {**params, **({"refresh": True} if force or pending.params.get("refresh") else {})}
+                    self._context_codes[key] = (signature, now)
+                elif len(self._queue) < MAX_QUEUED_JOBS:
+                    # An in-flight crawl cannot be rewritten. Keep exactly one
+                    # coalesced follow-up for the newest code/forced reload.
+                    self._queue.append(Job("language.context", {**params, **({"refresh": True} if force else {})}))
+                    self._context_codes[key] = (signature, now)
+                    self._wake.set()
+            elif params.get("language") == "sql" and needs_context:
                 # Metadata work waits safely behind executions. The language
                 # request itself immediately uses the latest immutable snapshot.
                 self._context_requests.add(key)
                 if len(self._queue) < MAX_QUEUED_JOBS:
-                    self._queue.append(Job("language.context", dict(params)))
+                    self._queue.append(Job("language.context", {**params, **({"refresh": True} if force else {})}))
                     self._context_codes[key] = (signature, now)
                     self._wake.set()
                 else:
                     self._context_requests.discard(key)
             return context
+
+    def prepare_context(self, params):
+        """Warm the focused SQL scope without invoking a completion provider."""
+        with self._lock:
+            if self._closed or self._failed:
+                raise RuntimeErrorResponse("session_unavailable", "This session is unavailable; create a new session")
+            context = self.editor_context({**params, "language": "sql"}, force=bool(params.get("refresh")))
+            queued = self.context_key(params) in self._context_requests
+            if not queued and len(self._queue) >= MAX_QUEUED_JOBS and (params.get("refresh") or not context.get("schema")):
+                raise RuntimeErrorResponse("queue_full", "This session already has 64 queued operations")
+            return {"status": "queued" if queued else "ready", "context_version": context.get("version", 0)}
 
 
 class Supervisor:
@@ -817,6 +847,13 @@ class Supervisor:
             context = self._session(params).editor_context(routed, refresh=False) if params.get("session_id") else {}
             self.background.submit(request_id, method, routed, context)
             return None
+        if method == "language.prepare":
+            code = params.get("code", "")
+            if not isinstance(code, str) or len(code.encode("utf-8")) > MAX_CODE_BYTES:
+                raise RuntimeErrorResponse("invalid_params", "code must be a string of at most 1 MiB")
+            if "refresh" in params and not isinstance(params["refresh"], bool):
+                raise RuntimeErrorResponse("invalid_params", "refresh must be a boolean")
+            return self._session(params).prepare_context(self._route({**params, "code": code}))
         if method in {"language.complete", "language.format", "parameters.scan"}:
             routed = self._route(params)
             context = self._session(params).editor_context(routed) if params.get("session_id") else {}

@@ -1,5 +1,6 @@
 """Real editor protocol contracts across metadata, inference and session lifetimes."""
 
+from contextlib import closing
 import sqlite3
 
 import pytest
@@ -80,6 +81,54 @@ def test_sql_metadata_event_and_followup_completion_agree_on_schema_shape(client
     assert {column["name"] for column in refreshed["schema_snapshot"]["columns"]["main.sample"]} == {"id", "title", "archived"}
     result = complete(client, "a", code, language="sql", column=10)
     assert {item["label"] for item in result["items"]} == {"id", "title", "archived"}
+
+
+def test_prepare_switches_saved_connections_and_forces_real_metadata_reload(client, tmp_path):
+    profiles = []
+    for name, field in (("alpha", "alpha_value"), ("beta", "beta_value")):
+        database = tmp_path / f"{name}.sqlite"
+        with closing(sqlite3.connect(database)) as connection, connection:
+            connection.execute(f"CREATE TABLE sample({field} INTEGER)")
+        profile = client.request("connections.save", {"connection": {"name": name, "config": {"db_type": "sqlite", "database": str(database)}}})
+        profiles.append((profile["id"], database, field))
+    client.session()
+    client.execute("preserved_value = 7", "namespace")
+    code = "SELECT s. FROM sample s"
+    for identifier, database, field in profiles:
+        result = client.request("language.prepare", {"session_id": "a", "connection_id": identifier, "code": code})
+        assert result["status"] == "queued"
+        payload = client.wait(lambda item: item.get("event") == "language.context_updated"
+                              and item["payload"].get("connection_id") == identifier
+                              and item["payload"].get("metadata_state") == "ready")["payload"]
+        assert payload["requested_scope"] == {"connection_id": identifier, "database": None, "schema": None}
+        assert payload["database"] == str(database) and payload["schema"] == "main"
+        assert "preserved_value" in payload["variables"]
+        assert {item["label"] for item in complete(client, "a", code, language="sql", column=10, connection_id=identifier)["items"]} == {field}
+    identifier, database, field = profiles[1]
+    with closing(sqlite3.connect(database)) as connection, connection:
+        connection.execute("ALTER TABLE sample ADD COLUMN external_change TEXT")
+    assert {item["label"] for item in complete(client, "a", code, language="sql", column=10, connection_id=identifier)["items"]} == {field}
+    assert client.request("language.prepare", {"session_id": "a", "connection_id": identifier, "code": code, "refresh": True})["status"] == "queued"
+    client.wait(lambda item: item.get("event") == "language.context_updated"
+                and item["payload"].get("connection_id") == identifier
+                and any(column["name"] == "external_change" for column in item["payload"].get("schema_snapshot", {}).get("columns", {}).get("main.sample", [])))
+    assert {item["label"] for item in complete(client, "a", code, language="sql", column=10, connection_id=identifier)["items"]} == {field, "external_change"}
+    other_identifier, _, other_field = profiles[0]
+    assert {item["label"] for item in complete(client, "a", code, language="sql", column=10, connection_id=other_identifier)["items"]} == {other_field}
+
+
+def test_prepare_reports_connection_failure_without_erasing_namespace(client, tmp_path):
+    profile = client.request("connections.save", {"connection": {"name": "Unavailable", "config": {"db_type": "sqlite", "database": str(tmp_path / "missing" / "unavailable.sqlite")}}})
+    client.session()
+    client.execute("preserved_value = 12", "namespace")
+    assert client.request("language.prepare", {"session_id": "a", "connection_id": profile["id"], "code": "SELECT * FROM sample"})["status"] == "queued"
+    payload = client.wait(lambda item: item.get("event") == "language.context_updated"
+                          and item["payload"].get("metadata_state") == "error")["payload"]
+    assert payload["schema_snapshot"] == {} and payload["schema_error"]
+    assert payload["requested_scope"]["connection_id"] == profile["id"]
+    assert "preserved_value" in payload["variables"]
+    result = complete(client, "a", "preserved_value", language="python")
+    assert "preserved_value" in {item["label"] for item in result["items"]}
 
 
 def test_python_completion_isolated_live_namespace_and_context_never_execute(client):

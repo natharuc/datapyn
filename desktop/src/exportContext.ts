@@ -1,5 +1,6 @@
 import type { SavedConnection } from "./connections";
 import type { SessionDocument } from "./workspace";
+import {completionConnectionScope} from "./sessionCompletion";
 
 /** Match the legacy focused-block precedence without borrowing another connection's dialect. */
 export function exportContext(session: SessionDocument, catalog: SavedConnection[]) {
@@ -7,11 +8,11 @@ export function exportContext(session: SessionDocument, catalog: SavedConnection
   const connectionId = block?.connection_id || session.savedConnectionId;
   const saved = catalog.find(item => item.id === connectionId);
   const config = saved?.config ?? (!block?.connection_id || block.connection_id === session.savedConnectionId ? session.connection : undefined);
-  const inherits = !block?.connection_id || block.connection_id === session.savedConnectionId;
+  const scope=block ? completionConnectionScope(session,block,config) : {connectionId,database:session.database ?? config?.database,schema:session.schema ?? config?.schema};
   return {
     connectionId,
     connectionType: config?.db_type,
-    database: block?.database_name || (inherits ? session.database : undefined) || config?.database,
-    schema: block?.schema || (inherits ? session.schema : undefined) || config?.schema,
+    database:scope.database,
+    schema:scope.schema,
   };
 }

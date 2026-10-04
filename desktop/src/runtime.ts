@@ -11,6 +11,9 @@ export interface LanguageContextUpdate {
   session_id: string; connection_id?: string; database?: string; schema?: string; version: number;
   variables: Record<string, {type: string; module?: string; columns?: string[]}>;
   metadata_invalidated?: boolean;
+  metadata_state?: "ready" | "error";
+  schema_error?: string | null;
+  requested_scope?: {connection_id?:string|null;database?:string|null;schema?:string|null};
   schema_snapshot?: {db_type?: string; database?: string; current_schema?: string; tables?: Array<{key?: string; name: string; schema?: string; catalog?: string; temporary?: boolean}>;
     columns?: Record<string, Array<{name: string; type?: string; data_type?: string}>>};
 }

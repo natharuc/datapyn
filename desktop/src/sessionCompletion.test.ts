@@ -277,3 +277,63 @@ describe("shared session diagnostics context",()=>{
     for(const line of imports.slice(3))expect(line).toMatch(/^import package_\d+_with_a_long_complete_module_name as alias_\d+$/);
   });
 });
+
+
+describe("resolved default scope delivery",()=>{
+  const resolved=(version:number,schema="public",requestedSchema:string|null=null):RuntimeEvent=>({
+    event:"language.context_updated",payload:{session_id:"s",connection_id:"transient",database:"analytics",schema,version,variables:{},metadata_state:"ready",
+      requested_scope:{connection_id:null,database:"analytics",schema:requestedSchema},
+      schema_snapshot:{db_type:"postgresql",database:"analytics",current_schema:schema,tables:[{key:`${schema}.orders`,name:"orders",schema}],columns:{[`${schema}.orders`]:[{name:"amount",data_type:"numeric"}]}}}
+  });
+  it("maps an implicit connection and default schema to the real catalogue without borrowing another schema",()=>{
+    const contexts=new SessionLanguageContexts();contexts.accept(resolved(1));contexts.accept(resolved(2,"sales","sales"));
+    expect(contexts.get("s",undefined,"analytics")?.tables).toEqual(["public.orders"]);
+    expect(contexts.get("s",undefined,"analytics","sales")?.tables).toEqual(["sales.orders"]);
+    const unaliased=new SessionLanguageContexts();unaliased.accept(update(1,"a","db","public"));unaliased.accept(update(2,"a","db","sales"));
+    expect(unaliased.get("s","a","db")?.schemaSnapshot).toBeUndefined();
+  });
+  it("invalidates request aliases and resolved identities even after namespace-only events",()=>{
+    const contexts=new SessionLanguageContexts();contexts.accept(resolved(1));contexts.accept(resolved(2,"sales","sales"));
+    contexts.accept({event:"language.context_updated",payload:{session_id:"s",connection_id:"transient",database:"analytics",schema:"public",version:3,variables:{live:{type:"int"}}}});
+    expect(contexts.invalidate("s",undefined,"analytics")).toBe(true);
+    expect(contexts.get("s",undefined,"analytics")?.schemaSnapshot).toBeUndefined();
+    expect(contexts.get("s","transient","analytics","public")?.schemaSnapshot).toBeUndefined();
+    expect(contexts.get("s",undefined,"analytics","sales")?.tables).toEqual(["sales.orders"]);
+    expect(contexts.get("s",undefined,"analytics")?.variables).toEqual({live:{type:"int"}});
+  });
+  it("clears all aliases on SQL metadata invalidation and exposes catalogue errors",()=>{
+    const contexts=new SessionLanguageContexts();contexts.accept(resolved(1));contexts.accept(resolved(2,"sales","sales"));
+    contexts.accept({event:"language.context_updated",payload:{session_id:"s",connection_id:"transient",database:"analytics",schema:"public",version:3,variables:{},metadata_invalidated:true,metadata_state:"error",schema_error:"Permission denied",requested_scope:{connection_id:null,database:"analytics",schema:null},schema_snapshot:{}}});
+    expect(contexts.get("s",undefined,"analytics")?.tables).toEqual([]);
+    expect(contexts.get("s",undefined,"analytics")?.error).toBe("Permission denied");
+    expect(contexts.get("s",undefined,"analytics","sales")?.schemaSnapshot).toBeUndefined();
+  });
+  it("uses a block connection's configured database/dialect and resets schema when its database changes",()=>{
+    const session=newSession();session.savedConnectionId="main";session.database="main_db";session.schema="private";
+    const block={...newBlock("sql","SELECT x."),connection_id:"other"},defaults={db_type:"postgresql" as const,database:"other_db",schema:"public"};session.blocks=[block];
+    expect(completionConnectionScope(session,block,defaults)).toEqual({connectionId:"other",database:"other_db",schema:"public"});
+    expect(completionConnectionScope(session,{...block,database_name:"new_db"},defaults)).toEqual({connectionId:"other",database:"new_db",schema:undefined});
+    expect(completionConnectionScope(session,{...block,connection_id:undefined,database_name:"new_db"},defaults).schema).toBeUndefined();
+    expect(new SessionCompletionIndex().context(session,block.id,new SessionLanguageContexts(),defaults)?.dbType).toBe("postgresql");
+  });
+});
+
+
+it("discards the edited connection's catalogue and every default alias while keeping other connections",()=>{
+  const contexts=new SessionLanguageContexts();
+  contexts.accept({...update(1,"main"),payload:{...update(1,"main").payload,requested_scope:{connection_id:"main",database:null,schema:null}}} as RuntimeEvent);
+  contexts.accept(update(2,"other"));
+  expect(contexts.invalidateConnection("s","main")).toBe(true);
+  expect(contexts.get("s","main")?.schemaSnapshot).toBeUndefined();
+  expect(contexts.get("s","main","db","public")?.schemaSnapshot).toBeUndefined();
+  expect(contexts.get("s","other","db","public")?.tables).toEqual(["public.users"]);
+});
+
+
+it("preserves SQL metadata for table names that match JavaScript prototype properties",()=>{
+  const contexts=new SessionLanguageContexts();contexts.accept({event:"language.context_updated",payload:{session_id:"s",version:1,variables:{},schema_snapshot:{db_type:"sqlite",tables:[{key:"__proto__",name:"__proto__"}],columns:{["__proto__"]:[{name:"real_field",type:"INTEGER"}]}}}});
+  const snapshot=contexts.get("s")!.schemaSnapshot!;
+  expect(Object.hasOwn(snapshot.tables!,"__proto__")).toBe(true);expect(Object.getPrototypeOf(snapshot.tables)).toBeNull();
+  const code='SELECT p. FROM "__proto__" p',offset=code.indexOf('p.')+2;
+  expect(localCompletions("sql",completionSite("sql",code.slice(0,offset),offset+1),{sessionId:"s",variables:[],schemaSnapshot:snapshot,tables:["__proto__"]},code.slice(0,offset),[],code,offset)).toContainEqual(expect.objectContaining({label:"real_field",kind:"column"}));
+});

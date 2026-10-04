@@ -1,0 +1,23 @@
+.block-scope-picker{display:flex;align-items:center;gap:4px;min-width:0;flex-shrink:1}
+.block-scope-trigger,.block-scope-current{display:inline-flex;align-items:center;gap:5px;min-width:0;max-width:195px;height:25px;padding:3px 6px;border:1px solid var(--border);border-radius:3px;background:transparent;color:var(--text);font:inherit;font-size:11px;box-sizing:border-box}
+.block-scope-trigger{cursor:pointer}
+.block-scope-trigger:hover,.block-scope-trigger[aria-expanded=true]{background:var(--card)}
+.block-scope-trigger:focus-visible{outline:1px solid var(--blue-light);outline-offset:1px}
+.block-scope-trigger:disabled{opacity:.5;cursor:default}
+.block-scope-trigger svg{flex:none;color:var(--muted)}
+.block-scope-label{color:var(--muted);flex:none}
+.block-scope-value{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.block-scope-popover{position:fixed;z-index:10050;width:310px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);overflow:auto;background:var(--panel);border:1px solid var(--border);border-radius:4px;box-shadow:0 4px 14px #0003;color:var(--text);font:inherit;font-size:12px}
+.block-scope-search{display:flex;align-items:center;gap:7px;padding:8px;border-bottom:1px solid var(--border)}
+.block-scope-search>svg{flex:none;color:var(--muted)}
+.block-scope-search input{min-width:0;flex:1;width:0;padding:3px 0;background:transparent;border:none;outline:none;color:var(--text);font:inherit;font-size:12px}
+.block-scope-search input::placeholder{color:var(--muted)}
+.block-scope-search button{flex:none;display:flex;align-items:center;justify-content:center;width:24px;height:24px}
+.block-scope-list{max-height:224px;overflow:auto;scrollbar-gutter:stable}
+.block-scope-option{left:0;right:0;padding:6px 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;box-sizing:border-box;cursor:pointer;border-left:2px solid transparent}
+.block-scope-option.active{background:var(--card)}
+.block-scope-option.current{border-left-color:var(--blue-light);font-weight:600}
+.block-scope-message{display:flex;align-items:center;gap:6px;padding:10px;color:var(--muted);line-height:1.4}
+.block-scope-error{padding:10px;color:var(--danger,#c96a6a);overflow-wrap:anywhere;line-height:1.5}
+.block-scope-error button{display:block;margin-top:8px;padding:4px 8px;background:transparent;border:1px solid var(--border);border-radius:3px;color:var(--text);font:inherit;cursor:pointer}
+@media(max-width:1150px){.block-scope-trigger,.block-scope-current{max-width:145px}.block-scope-picker{gap:3px}.block-scope-label{display:none}}

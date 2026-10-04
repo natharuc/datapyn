@@ -353,3 +353,6 @@ div.explorer-empty { text-align: center; padding-top: 14px; }
   .block-header { gap:4px; padding-inline:6px; }
   .block-scope { max-width:24px; }
 }
+
+.block-header .block-scope-picker { flex-wrap:wrap; max-width:100%; }
+.block-header .block-scope-trigger,.block-header .block-scope-current { flex-shrink:0; }

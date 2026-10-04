@@ -50,6 +50,10 @@ import { findInDocuments, hasFocusedDocument } from "./documentWindows";
 import {OutputRevealTracker} from "./outputReveal";
 import {hasVisibleShortcutDialog} from "./shortcutModalGuard";
 import {SessionCompletionIndex,SessionLanguageContexts,completionConnectionScope} from "./sessionCompletion";
+import {BlockScopePicker} from "./BlockScopePicker";
+import {blockScopeOptions} from "./blockScopeModel";
+import {ScopePreparation} from "./ScopePreparation";
+import type {ExplorerContext} from "./explorer";
 import {exportContext} from "./exportContext";
 import {downloadDirectory} from "./queryDownload";
 import type {QueryDownloadRequest} from "./QueryDownloadDialog";
@@ -81,6 +85,12 @@ let storage: WorkspaceStorage | undefined;
 try { storage = localStorage; } catch { /* Desktop still supports explicit save. */ }
 export const workspace = new WorkspaceController(runtime, storage, {nativePersistence:isDesktop()});
 const reportMessage = (message: string) => workspace.message(message);
+function blockConnectionConfig(session:SessionDocument,block:Block) {
+  const id=block.connection_id ?? session.savedConnectionId;
+  return connections.getSnapshot().catalog.connections.find(connection=>connection.id===id)?.config ??
+    (block.connection_id===undefined || block.connection_id===session.savedConnectionId ? session.connection : undefined);
+}
+const blockScope=(session:SessionDocument,block:Block)=>completionConnectionScope(session,block,blockConnectionConfig(session,block));
 const statusLabel = { idle: "", queued: "Na fila", running: "Executando", cancelling: "Cancelando", succeeded: "Concluído", failed: "Erro", cancelled: "Cancelado" };
 
 function IconButton({ title, children, onClick, disabled = false, className = "" }: { title: string; children: React.ReactNode; onClick?: () => void; disabled?: boolean; className?: string }) {
@@ -93,21 +103,41 @@ export function App() {
   const state = useSyncExternalStore(workspace.subscribe, workspace.getSnapshot);
   const session = state.sessions.find((item) => item.id === state.activeId)!;
   const languageContexts=useRef(new SessionLanguageContexts()),completionIndex=useRef(new SessionCompletionIndex());
-  const [languageRevision,setLanguageRevision]=useState(0);
+  const [languageRevision,setLanguageRevision]=useState(0),[preparationRevision,setPreparationRevision]=useState(0);
+  const preparation=useRef(new ScopePreparation(runtime,scope=>{
+    if(languageContexts.current.invalidate(scope.sessionId,scope.connectionId,scope.database,scope.schema))setLanguageRevision(n=>n+1);
+  }));
+  const scopeMetadata=useCallback((current:SessionDocument,block:Block)=>{
+    const scope=blockScope(current,block);
+    return languageContexts.current.get(current.id,scope.connectionId,scope.database,scope.schema);
+  },[]);
+  const applyBlockScope=useCallback(async(sessionId:string,blockId:string,context:ExplorerContext)=>{
+    workspace.setContext(sessionId,context,blockId);workspace.focusBlock(sessionId,blockId);
+    const current=workspace.session(sessionId),block=current?.blocks.find(item=>item.id===blockId);
+    if(!current || !block)return;
+    await workspace.ensureSession(sessionId);
+    await preparation.current.request({sessionId,...blockScope(current,block),dbType:blockConnectionConfig(current,block)?.db_type},block.code,true);
+    setExplorerRefresh(n=>n+1);
+  },[]);
   const diagnosticContext = useCallback((sessionId: string) => { const current = workspace.session(sessionId); return current ? completionIndex.current.diagnosticsContext(current) : { globalImports: "", preamble: "" }; }, []);
   const diagnosticRevisionFor = useCallback((current: SessionDocument, block: Block) => {
-    const connection = completionConnectionScope(current, block);
+    const connection = blockScope(current, block);
     const scope = languageContexts.current.get(current.id, connection.connectionId, connection.database, connection.schema);
     return block.language === "python" ? `${scope?.namespaceVersion ?? 0}:${completionIndex.current.diagnosticsRevision(current)}` : String(scope?.version ?? 0);
   }, []);
   useEffect(()=>setCompletionContextResolver(blockId=>{
     const snapshot=workspace.getSnapshot(),active=workspace.session();
     const owner=active?.blocks.some(b=>b.id===blockId) ? active : snapshot.sessions.find(s=>s.blocks.some(b=>b.id===blockId));
-    return owner ? completionIndex.current.context(owner,blockId,languageContexts.current) : undefined;
+    return owner ? completionIndex.current.context(owner,blockId,languageContexts.current,blockConnectionConfig(owner,owner.blocks.find(b=>b.id===blockId)!)) : undefined;
   }),[]);
   useEffect(()=>{
     let disposed=false,cleanup:(()=>void)|undefined;
-    void runtime.subscribe(event=>{if(languageContexts.current.accept(event))setLanguageRevision(n=>n+1);}).then(fn=>{if(disposed)fn();else cleanup=fn;});
+    void runtime.subscribe(event=>{
+      preparation.current.accept(event);
+      if(languageContexts.current.accept(event))setLanguageRevision(n=>n+1);
+      if(event.event==="language.context_updated" && event.payload.metadata_invalidated)setPreparationRevision(n=>n+1);
+      if(event.event==="language.context_updated" && event.payload.metadata_state==="error")reportMessage(event.payload.schema_error || translateUi("Não foi possível carregar os metadados SQL."));
+    }).then(fn=>{if(disposed)fn();else cleanup=fn;});
     return()=>{disposed=true;cleanup?.();};
   },[]);
   const [preferences, setPreferences] = useState(loadPreferences);
@@ -117,6 +147,23 @@ export function App() {
   const [updateDialog,setUpdateDialog]=useState(false);
   const [connectionPicker, setConnectionPicker] = useState<string>(), [connectionsManager, setConnectionsManager] = useState(false);
   const [explorerRefresh, setExplorerRefresh] = useState(0);
+  const connectionSignatures=useRef<Map<string,string>>();
+  useEffect(()=>{
+    const next=new Map(catalogState.catalog.connections.map(item=>[item.id,JSON.stringify(item.config)]));
+    const previous=connectionSignatures.current;connectionSignatures.current=next;
+    if(!previous)return;
+    const changed=new Set([...previous.keys(),...next.keys()].filter(id=>previous.get(id)!==next.get(id)));
+    if(!changed.size)return;
+    for(const current of workspace.getSnapshot().sessions){
+      let affected=false;
+      for(const id of changed){
+        languageContexts.current.invalidateConnection(current.id,id);
+        if(current.savedConnectionId===id || current.blocks.some(block=>block.connection_id===id))affected=true;
+      }
+      if(affected)preparation.current.reset(current.id);
+    }
+    blockScopeOptions.clear();setLanguageRevision(n=>n+1);setPreparationRevision(n=>n+1);setExplorerRefresh(n=>n+1);
+  },[catalogState.catalog]);
   const [packageDialog, setPackageDialog] = useState(false);
   const [gridView, setGridView] = useState<DataView>();
   const gridViewOwner=useRef<{sessionId:string;resultId:string}>();
@@ -499,7 +546,12 @@ export function App() {
       case "clearResults": workspace.clearResults(current.id); break;
       case "manageConnections": setConnectionsManager(true); break;
       case "newConnection": setConnectionDialog(true); break;
-      case "reloadSchema": setExplorerRefresh(n => n + 1); break;
+      case "reloadSchema": {
+        setExplorerRefresh(n => n + 1);
+        const current=workspace.session(),block=current?.blocks.find(item=>item.id===current.focusedBlockId);
+        if(current && block?.language==="sql")run(preparation.current.request({sessionId:current.id,...blockScope(current,block),dbType:blockConnectionConfig(current,block)?.db_type},block.code,true));
+        break;
+      }
       case "restoreView": restoreDockLayout(); break;
       case "resetLayout": restoreDockLayout(true); break;
       case "find": run(Promise.resolve(editorAction(current.focusedBlockId,"actions.find"))); break;
@@ -547,16 +599,21 @@ export function App() {
     observe(); const unsubscribe=workspace.subscribe(observe); return () => {unsubscribe();};
   }, [activateBottom]);
   useEffect(() => {
-    const ids = new Set(state.sessions.map(s=>s.id)); languageContexts.current.retain(ids); completionIndex.current.retain(ids);
+    const ids = new Set(state.sessions.map(s=>s.id)); languageContexts.current.retain(ids); completionIndex.current.retain(ids); preparation.current.retain(ids);
     for(const id of lastNotificationContexts.current.keys())if(!ids.has(id))lastNotificationContexts.current.delete(id);
-    const context=completionIndex.current.context(session,session.focusedBlockId,languageContexts.current);
+    const context=completionIndex.current.context(session,session.focusedBlockId,languageContexts.current,blockConnectionConfig(session,session.blocks.find(b=>b.id===session.focusedBlockId) ?? session.blocks[0]));
     if(context)setCompletionContext(session.focusedBlockId,context);
-  }, [session.id, session.focusedBlockId, session.blocks, session.variables, session.results, session.savedConnectionId, session.database, session.schema,languageRevision,state.sessions]);
+  }, [session.id, session.focusedBlockId, session.blocks, session.variables, session.results, session.savedConnectionId, session.database, session.schema,languageRevision,state.sessions,catalogState.catalog]);
 
   const result = activeResult[session.id] === "__images__" && (session.richOutputs?.length || session.images.length) ? undefined : session.results.find((item) => item.result_id === activeResult[session.id]) ?? session.results.at(-1);
   const focusedBlock = session.blocks.find((block) => block.id === session.focusedBlockId);
-  const focusedScope = focusedBlock ? completionConnectionScope(session, focusedBlock) : {connectionId:session.savedConnectionId,database:session.database,schema:session.schema};
-  const entityScope = entityInfo ? completionConnectionScope(session, session.blocks.find(block=>block.id===entityInfo.blockId) ?? session.blocks[0]) : focusedScope;
+  const focusedScope = focusedBlock ? blockScope(session, focusedBlock) : {connectionId:session.savedConnectionId,database:session.database,schema:session.schema};
+  const entityScope = entityInfo ? blockScope(session, session.blocks.find(block=>block.id===entityInfo.blockId) ?? session.blocks[0]) : focusedScope;
+  // Warm the focused scope once on focus/context changes, never on each keystroke.
+  useEffect(()=>{
+    if(state.runtimeStatus!=="ready" || editingLocked || preparedSession!==`${profile?.active_id}:${session.id}` || focusedBlock?.language!=="sql" || !(focusedScope.connectionId || session.connection))return;
+    void preparation.current.request({sessionId:session.id,...focusedScope,dbType:blockConnectionConfig(session,focusedBlock)?.db_type},focusedBlock.code).catch(failure=>reportMessage(errorText(failure)));
+  },[session.id,session.focusedBlockId,focusedBlock?.language,focusedScope.connectionId,focusedScope.database,focusedScope.schema,state.runtimeStatus,preparedSession,profile?.active_id,editingLocked,preparationRevision,session.connection,catalogState.catalog]);
   const exportScope=exportContext(session,catalogState.catalog.connections);
   const exportConnections=useMemo(()=>catalogState.catalog.connections.map(item=>({id:item.id,name:item.name,db_type:item.config.db_type,database:item.config.database})),[catalogState.catalog]);
   const insertSql=(code:string)=>{
@@ -613,12 +670,12 @@ export function App() {
     <main className="workbench">{(!isDesktop() || profile) && <Suspense fallback={<p className="explorer-empty">{translateUi("Carregando painéis…")}</p>}><DockingWorkbench key={profile?.active_id ?? "startup"} initialLayout={dockLayout} locked={editingLocked} onControlsReady={controls=>{docking.current=controls;setDockControls(controls);}} onPanelsChange={dockPanelsChanged} onVisiblePanelsChange={setVisibleDockPanels} onRestoreError={reportMessage} onInitialized={()=>setStartupLayout(profile?.active_id)} onPopoutReady={attachPopoutKeyboard} onCaptureReady={capture=>{captureLayout.current=capture;}} onLayoutChange={setDockLayout} theme={preferences.theme} leftWidth={preferences.leftWidth} rightWidth={preferences.rightWidth} resultHeight={resultHeight} leftVisible={leftVisible} rightVisible={rightVisible} activeBottom={panel} activeRight={rightPanel} resetRevision={dockReset} onActivate={id=>{if(isBottomPanel(id))setPanel(id);if(id === "variables" || id === "pynia")setRightPanel(id);}} panels={{
       connections:<ConnectionsSidebar activeConnectionId={session.savedConnectionId} onConnect={connectSaved} onDisconnect={() => workspace.disconnect(session.id)} onError={reportMessage} disabled={session.busy || !profile || switchingProfile}/>,
       explorer:<ObjectExplorer sessionId={session.id} connectionId={focusedScope.connectionId} database={focusedScope.database} schema={focusedScope.schema} dbType={catalogState.catalog.connections.find(item=>item.id===focusedScope.connectionId)?.config.db_type ?? session.connection?.db_type} connected={preparedSession === `${profile?.active_id}:${session.id}` && Boolean(session.connection || focusedBlock?.connection_id || session.savedConnectionId)} refresh={explorerRefresh} disabled={session.busy} onError={reportMessage}
-          onInsert={(code, language = "sql", newBlock = false) => { if (newBlock) { const block = workspace.addBlock(session.id,language,code,session.focusedBlockId); if (focusedBlock?.connection_id) workspace.updateBlock(session.id,block.id,{connection_id:focusedBlock.connection_id,database_name:focusedBlock.database_name,schema:focusedBlock.schema}); requestAnimationFrame(()=>focusEditor(block.id)); } else insertInEditor(session.focusedBlockId,code); }}
-          onContextChange={context => workspace.setContext(session.id,context,session.focusedBlockId)}/>,
+          onInsert={(code, language = "sql", newBlock = false) => { if (newBlock) { const block = workspace.addBlock(session.id,language,code,session.focusedBlockId); if (focusedBlock) workspace.updateBlock(session.id,block.id,{connection_id:focusedScope.connectionId,database_name:focusedScope.database,schema:focusedScope.schema}); requestAnimationFrame(()=>focusEditor(block.id)); } else insertInEditor(session.focusedBlockId,code); }}
+          onContextChange={context => applyBlockScope(session.id,session.focusedBlockId,context)}/>,
       editor:<div className="editor-area" ref={codeArea}>
           {session.notice && <div className="session-notice" role="status">{session.notice}</div>}
           <ParameterPanel title={translateUi("Parâmetros compartilhados")} parameters={sharedParameters} enabled={session.extras.shared_parameters_enabled !== false} disabled={session.busy} onEnabled={enabled => workspace.patchSession(session.id,s=>({...s,modified:true,extras:{...s.extras,shared_parameters_enabled:enabled}}))} onChange={parameters => workspace.patchSession(session.id,s=>({...s,modified:true,extras:{...s.extras,shared_parameters:parameters}}))}/>
-          {session.blocks.map((block, index) => <BlockCard diagnosticsReady={state.runtimeStatus === "ready"} diagnosticRevision={diagnosticRevisionFor(session, block)} diagnosticContext={diagnosticContext} locked={editingLocked} forceMount={startupActive && requiredEditor === block.id} onEditorReady={startupEditorInitialized} key={block.id} block={block} index={index} count={session.blocks.length} session={session} disabled={runDisabled} preferences={preferences} onFontSizeChange={editorFontSize=>setPreferences(p=>({...p,editorFontSize}))} onPickConnection={() => setConnectionPicker(block.id)} onDownload={()=>run(downloadBlock(block.id))}
+          {session.blocks.map((block, index) => <BlockCard scopeMetadata={scopeMetadata} onScopeChange={applyBlockScope} scopeRefresh={explorerRefresh} scopeReady={preparedSession === `${profile?.active_id}:${session.id}`} diagnosticsReady={state.runtimeStatus === "ready"} diagnosticRevision={diagnosticRevisionFor(session, block)} diagnosticContext={diagnosticContext} locked={editingLocked} forceMount={startupActive && requiredEditor === block.id} onEditorReady={startupEditorInitialized} key={block.id} block={block} index={index} count={session.blocks.length} session={session} disabled={runDisabled} preferences={preferences} onFontSizeChange={editorFontSize=>setPreferences(p=>({...p,editorFontSize}))} onPickConnection={() => setConnectionPicker(block.id)} onDownload={()=>run(downloadBlock(block.id))}
             onRun={() => run(workspace.runBlock(session.id, block.id))} />)}
           <div className="add-block-row"><button title={shortcuts.addBlock} onClick={() => addBlock("sql")}><Plus size={14} /><span className="sql-color">{translateUi("SQL")}</span></button><button title={shortcuts.addBlock} onClick={() => addBlock("python")}><Plus size={14} /><span className="python-color">{translateUi("Python")}</span></button></div>
         </div>,
@@ -670,29 +727,31 @@ export function App() {
     {notificationHistory && <NotificationHistory center={notificationCenter} entries={notificationState.entries} onActivate={openNotification} onSettings={()=>{setNotificationHistory(false);setNotificationDialog(true);}} onClose={()=>setNotificationHistory(false)}/>}
     {connectionDialog && <ConnectionDialog initial={session.connection} onClose={() => setConnectionDialog(false)} onConnect={async (config) => { await workspace.connect(session.id, config); setExplorerRefresh(n=>n+1); }} />}
     {settingsDialog && <SettingsDialog preferences={preferences} shortcuts={shortcuts} transfer={configurationActions} onClose={() => setSettingsDialog(false)} onSave={async(p,next) => { await saveNotificationFlags(runtime,p);setPreferences(p);if(p.notifications && !preferences.notifications && isDesktop())run(requestPermission());setShortcuts(next); workspace.patchSession(session.id,s=>({...s,extras:{...s.extras,shared_delimiter:p.sharedDelimiter}})); try { localStorage.setItem("datapyn.desktop.shortcuts.v1", JSON.stringify(next)); } catch { reportMessage("Atalhos aplicados. Não foi possível persistir nesta máquina."); } setSettingsDialog(false); }} />}
-    {connectionPicker && <ConnectionPicker currentId={session.blocks.find(b=>b.id === connectionPicker)?.connection_id ?? session.savedConnectionId} onSelect={c => { if (connectionPicker === session.blocks[0].id) run(connectSaved(c)); else workspace.updateBlock(session.id,connectionPicker,{connection_id:c.id,database_name:undefined,schema:undefined}); setConnectionPicker(undefined); requestAnimationFrame(()=>focusEditor(session.focusedBlockId)); }} onDefault={()=>{workspace.updateBlock(session.id,connectionPicker,{connection_id:undefined,database_name:undefined,schema:undefined});setConnectionPicker(undefined);}} onClose={()=>setConnectionPicker(undefined)}/>}
+    {connectionPicker && <ConnectionPicker currentId={session.blocks.find(b=>b.id === connectionPicker)?.connection_id ?? session.savedConnectionId} onSelect={c => { if (connectionPicker === session.blocks[0].id) run(connectSaved(c).then(()=>workspace.updateBlock(session.id,session.blocks[0].id,{connection_id:undefined,database_name:undefined,schema:undefined}))); else workspace.updateBlock(session.id,connectionPicker,{connection_id:c.id,database_name:undefined,schema:undefined}); setConnectionPicker(undefined); requestAnimationFrame(()=>focusEditor(session.focusedBlockId)); }} onDefault={()=>{workspace.updateBlock(session.id,connectionPicker,{connection_id:undefined,database_name:undefined,schema:undefined});setConnectionPicker(undefined);}} onClose={()=>setConnectionPicker(undefined)}/>}
     {connectionsManager && <div className="modal-overlay"><section className="modal connection-manager" role="dialog" aria-modal="true" aria-label={translateUi("Gerenciar conexões")}><header className="modal-header"><h2>{translateUi("Gerenciar conexões")}</h2><button onClick={()=>setConnectionsManager(false)}>{translateUi("×")}</button></header><ConnectionsSidebar activeConnectionId={session.savedConnectionId} onConnect={connectSaved} onError={reportMessage}/></section></div>}
     {closingId && <div className="modal-overlay"><section className="modal confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="close-title"><header className="modal-header"><Save size={18} /><div><h2 id="close-title">{translateUi("Salvar alterações?")}</h2><p>{workspace.session(closingId)?.title}</p></div></header><p className="confirm-copy">{translateUi("Salve a análise em um arquivo .dpw antes de fechar a aba.")}</p><footer className="modal-footer"><button className="secondary-button" onClick={() => setClosingId(undefined)}>{translateUi("Voltar")}</button><button className="secondary-button" onClick={() => run(closeConfirmed(false))}>{translateUi("Descartar")}</button><button className="primary-button" onClick={() => run(closeConfirmed(true))}>{translateUi("Salvar e fechar")}</button></footer></section></div>}
   </div>;
 }
 
-const BlockCard = memo(function BlockCard({ block, index, count, session, disabled, locked, onRun, preferences, onPickConnection, onDownload, onFontSizeChange, forceMount, onEditorReady, diagnosticsReady, diagnosticRevision, diagnosticContext }: { block: Block; index: number; count: number; session: SessionDocument; disabled: boolean; locked:boolean; onRun: () => void; preferences: Preferences; onPickConnection: () => void; onDownload:()=>void; onFontSizeChange:(size:number)=>void;forceMount:boolean;onEditorReady:(id:string)=>void;diagnosticsReady:boolean;diagnosticRevision:string;diagnosticContext:(sessionId:string)=>{globalImports:string;preamble:string} }) {
+const BlockCard = memo(function BlockCard({ block, index, count, session, disabled, locked, onRun, preferences, onPickConnection, onDownload, onFontSizeChange, forceMount, onEditorReady, diagnosticsReady, diagnosticRevision, diagnosticContext, scopeMetadata, onScopeChange, scopeRefresh, scopeReady }: { scopeMetadata:(session:SessionDocument,block:Block)=>ReturnType<SessionLanguageContexts["get"]>;onScopeChange:(sessionId:string,blockId:string,context:ExplorerContext)=>Promise<void>;scopeRefresh:number;scopeReady:boolean;block: Block; index: number; count: number; session: SessionDocument; disabled: boolean; locked:boolean; onRun: () => void; preferences: Preferences; onPickConnection: () => void; onDownload:()=>void; onFontSizeChange:(size:number)=>void;forceMount:boolean;onEditorReady:(id:string)=>void;diagnosticsReady:boolean;diagnosticRevision:string;diagnosticContext:(sessionId:string)=>{globalImports:string;preamble:string} }) {
   const [height, setHeight] = useState(typeof block.height === "number" ? Math.max(130, block.height) : block.language === "sql" ? 210 : 190);
-  const [contextOpen,setContextOpen]=useState(false);
   const [actions,setActions]=useState<{owner:Document;anchor:{x:number;y:number};button:HTMLElement}>();
   const catalog = useSyncExternalStore(connections.subscribe, connections.getSnapshot);
   const customConnection = catalog.catalog.connections.find(c => c.id === (block.connection_id ?? session.savedConnectionId));
-  const dialect = customConnection?.config.db_type ?? session.connection?.db_type ?? catalog.catalog.connections.find(c => c.id === session.savedConnectionId)?.config.db_type;
-  const scope = completionConnectionScope(session, block);
+  const dialect = blockConnectionConfig(session,block)?.db_type;
+  const scope = blockScope(session, block),metadata=scopeMetadata(session,block);
   const diagnosticKey = JSON.stringify([session.id, scope.connectionId, scope.database, scope.schema, dialect, preferences.sharedDelimiter, preferences.locale, diagnosticRevision]);
   useParameterScan(block.language === "sql" ? [block.code] : [], (block.sql_parameters ?? []) as ParameterDefinition[], false, preferences.sharedDelimiter,
     parameters => workspace.updateBlock(session.id,block.id,{sql_parameters:parameters}));
   return <article style={{pointerEvents:locked ? "none" : undefined,...(session.maximizedBlockId && session.maximizedBlockId !== block.id ? {display:"none"} : {}),borderLeftColor:effectiveConnectionColor(block.connection_id ?? session.savedConnectionId ?? "",catalog.catalog)}} className={`code-block ${block.language} ${session.focusedBlockId === block.id ? "focused" : ""} ${session.maximizedBlockId === block.id ? "maximized" : ""}`} data-block-id={block.id}
     onDragOver={e=>{if (e.dataTransfer.types.includes("application/x-datapyn-block") || e.dataTransfer.types.includes(CONNECTION_MIME)) e.preventDefault();}}
-    onDrop={e=>{e.preventDefault();const source = e.dataTransfer.getData("application/x-datapyn-block");const connection = e.dataTransfer.getData(CONNECTION_MIME);if(source) workspace.reorderBlock(session.id,source,block.id);if(connection && index > 0) workspace.updateBlock(session.id,block.id,{connection_id:connection});}}>
+    onDrop={e=>{e.preventDefault();const source = e.dataTransfer.getData("application/x-datapyn-block");const connection = e.dataTransfer.getData(CONNECTION_MIME);if(source) workspace.reorderBlock(session.id,source,block.id);if(connection && index > 0) workspace.updateBlock(session.id,block.id,{connection_id:connection,database_name:undefined,schema:undefined});}}>
     <div className="block-header" onClick={()=>workspace.focusBlock(session.id,block.id)}><span draggable={!session.busy} onDragStart={e=>{e.dataTransfer.setData("application/x-datapyn-block",block.id);e.dataTransfer.effectAllowed="move";}}><GripVertical className="block-grip" size={13} /></span><button title={block.collapsed ? "Expandir bloco" : "Recolher bloco"} onClick={()=>workspace.updateBlock(session.id,block.id,{collapsed:!block.collapsed})}>{block.collapsed ? <ChevronRight size={12}/> : <ChevronDown size={12}/>}</button><span className="block-index">{String(index + 1).padStart(2, "0")}</span><select className={`language-select ${block.language}`} aria-label={`Linguagem do bloco ${index + 1}`} value={block.language} disabled={session.busy} onChange={(event) => workspace.updateBlock(session.id, block.id, { language: event.target.value as "sql" | "python" })}><option value="sql">{translateUi("SQL")}</option><option value="python">{translateUi("Python")}</option></select>
       <input className="block-name" value={block.block_name} placeholder={translateUi(block.language === "sql" ? "Nome do resultado (df)" : "Nome do bloco")} aria-label={`Nome do bloco ${index + 1}`} onChange={(event) => workspace.updateBlock(session.id, block.id, { block_name: event.target.value })} />
-      {block.language === "sql" && <button className="block-scope" aria-expanded={contextOpen} title={[customConnection?.name ?? session.connection?.name ?? translateUi("Conexão da aba"),scope.database ?? customConnection?.config.database,scope.schema ?? customConnection?.config.schema].filter(Boolean).join(" · ")} onClick={()=>setContextOpen(value=>!value)}><Database size={12}/><span>{customConnection?.name ?? session.connection?.name ?? translateUi("Conexão da aba")}</span></button>}
+      {block.language === "sql" && <><button className="block-scope" disabled={session.busy} title={customConnection?.name ?? session.connection?.name ?? translateUi("Conexão da aba")} onClick={onPickConnection}><Database size={12}/><span>{customConnection?.name ?? session.connection?.name ?? translateUi("Conexão da aba")}</span></button>
+        <BlockScopePicker sessionId={session.id} connectionId={scope.connectionId} dbType={dialect} database={metadata?.schemaSnapshot?.database ?? scope.database} schema={metadata?.schemaSnapshot?.current_schema ?? scope.schema}
+          connected={scopeReady && Boolean(scope.connectionId || session.connection)} disabled={session.busy || locked} refresh={scopeRefresh} onError={reportMessage}
+          onChange={context=>onScopeChange(session.id,block.id,context)} /></>}
       {!block.is_active && <span className="block-inactive">{translateUi("Desativado")}</span>}
       {block.status !== "idle" && <span className={`block-status ${block.status}`} title={translateUi(statusLabel[block.status])} aria-label={translateUi(statusLabel[block.status])}>{block.status === "running" || block.status === "cancelling" ? <><LoaderCircle size={12} className="spin"/>{translateUi(statusLabel[block.status])}</> : block.status !== "succeeded" ? translateUi(statusLabel[block.status]) : null}{block.duration_ms !== undefined && ["succeeded","failed"].includes(block.status) && <span>{(block.duration_ms/1000).toFixed(2)} s</span>}</span>}
       <button className="icon-button" aria-label={translateUi("Ações do bloco")} title={translateUi("Ações do bloco")} aria-haspopup="menu" aria-expanded={Boolean(actions)} onClick={e=>{const rect=e.currentTarget.getBoundingClientRect();setActions({owner:e.currentTarget.ownerDocument,anchor:{x:rect.right,y:rect.bottom},button:e.currentTarget});}}><MoreHorizontal size={15}/></button>
@@ -710,7 +769,6 @@ const BlockCard = memo(function BlockCard({ block, index, count, session, disabl
     <BlockSyntaxDiagnostics id={block.id} code={block.code} language={block.language} enabled={!block.cell_type || block.cell_type === "code"} ready={diagnosticsReady} focused={session.focusedBlockId === block.id} contextKey={diagnosticKey}
       params={() => { const context = block.language === "python" ? diagnosticContext(session.id) : undefined; return { session_id: session.id, connection_id: scope.connectionId, database: scope.database, schema: scope.schema, db_type: dialect, shared_delimiter: preferences.sharedDelimiter, locale: preferences.locale, global_imports: context?.globalImports, preamble: context?.preamble }; }}
       onReveal={marker => { workspace.updateBlock(session.id, block.id, { collapsed: false }); workspace.focusBlock(session.id, block.id); revealEditorRange(block.id, { startLineNumber: marker.start_line, startColumn: marker.start_column, endLineNumber: marker.end_line, endColumn: marker.end_column }); }} />
-    {block.language === "sql" && contextOpen && <div className="block-context"><button disabled={session.busy} onClick={onPickConnection}><Database size={12}/>{customConnection?.name ?? session.connection?.name ?? translateUi("Conexão da aba")}</button><input aria-label={`Banco do bloco ${index+1}`} placeholder={scope.database || customConnection?.config.database || translateUi("Banco padrão")} value={block.database_name ?? ""} disabled={session.busy} onChange={e=>workspace.updateBlock(session.id,block.id,{database_name:e.target.value || undefined})}/><input aria-label={`Schema do bloco ${index+1}`} placeholder={scope.schema || customConnection?.config.schema || translateUi("Schema padrão")} value={block.schema ?? ""} disabled={session.busy} onChange={e=>workspace.updateBlock(session.id,block.id,{schema:e.target.value || undefined})}/></div>}
     <div hidden={block.collapsed}>
     {block.cell_type && block.cell_type !== "code" ? <Suspense fallback={<pre>{block.code}</pre>}><MarkdownBlock code={block.code} raw={block.cell_type === "raw"} onChange={code=>workspace.updateBlock(session.id,block.id,{code})}/></Suspense> : <ViewportEditor forceMount={forceMount} onReady={onEditorReady} id={block.id} code={block.code} language={block.language} height={session.maximizedBlockId === block.id ? Math.max(200,window.innerHeight - 360) : height} preferences={{readOnly:locked,theme:preferences.theme,fontFamily:preferences.editorFont,fontSize:preferences.editorFontSize,wordWrap:preferences.wordWrap,minimap:preferences.minimap,lineNumbers:preferences.lineNumbers,tabSize:preferences.tabSize,autocomplete:preferences.autocomplete,aiAutocomplete:preferences.aiAutocomplete}} onFontSizeChange={onFontSizeChange} onChange={(code) => workspace.updateBlock(session.id, block.id, { code })} onFocus={() => workspace.focusBlock(session.id, block.id)} />}
     <ParameterPanel title={translateUi("Parâmetros SQL")} parameters={(block.sql_parameters ?? []) as ParameterDefinition[]} enabled={block.sql_parameters_enabled !== false} disabled={session.busy} onEnabled={enabled=>workspace.updateBlock(session.id,block.id,{sql_parameters_enabled:enabled})} onChange={parameters=>workspace.updateBlock(session.id,block.id,{sql_parameters:parameters})}/>
@@ -720,7 +778,7 @@ const BlockCard = memo(function BlockCard({ block, index, count, session, disabl
       owner.addEventListener("pointermove", move); owner.addEventListener("pointerup", up, { once: true }); }} />
     </div>
   </article>;
-}, (before,after)=>before.block === after.block && before.index === after.index && before.count === after.count && before.disabled === after.disabled && before.locked === after.locked && before.forceMount === after.forceMount && before.onEditorReady === after.onEditorReady && before.preferences === after.preferences && before.diagnosticsReady === after.diagnosticsReady && before.diagnosticRevision === after.diagnosticRevision && before.session.focusedBlockId === after.session.focusedBlockId && before.session.maximizedBlockId === after.session.maximizedBlockId && before.session.connection === after.session.connection && before.session.savedConnectionId === after.session.savedConnectionId && before.session.database === after.session.database && before.session.schema === after.session.schema && before.session.busy === after.session.busy);
+}, (before,after)=>before.block === after.block && before.index === after.index && before.count === after.count && before.disabled === after.disabled && before.locked === after.locked && before.forceMount === after.forceMount && before.onEditorReady === after.onEditorReady && before.preferences === after.preferences && before.scopeReady === after.scopeReady && before.scopeRefresh === after.scopeRefresh && before.scopeMetadata === after.scopeMetadata && before.onScopeChange === after.onScopeChange && before.diagnosticsReady === after.diagnosticsReady && before.diagnosticRevision === after.diagnosticRevision && before.session.focusedBlockId === after.session.focusedBlockId && before.session.maximizedBlockId === after.session.maximizedBlockId && before.session.connection === after.session.connection && before.session.savedConnectionId === after.session.savedConnectionId && before.session.database === after.session.database && before.session.schema === after.session.schema && before.session.busy === after.session.busy);
 
 function ViewportEditor({forceMount,...props}:{id:string;code:string;language:"sql"|"python";height:number;preferences:EditorPreferences;onFontSizeChange:(size:number)=>void;onChange:(code:string)=>void;onFocus:()=>void;forceMount:boolean;onReady:(id:string)=>void}) {
   const container=useRef<HTMLDivElement>(null), [visible,setVisible]=useState(false),[startupPinned,setStartupPinned]=useState(forceMount);

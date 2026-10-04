@@ -148,8 +148,9 @@ function quoteSqlPart(name: string, dbType = "sqlserver") {
   return `"${name.replace(/"/g, '""')}"`;
 }
 function sqlName(name: string, dbType?: string) { return name.split(".").map(part => quoteSqlPart(part, dbType)).join("."); }
+function ownTable(tables: SqlTables | undefined, key: string) { return tables && Object.hasOwn(tables, key) ? tables[key] : undefined; }
 function tableInsertion(key: string, context: CompletionContext | undefined, qualifier?: string): string {
-  const metadata=context?.schemaSnapshot?.tables?.[key],name=metadata?.name,dbType=context?.schemaSnapshot?.db_type;
+  const metadata=ownTable(context?.schemaSnapshot?.tables,key),name=metadata?.name,dbType=context?.dbType ?? context?.schemaSnapshot?.db_type;
   if(!name)return sqlName(qualifier?key.slice(qualifier.length+1):key,dbType);
   const prefix=key===name?"":key.endsWith(`.${name}`)?key.slice(0,-name.length-1):metadata.schema??"";
   const schema=metadata.schema;
@@ -159,26 +160,75 @@ function tableInsertion(key: string, context: CompletionContext | undefined, qua
   if(qualifier)for(let count=1;count<parts.length;count++)if(parts.slice(0,count).join(".").toLowerCase()===qualifier.toLowerCase())return parts.slice(count).map(part=>quoteSqlPart(part,dbType)).join(".");
   return parts.map(part=>quoteSqlPart(part,dbType)).join(".");
 }
-const sqlContextCache = new WeakMap<CompletionContext, { names: Set<string>; items: LanguageCompletion[] }>();
-function sqlContext(context?: CompletionContext) {
-  if (context) { const cached = sqlContextCache.get(context); if (cached) return cached; }
-  const names = new Set([...Object.keys(context?.schemaSnapshot?.tables ?? {}), ...(context?.tables ?? [])]);
-  const value = { names, items: [...names].map(name => ({ label: name, kind: "table", insert_text: tableInsertion(name,context), sortText: `0:${name}` })) };
-  if (context) sqlContextCache.set(context, value); return value;
+type SqlTables = NonNullable<NonNullable<CompletionContext["schemaSnapshot"]>["tables"]>;
+type NameLookup = Map<string, string | string[]>;
+interface SearchName { key: string; folded: string; bare: string; order: number }
+interface SqlIndex {
+  tables: SqlTables; names: string[]; extras: Set<string>;
+  bare?: NameLookup; foldedBare?: NameLookup; foldedRoots?: NameLookup; foldedFull?: NameLookup;
+  search?: { names: SearchName[]; full: SearchName[]; bare: SearchName[] };
+  items: Map<string, Map<string, LanguageCompletion>>;
 }
-function resolveTable(name: string | undefined, context: CompletionContext | undefined, names: Set<string>): string | undefined {
+const EMPTY_SQL_TABLES: SqlTables = {}, EMPTY_SQL_NAMES: string[] = [];
+// Namespace changes replace CompletionContext objects but retain immutable SQL
+// metadata. Share the index by those sources, rather than rebuilding 100k items.
+const sqlContextCache = new WeakMap<object, WeakMap<object, SqlIndex>>();
+function sqlContext(context?: CompletionContext): SqlIndex {
+  const tables = context?.schemaSnapshot?.tables ?? EMPTY_SQL_TABLES, additional = context?.tables ?? EMPTY_SQL_NAMES;
+  let variants = sqlContextCache.get(tables);
+  if (!variants) { variants = new WeakMap(); sqlContextCache.set(tables, variants); }
+  let value = variants.get(additional);
+  if (value) return value;
+  const names = Object.keys(tables), extras = new Set<string>();
+  for (const name of additional) if (!Object.hasOwn(tables, name) && !extras.has(name)) { extras.add(name); names.push(name); }
+  value = { tables, names, extras, items: new Map() }; variants.set(additional, value); return value;
+}
+function addName(index: NameLookup, name: string, key: string) {
+  const existing = index.get(name);
+  if (existing === undefined) index.set(name, key);
+  else if (typeof existing === "string") index.set(name, [existing, key]);
+  else existing.push(key);
+}
+function lookupNames(index: NameLookup, name: string): string[] {
+  const value = index.get(name); return value === undefined ? [] : typeof value === "string" ? [value] : value;
+}
+function bareNames(index: SqlIndex) {
+  if (index.bare) return;
+  const exact: NameLookup = new Map(), folded: NameLookup = new Map(), roots: NameLookup = new Map();
+  for (const key of index.names) {
+    const name = ownTable(index.tables, key)?.name ?? key.slice(key.lastIndexOf(".") + 1), lower = name.toLowerCase();
+    addName(exact, name, key);
+    // Already lowercase names use the exact map in both paths. Storing only
+    // case variants avoids a second 100k-entry map for ordinary catalogs.
+    if (name !== lower) addName(folded, lower, key);
+    if (!key.includes(".") && key !== key.toLowerCase()) addName(roots, key.toLowerCase(), key);
+  }
+  index.bare = exact; index.foldedBare = folded; index.foldedRoots = roots;
+}
+function fullNames(index: SqlIndex) {
+  if (!index.foldedFull) {
+    index.foldedFull = new Map();
+    for (const key of index.names) addName(index.foldedFull, key.toLowerCase(), key);
+  }
+  return index.foldedFull;
+}
+function resolveTable(name: string | undefined, context: CompletionContext | undefined, getIndex: () => SqlIndex): string | undefined {
   if (!name) return;
-  const tables = context?.schemaSnapshot?.tables ?? {}, query = name.toLowerCase(), strictCase = context?.schemaSnapshot?.db_type === "postgresql";
-  if(names.has(name))return name;
-  const keys=[...names],folded=strictCase?[]:keys.filter(key=>key.toLowerCase()===query);
+  const tables = context?.schemaSnapshot?.tables ?? {}, query = name.toLowerCase(), strictCase = (context?.dbType ?? context?.schemaSnapshot?.db_type) === "postgresql";
+  if (Object.hasOwn(tables, name)) return name;
+  const index = getIndex();
+  if (index.extras.has(name)) return name;
+  bareNames(index);
+  const folded = strictCase ? [] : name.includes(".") ? lookupNames(fullNames(index), query)
+    : [...(Object.hasOwn(tables, query) || index.extras.has(query) ? [query] : []), ...lookupNames(index.foldedRoots!, query)];
   if(folded.length)return folded.length===1?folded[0]:undefined;
   const chooseScope=(candidates:string[])=>{
-    const temporary=candidates.filter(key=>tables[key]?.temporary);
+    const temporary=candidates.filter(key=>ownTable(tables,key)?.temporary);
     if(temporary.length)return temporary.length===1?temporary[0]:undefined;
-    const catalogOf=(key:string)=>tables[key]?.catalog;
+    const catalogOf=(key:string)=>ownTable(tables,key)?.catalog;
     const selectedCatalog=context?.database ?? context?.schemaSnapshot?.database;
     if(selectedCatalog){const sameCatalog=candidates.filter(key=>!catalogOf(key)|| (strictCase?catalogOf(key)===selectedCatalog:catalogOf(key)?.toLowerCase()===selectedCatalog.toLowerCase()));if(sameCatalog.length)candidates=sameCatalog;}
-    const schemaOf=(key:string)=>tables[key]?.schema??key.split(".").at(-2),selectedSchema=context?.schema ?? context?.schemaSnapshot?.current_schema;
+    const schemaOf=(key:string)=>ownTable(tables,key)?.schema??key.split(".").at(-2),selectedSchema=context?.schema ?? context?.schemaSnapshot?.current_schema;
     if(selectedSchema!==undefined){
       const exactScope=candidates.filter(key=>schemaOf(key)===selectedSchema);
       if(exactScope.length)return exactScope.length===1?exactScope[0]:undefined;
@@ -187,9 +237,67 @@ function resolveTable(name: string | undefined, context: CompletionContext | und
     }
     return candidates.length===1?candidates[0]:undefined;
   };
-  const bareName=(key:string)=>tables[key]?.name??key.split(".").at(-1);
-  const exactBare=keys.filter(key=>bareName(key)===name);
-  return exactBare.length?chooseScope(exactBare):strictCase?undefined:chooseScope(keys.filter(key=>bareName(key)?.toLowerCase()===query));
+  const exactBare = lookupNames(index.bare!, name);
+  return exactBare.length ? chooseScope(exactBare) : strictCase ? undefined
+    : chooseScope([...lookupNames(index.bare!, query), ...lookupNames(index.foldedBare!, query)]);
+}
+
+function searchNames(index: SqlIndex) {
+  if (!index.search) {
+    const names = index.names.map((key, order) => ({ key, order, folded: key.toLowerCase(), bare: key.slice(key.lastIndexOf(".") + 1).toLowerCase() }));
+    const compare = (field: "folded" | "bare") => (a: SearchName, b: SearchName) => a[field] < b[field] ? -1 : a[field] > b[field] ? 1 : a.order - b.order;
+    index.search = { names, full: names.slice().sort(compare("folded")), bare: names.slice().sort(compare("bare")) };
+  }
+  return index.search;
+}
+function prefixRange(names: SearchName[], query: string, field: "folded" | "bare") {
+  const bound = (after: boolean) => {
+    let start = 0, end = names.length;
+    while (start < end) {
+      const middle = (start + end) >>> 1, value = names[middle][field];
+      if (value < query || after && value.startsWith(query)) start = middle + 1; else end = middle;
+    }
+    return start;
+  };
+  return { start: bound(false), end: bound(true) };
+}
+/** Filter names first; construct and escape at most the visible 500 suggestions. */
+function matchingTableNames(index: SqlIndex, prefix: string, qualifier?: string): string[] {
+  const query = prefix.toLowerCase(), namespace = qualifier ? `${qualifier.toLowerCase()}.` : "";
+  if (!query && !namespace) return index.names.slice(0, 500);
+  const search = searchNames(index), fullQuery = namespace + query;
+  const full = prefixRange(search.full, fullQuery, "folded"), bare = query ? prefixRange(search.bare, query, "bare") : { start: 0, end: 0 };
+  const matches = (entry: SearchName) => (!namespace || entry.folded.startsWith(namespace))
+    && (!query || entry.folded.startsWith(fullQuery) || entry.bare.startsWith(query));
+  if (full.end - full.start + bare.end - bare.start > 5_000) {
+    // Broad matches need only the first 500 in metadata order, without
+    // collecting or sorting an entire matching namespace on each key.
+    const result: string[] = [];
+    for (const entry of search.names) if (matches(entry)) { result.push(entry.key); if (result.length === 500) break; }
+    return result;
+  }
+  const candidates = new Map<number, SearchName>();
+  for (let index = full.start; index < full.end; index++) { const entry = search.full[index]; if (matches(entry)) candidates.set(entry.order, entry); }
+  for (let index = bare.start; index < bare.end; index++) { const entry = search.bare[index]; if (matches(entry)) candidates.set(entry.order, entry); }
+  return [...candidates.values()].sort((a, b) => a.order - b.order).slice(0, 500).map(entry => entry.key);
+}
+function tableSuggestions(index: SqlIndex, context: CompletionContext | undefined, prefix: string, qualifier?: string) {
+  const scope = JSON.stringify([context?.dbType ?? context?.schemaSnapshot?.db_type, context?.database ?? context?.schemaSnapshot?.database,
+    context?.schema ?? context?.schemaSnapshot?.current_schema]);
+  let cache = index.items.get(scope);
+  if (!cache) {
+    cache = new Map(); index.items.set(scope, cache);
+    while (index.items.size > 8) index.items.delete(index.items.keys().next().value!);
+  }
+  return matchingTableNames(index, prefix, qualifier).map(key => {
+    const itemKey = JSON.stringify([key, qualifier]), existing = cache!.get(itemKey);
+    if (existing) return existing;
+    const label = qualifier ? key.slice(qualifier.length + 1) : key;
+    const item = { label, kind: "table", insert_text: tableInsertion(key, context, qualifier), sortText: `0:${label}` };
+    cache!.set(itemKey, item);
+    while (cache!.size > 2_048) cache!.delete(cache!.keys().next().value!);
+    return item;
+  });
 }
 
 export function localCompletions(language: Language, site: CompletionSite, context: CompletionContext | undefined,
@@ -209,8 +317,9 @@ export function localCompletions(language: Language, site: CompletionSite, conte
     items.push(...pythonContextSymbols(context));
     items.push(...PYTHON_KEYWORDS.map(label => ({ label, kind: "keyword", sortText: `2:${label}` })), ...PYTHON_BUILTINS.map(label => ({ label, kind: "function", sortText: `2:${label}` })));
   } else {
-    const tables = context?.schemaSnapshot?.tables ?? {}, dbType = context?.schemaSnapshot?.db_type;
-    const { names, items: tableItems } = sqlContext(context);
+    const tables = context?.schemaSnapshot?.tables ?? {}, dbType = context?.dbType ?? context?.schemaSnapshot?.db_type;
+    let index: SqlIndex | undefined;
+    const getIndex = () => index ??= sqlContext(context);
     const prefixStart = documentSource.indexOf(textBefore);
     const scope = sqlCompletionScope(documentSource, sourceCursor ?? (prefixStart < 0 ? textBefore.length : prefixStart + textBefore.length), dbType, Boolean(site.quote));
     if (scope.blocked) return [];
@@ -222,13 +331,10 @@ export function localCompletions(language: Language, site: CompletionSite, conte
       const member = normalizedSqlName(site.memberParts, site.member, dbType);
       const binding = [...relations].reverse().find(relation => dbType === "postgresql" ? relation.qualifier === member : relation.qualifier.toLowerCase() === member.toLowerCase());
       // A CTE or derived table owns its alias even if a physical table shares its name.
-      const tableName = binding ? binding.virtual ? undefined : resolveTable(binding.name, context, names) : resolveTable(member, context, names);
-      const metadata = tableName && tables[tableName];
+      const tableName = binding ? binding.virtual ? undefined : resolveTable(binding.name, context, getIndex) : resolveTable(member, context, getIndex);
+      const metadata = tableName && ownTable(tables, tableName);
       if (metadata) for (const column of metadata.columns ?? []) items.push({ label: column.name, kind: "column", detail: `${tableName} · ${column.data_type ?? column.type ?? ""}`, insert_text: quoteSqlPart(column.name, dbType), sortText: `0:${column.name}` });
-      if (!metadata && !binding) for (const name of names) if (name.toLowerCase().startsWith(`${site.member.toLowerCase()}.`)) {
-        const tail = name.slice(site.member.length + 1);
-        items.push({ label: tail, kind: "table", insert_text: tableInsertion(name,context,site.member), sortText: `0:${tail}` });
-      }
+      if (!metadata && !binding) items.push(...tableSuggestions(getIndex(), context, site.prefix, site.member));
       return filterCompletions(items, site.prefix, language);
     }
     const relation = /\b(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+[^\s]*$/i.test(scope.before);
@@ -236,7 +342,7 @@ export function localCompletions(language: Language, site: CompletionSite, conte
     // round trip for ordinary FROM/JOIN columns, including unqualified names.
     if (!relation && /\b(?:SELECT|WHERE|ON|HAVING|SET|(?:ORDER|GROUP|PARTITION)\s+BY)\b/i.test(scope.before)) {
       for (const visible of relations) {
-        const name = !visible.virtual && resolveTable(visible.name, context, names), metadata = name && tables[name];
+        const name = !visible.virtual && resolveTable(visible.name, context, getIndex), metadata = name && ownTable(tables, name);
         for (const column of metadata ? metadata.columns ?? [] : []) {
           const detail = `${name} · ${column.data_type ?? column.type ?? ""}`;
           items.push({ label: column.name, kind: "column", detail, insert_text: quoteSqlPart(column.name, dbType), sortText: `0:${column.name}` });
@@ -244,7 +350,7 @@ export function localCompletions(language: Language, site: CompletionSite, conte
             insert_text: `${quoteSqlPart(visible.qualifier, dbType)}.${quoteSqlPart(column.name, dbType)}`, sortText: `0:${column.name}:${visible.qualifier}` });
         }
       }
-    } else items.push(...tableItems);
+    } else items.push(...tableSuggestions(getIndex(), context, site.prefix));
     if (!relation) items.push(...SQL_KEYWORDS.map(label => ({ label, kind: "keyword", sortText: `2:${label}` })));
   }
   if (!site.member) for (const sibling of context?.siblings ?? []) {
@@ -284,11 +390,14 @@ export function pythonSymbols(source: string): LanguageCompletion[] {
 /** Prefix filtering happens before the bound, so late-alphabet schema items stay reachable. */
 export function filterCompletions(items: LanguageCompletion[], prefix: string, language: Language): LanguageCompletion[] {
   const query = language === "sql" ? prefix.toLowerCase() : prefix;
-  const matching = items.filter(item => {
+  const matching: LanguageCompletion[] = [];
+  for (const item of items) {
     const label = item.filterText ?? item.label, candidate = language === "sql" ? label.toLowerCase() : label;
-    return !query || candidate.startsWith(query) || (language === "sql" && candidate.split(".").at(-1)?.startsWith(query));
-  });
-  return matching.slice(0, 500);
+    if (!query || candidate.startsWith(query) || (language === "sql" && candidate.slice(candidate.lastIndexOf(".") + 1).startsWith(query))) {
+      matching.push(item); if (matching.length === 500) break;
+    }
+  }
+  return matching;
 }
 
 export function completionInsertion(item: LanguageCompletion, site: CompletionSite, language: Language): string {

@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 from decimal import Decimal
 import json
 import os
 from pathlib import Path
+import sqlite3
 import statistics
 import tempfile
 import time
@@ -56,11 +58,35 @@ def smoke(executable=None, timeout=90, report=None):
             details = client.request("explorer.details", {"session_id": "parity", "name": "sample", "schema": "main"})
             assert details["primary_key"]["constrained_columns"] == ["id"]
             assert "CREATE TABLE" in details["definition"]
+            preparation = client.request("language.prepare", {"session_id": "parity", "code": "SELECT s. FROM sample s"})
+            assert preparation["status"] == "queued", preparation
+            prepared = client.wait(lambda item: item.get("event") == "language.context_updated"
+                                   and "main.sample" in item.get("payload", {}).get("schema_snapshot", {}).get("columns", {}))["payload"]
+            assert prepared["metadata_state"] == "ready" and prepared["requested_scope"] == {"connection_id": None, "database": None, "schema": None}, prepared
             completion = client.request("language.complete", {"session_id": "parity", "language": "sql", "code": "SELECT s. FROM sample s", "line": 1, "column": 10})
-            if not completion["items"]:
-                client.request("explorer.list", {"session_id": "parity"})
-                completion = client.request("language.complete", {"session_id": "parity", "language": "sql", "code": "SELECT s. FROM sample s", "line": 1, "column": 10})
             assert {"id", "title"} <= {item["label"] for item in completion["items"]}, completion
+            # The frozen editor warms each scope before typing, and force
+            # refresh must observe external catalog changes inside the TTL.
+            scoped_database = root / "completion-scope.sqlite"
+            with closing(sqlite3.connect(scoped_database)) as connection, connection:
+                connection.execute("CREATE TABLE sample(other_scope_value INTEGER)")
+            scoped_profile = client.request("connections.save", {"connection": {"name": "Completion scope", "config": {"db_type": "sqlite", "database": str(scoped_database)}}})
+            scope_request = {"session_id": "parity", "connection_id": scoped_profile["id"], "code": "SELECT s. FROM sample s"}
+            assert client.request("language.prepare", scope_request)["status"] == "queued"
+            client.wait(lambda item: item.get("event") == "language.context_updated"
+                        and item["payload"].get("connection_id") == scoped_profile["id"]
+                        and item["payload"].get("metadata_state") == "ready")
+            scoped_completion = {**scope_request, "language": "sql", "line": 1, "column": 10}
+            assert {item["label"] for item in client.request("language.complete", scoped_completion)["items"]} == {"other_scope_value"}
+            with closing(sqlite3.connect(scoped_database)) as connection, connection:
+                connection.execute("ALTER TABLE sample ADD COLUMN refreshed_scope_value TEXT")
+            assert client.request("language.prepare", {**scope_request, "refresh": True})["status"] == "queued"
+            client.wait(lambda item: item.get("event") == "language.context_updated"
+                        and item["payload"].get("connection_id") == scoped_profile["id"]
+                        and any(column["name"] == "refreshed_scope_value" for column in item["payload"].get("schema_snapshot", {}).get("columns", {}).get("main.sample", [])))
+            assert {item["label"] for item in client.request("language.complete", scoped_completion)["items"]} == {"other_scope_value", "refreshed_scope_value"}
+            assert {item["label"] for item in client.request("language.complete", {"session_id": "parity", "language": "sql", "code": "SELECT s. FROM sample s", "line": 1, "column": 10})["items"]} == {"id", "title"}
+            metrics["completion_scope_cases"] = 3
             completion_start = time.perf_counter()
             python_completion = client.request("language.complete", {"session_id": "parity", "language": "python", "code": "df.", "line": 1, "column": 4})
             assert any(item["label"] == "columns" for item in python_completion["items"])

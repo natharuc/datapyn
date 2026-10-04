@@ -180,7 +180,6 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
     connector = None
     context_key = "default"
     connection_labels = {}
-    editor_contexts = {}
     snapshot_dirty = False
 
     def autosave():
@@ -229,9 +228,10 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
             schema = pool.explorer().completion_schema((params or {}).get("code", ""))
             context.update({"schema": schema, "database": schema.get("database", ""),
                             "schema_name": schema.get("current_schema", ""),
+                            "metadata_state": "ready", "schema_error": None,
+                            "requested_scope": {field: (params or {}).get(field) for field in ("connection_id", "database", "schema")},
                             "schema_complete": bool((params or {}).get("code")),
                             "version": time.monotonic_ns()})
-            editor_contexts[key] = schema
         send({"language_context": context})
 
     send({"ready": True})
@@ -421,6 +421,7 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                     activate(routed, default=method == "explorer.use_database")
                     if method == "explorer.use_database":
                         result = pool.explorer().context()
+                        publish_context(invalidated=True)
                     elif method == "explorer.snapshot":
                         result = pool.explorer().completion_schema()
                     else:
@@ -428,10 +429,20 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                 elif method == "language.context":
                     try:
                         activate(params)
+                        if params.get("refresh"):
+                            pool.explorer().cache.clear()
+                            pool.explorer().column_cache.clear()
                         publish_context(params, metadata=True)
-                    except BaseException:
+                    except Exception as exc:
                         key = "|".join(str(params.get(key) or "") for key in ("connection_id", "database", "schema")) or "default"
-                        send({"language_context": {"key": key, "variables": namespace_snapshot(namespace)}})
+                        config = params.get("_connection_config") or params.get("config") or pool.default_config or {}
+                        send({"language_context": {"key": key, "variables": namespace_snapshot(namespace),
+                              "connection_id": params.get("connection_id") or pool.default_id,
+                              "database": params.get("database") or config.get("database", ""),
+                              "schema_name": params.get("schema") or config.get("schema") or config.get("postgresql_schema") or config.get("databricks_schema") or "",
+                              "schema": {}, "schema_complete": False, "metadata_state": "error",
+                              "requested_scope": {field: params.get(field) for field in ("connection_id", "database", "schema")},
+                              "schema_error": f"{type(exc).__name__}: {exc}"[:2048]}})
                     result = {"status": "updated"}
                 elif method in {"data.import", "variable.inspect", "variable.delete", "result.export", "result.export_text", "result.summary", "result.chart", "result.chart_export", "result.export_table", "document.read", "document.script_export", "variable.archive.list", "variable.archive.export", "variable.archive.import"}:
                     from .data_tools import dispatch as data_dispatch

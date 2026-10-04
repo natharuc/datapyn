@@ -479,5 +479,13 @@
   "Baixar consulta":"Download query",
   "Sem resultados.":"No results.",
   "Sem gráfico.":"No chart.",
-  "Sem variáveis.":"No variables."
+  "Sem variáveis.":"No variables.",
+  "Catálogo":"Catalog",
+  "Selecionar {label}":"Select {label}",
+  "Selecionar schema":"Select schema",
+  "Pesquisar {label}":"Search {label}",
+  "Pesquisar {label}…":"Search {label}…",
+  "Nenhum resultado.":"No results.",
+  "Não foi possível carregar os metadados SQL.":"Unable to load SQL metadata.",
+  "Schema":"Schema"
 }

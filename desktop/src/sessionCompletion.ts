@@ -1,14 +1,14 @@
 import type {CompletionContext} from "./editorLanguage";
 import type {LanguageContextUpdate, RuntimeEvent} from "./runtime";
-import type {Block, SessionDocument} from "./workspace";
+import type {Block, ConnectionConfig, SessionDocument} from "./workspace";
 
 type Schema = NonNullable<CompletionContext["schemaSnapshot"]>;
-interface Snapshot {version:number; schemaSnapshot?:Schema; tables:string[]}
+interface Snapshot {version:number; schemaSnapshot?:Schema; tables:string[]; metadataState?:"ready"|"error";error?:string|null}
 const scopeKey=(connection?:string,database?:string,schema?:string)=>JSON.stringify([connection ?? "",database ?? "",schema ?? ""]);
 
 /** Metadata arrives independently of typing; each connection scope keeps its own bounded index. */
 export class SessionLanguageContexts {
-  private sessions=new Map<string,{variables:LanguageContextUpdate["variables"];variableSignature:string;namespaceVersion:number;version:number;scopes:Map<string,Snapshot>}>();
+  private sessions=new Map<string,{variables:LanguageContextUpdate["variables"];variableSignature:string;namespaceVersion:number;version:number;hasRequestedScopes:boolean;scopes:Map<string,Snapshot>}>();
   accept(event:RuntimeEvent):boolean {
     if(event.event === "backend.exited"){const changed=this.sessions.size>0;this.sessions.clear();return changed;}
     if(["session.reset","session.error","session.ready"].includes(event.event))return this.sessions.delete(event.payload.session_id);
@@ -16,7 +16,11 @@ export class SessionLanguageContexts {
     const p=event.payload,previous=this.sessions.get(p.session_id);
     if(previous && p.version<=previous.version)return false;
     const scopes=previous?.scopes ?? new Map<string,Snapshot>();let key=scopeKey(p.connection_id,p.database,p.schema);
-    if(p.metadata_invalidated)for(const oldKey of scopes.keys())if((JSON.parse(oldKey) as string[])[0]===(p.connection_id ?? ""))scopes.delete(oldKey);
+    if(p.metadata_invalidated){
+      const invalidated=new Set<Snapshot>();
+      for(const [oldKey,value] of scopes)if((JSON.parse(oldKey) as string[])[0]===(p.connection_id ?? ""))invalidated.add(value);
+      for(const [oldKey,value] of scopes)if(invalidated.has(value))scopes.delete(oldKey);
+    }
     // A namespace-only event does not define a new unresolved SQL scope. Keep
     // the most recent metadata for this connection instead of shadowing it
     // with an empty [connection,"",""] entry after an execution.
@@ -28,7 +32,7 @@ export class SessionLanguageContexts {
     let schemaSnapshot=old?.schemaSnapshot,tables=old?.tables ?? [];
     if(p.schema_snapshot){
       const entries=p.schema_snapshot.tables ?? [];
-      schemaSnapshot={db_type:p.schema_snapshot.db_type,database:p.schema_snapshot.database ?? p.database,current_schema:p.schema_snapshot.current_schema ?? p.schema,tables:{}};
+      schemaSnapshot={db_type:p.schema_snapshot.db_type,database:p.schema_snapshot.database ?? p.database,current_schema:p.schema_snapshot.current_schema ?? p.schema,tables:Object.create(null)};
       tables=[];
       for(const table of entries){
         const name=table.key || [table.schema,table.name].filter(Boolean).join(".");
@@ -39,30 +43,59 @@ export class SessionLanguageContexts {
     }
     // Namespace-only publishes keep the loaded schema's revision stable.
     const schemaVersion=p.schema_snapshot ? p.version : old?.version ?? p.version;
-    scopes.delete(key);scopes.set(key,{version:schemaVersion,schemaSnapshot,tables});
+    const snapshot=!p.schema_snapshot && old ? old : {version:schemaVersion,schemaSnapshot,tables,metadataState:p.metadata_state ?? old?.metadataState,error:p.schema_error ?? (p.metadata_state==="ready"?undefined:old?.error)};
+    scopes.delete(key);scopes.set(key,snapshot);
+    // Requested defaults and the resolved catalogue share the same immutable
+    // snapshot. Never guess a default schema from whichever scope arrived last.
+    if(p.requested_scope){
+      const request=p.requested_scope,requested=scopeKey(request.connection_id ?? undefined,request.database ?? undefined,request.schema ?? undefined);
+      scopes.delete(requested);scopes.set(requested,snapshot);
+    }
     while(scopes.size>32)scopes.delete(scopes.keys().next().value!);
     const variableSignature=JSON.stringify(p.variables),namespaceVersion=(previous?.namespaceVersion ?? 0)+(previous?.variableSignature===variableSignature ? 0 : 1);
-    this.sessions.set(p.session_id,{variables:p.variables,variableSignature,namespaceVersion,version:p.version,scopes});return true;
+    this.sessions.set(p.session_id,{variables:p.variables,variableSignature,namespaceVersion,version:p.version,hasRequestedScopes:Boolean(p.requested_scope)||Boolean(previous?.hasRequestedScopes),scopes});return true;
   }
   retain(ids:ReadonlySet<string>){for(const id of this.sessions.keys())if(!ids.has(id))this.sessions.delete(id);}
   get(sessionId:string,connection?:string,database?:string,schema?:string){
     const session=this.sessions.get(sessionId);if(!session)return undefined;
     let snapshot=session.scopes.get(scopeKey(connection,database,schema));
     // Empty inherited database/schema accepts the resolved default for the SAME connection only.
-    if(!snapshot && (!database || !schema))for(const [key,value] of session.scopes){
-      const [c,d,s]=JSON.parse(key) as string[];
-      if(c===(connection ?? "") && (!database || d===database) && (!schema || s===schema))snapshot=value;
+    if(!snapshot && !session.hasRequestedScopes && (!database || !schema)){
+      const candidates=new Set<Snapshot>();
+      for(const [key,value] of session.scopes){const [c,d,s]=JSON.parse(key) as string[];
+        if(c===(connection ?? "") && (!database || d===database) && (!schema || s===schema))candidates.add(value);
+      }
+      if(candidates.size===1)snapshot=candidates.values().next().value;
     }
     return {variables:session.variables,namespaceVersion:session.namespaceVersion,...snapshot};
+  }
+  invalidateConnection(sessionId:string,connection?:string){
+    const session=this.sessions.get(sessionId);if(!session)return false;
+    const targets=new Set<Snapshot>();
+    for(const [key,value] of session.scopes)if((JSON.parse(key) as string[])[0]===(connection ?? ""))targets.add(value);
+    for(const [key,value] of session.scopes)if(targets.has(value))session.scopes.delete(key);
+    return targets.size>0;
+  }
+  invalidate(sessionId:string,connection?:string,database?:string,schema?:string){
+    const session=this.sessions.get(sessionId);if(!session)return false;
+    const selected=session.scopes.get(scopeKey(connection,database,schema));let changed=false;
+    for(const [key,value] of session.scopes){
+      if(value===selected || key===scopeKey(connection,database,schema)){session.scopes.delete(key);changed=true;}
+    }
+    return changed;
   }
 }
 
 interface ParsedBlock {code:string;language:string;cellType?:string;imports:string[];hasCode:boolean;preamble:string}
 /** A block routed elsewhere inherits that connection's defaults, never another connection's database. */
-export function completionConnectionScope(session:SessionDocument,block:Block) {
+export function completionConnectionScope(session:SessionDocument,block:Block,defaults?:Partial<ConnectionConfig>) {
   const inherits=block.connection_id===undefined || block.connection_id===session.savedConnectionId;
+  const inheritedDatabase=(inherits?session.database ?? session.connection?.database:undefined) ?? defaults?.database;
+  const database=block.database_name ?? inheritedDatabase;
+  const sameDatabase=block.database_name===undefined || block.database_name===inheritedDatabase;
+  const configuredSchema=defaults?.database && database!==defaults.database ? undefined : defaults?.schema;
   return {connectionId:block.connection_id ?? session.savedConnectionId,
-    database:block.database_name ?? (inherits?session.database:undefined),schema:block.schema ?? (inherits?session.schema:undefined)};
+    database,schema:block.schema ?? (sameDatabase ? (inherits?session.schema:undefined) ?? configuredSchema ?? (inherits && database===session.connection?.database?session.connection?.schema:undefined) : undefined)};
 }
 const MAX_PREAMBLE=200_000,MAX_IMPORTS=32_000;
 export interface SessionDiagnosticsContext { globalImports:string; preamble:string }
@@ -169,10 +202,10 @@ export class SessionCompletionIndex {
     const context={globalImports:importParts.join("\n"),preamble:parts.join("\n")};
     source.context=context;return context;
   }
-  context(session:SessionDocument,blockId:string,contexts:SessionLanguageContexts):CompletionContext|undefined {
+  context(session:SessionDocument,blockId:string,contexts:SessionLanguageContexts,defaults?:Partial<ConnectionConfig>):CompletionContext|undefined {
     const block=session.blocks.find(b=>b.id===blockId);if(!block)return undefined;
     this.diagnosticsRevision(session);
-    const {connectionId,database,schema}=completionConnectionScope(session,block);
+    const {connectionId,database,schema}=completionConnectionScope(session,block,defaults);
     const snapshot=contexts.get(session.id,connectionId,database,schema);
     const variables=new Map((snapshot ? [] : session.variables).map(v=>[v.name,{name:v.name,type:v.type} as CompletionContext["variables"][number]]));
     for(const [name,v] of Object.entries(snapshot?.variables ?? {}))variables.set(name,{name,...v});
@@ -198,7 +231,7 @@ export class SessionCompletionIndex {
     }
     const importParts:string[]=[];let importsLength=0;
     for(const line of imports)if(importsLength+line.length+1<=MAX_IMPORTS){importParts.push(line);importsLength+=line.length+1;}
-    return {sessionId:session.id,connectionId,database,schema,variables:[...variables.values()],tables:snapshot?.tables ?? [],
+    return {sessionId:session.id,connectionId,database,schema,dbType:defaults?.db_type ?? (block.connection_id===undefined || block.connection_id===session.savedConnectionId?session.connection?.db_type:undefined),variables:[...variables.values()],tables:snapshot?.tables ?? [],
       schemaSnapshot:block.language === "sql" ? snapshot?.schemaSnapshot : undefined,schemaVersion:block.language === "sql" ? snapshot?.version : undefined,namespaceVersion:snapshot?.namespaceVersion,
       globalImports:importParts.join("\n"),preamble:parts.join("\n"),siblings};
   }

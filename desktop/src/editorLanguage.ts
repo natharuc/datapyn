@@ -2,7 +2,7 @@ import type { Language, RuntimeTransport } from "./runtime";
 
 export interface CompletionContext {
   variables: Array<{ name: string; type: string; columns?: string[]; module?: string }>; tables: string[];
-  sessionId?: string; connectionId?: string; database?: string; schema?: string; globalImports?: string;
+  sessionId?: string; connectionId?: string; database?: string; schema?: string; dbType?: string; globalImports?: string;
   preamble?: string;
   schemaSnapshot?: { db_type?: string; database?: string; current_schema?: string; tables?: Record<string, { name?: string; schema?: string; catalog?: string; temporary?: boolean; columns?: Array<{ name: string; type?: string; data_type?: string }> }> };
   schemaVersion?: number; namespaceVersion?: number;

@@ -11,6 +11,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:autocomplete": "node scripts/test-autocomplete.mjs",
     "desktop:dev": "node ../scripts/tauri/dev.mjs",
     "runtime:bundle": "node ../scripts/tauri/runtime.mjs",
     "desktop:build": "node ../scripts/tauri/build.mjs",
@@ -44,6 +45,7 @@
     "@types/react": "^18.3.28",
     "@types/react-dom": "^18.3.7",
     "@vitejs/plugin-react": "^6.1.1",
+    "playwright": "1.62.1",
     "typescript": "^5.9.3",
     "vite": "^8.3.2",
     "vitest": "^5.0.3"

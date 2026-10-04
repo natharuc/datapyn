@@ -39,12 +39,18 @@ class ObjectExplorer:
         if self.db_type == "sqlite":
             schema = "main"
         elif self.db_type == "postgresql":
-            schema = schema or "public"
+            schema = schema or config.get("postgresql_schema") or "public"
         elif self.db_type == "sqlserver":
             schema = schema or "dbo"
         elif self.db_type in {"mysql", "mariadb"}:
-            schema = schema or database
+            schema = database
+        elif self.db_type == "databricks":
+            schema = schema or config.get("databricks_schema") or "default"
         for method, key in (("get_current_database", "database"), ("get_current_schema", "schema")):
+            # The reused connector's schema getter is meaningful only for
+            # PostgreSQL/Databricks; other drivers return Databricks' default.
+            if key == "schema" and self.db_type not in {"postgresql", "databricks"}:
+                continue
             getter = getattr(self.connector, method, None)
             if callable(getter):
                 try:
@@ -85,11 +91,10 @@ class ObjectExplorer:
     def databases(self):
         if self.db_type == "sqlite":
             return [row[1] for row in self.connector.connection.execute("PRAGMA database_list")]
-        if self.db_type == "postgresql":
-            return [self.context()["database"]]  # PostgreSQL schema chip, database requires reconnect.
-        query = "SELECT name FROM sys.databases WHERE state_desc='ONLINE' ORDER BY name" if self.db_type == "sqlserver" else "SHOW CATALOGS" if self.db_type == "databricks" else "SHOW DATABASES"
+        query = ("SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate "
+                 "AND has_database_privilege(datname, 'CONNECT') ORDER BY datname") if self.db_type == "postgresql" else "SELECT name FROM sys.databases WHERE state_desc='ONLINE' ORDER BY name" if self.db_type == "sqlserver" else "SHOW CATALOGS" if self.db_type == "databricks" else "SHOW DATABASES"
         frame = self.connector.execute_query(query)
-        return [str(value) for value in frame.iloc[:, 0].tolist()][:5000]
+        return [str(value) for value in frame.iloc[:, 0].tolist()]
 
     def schemas(self, database=""):
         if self.db_type == "sqlite":
@@ -99,21 +104,22 @@ class ObjectExplorer:
             return [database or self.context()["database"]]
         if self.db_type == "databricks":
             frame = self.connector.execute_query(f"SHOW SCHEMAS IN {quote(self.db_type, database or self.context()['database'])}")
-            return [str(value) for value in frame.iloc[:, 0].tolist() if str(value) != "information_schema"][:5000]
+            return [str(value) for value in frame.iloc[:, 0].tolist() if str(value) != "information_schema"]
         from sqlalchemy import inspect
         return [str(value) for value in inspect(self.connector.engine).get_schema_names()
-                if str(value) not in {"information_schema", "pg_catalog", "pg_toast"} and not str(value).startswith("pg_temp")][:5000]
+                if str(value) not in {"information_schema", "pg_catalog", "pg_toast"} and not str(value).startswith("pg_temp")]
 
     def objects(self, schema, category):
         if category in {"table", "view"}:
             from sqlalchemy import inspect
             inspector = inspect(self.connector.engine)
             names = inspector.get_table_names(schema=schema) if category == "table" else inspector.get_view_names(schema=schema)
-            nodes = [self._node(name, category, schema=schema, database=self.context()["database"], children=True) for name in sorted(names)[:10000]]
-            if category == "table" and schema == self.context()["schema"]:
+            context = self.context()
+            nodes = [self._node(name, category, schema=schema, database=context["database"], children=True) for name in sorted(names)]
+            if category == "table" and schema == context["schema"]:
                 for name, metadata in getattr(self.connector, "_datapyn_temporary_tables", {}).items():
                     nodes = [node for node in nodes if node["name"] != name or node["schema"] != metadata["schema"]]
-                    nodes.append(self._node(name, "table", schema=metadata["schema"], database=self.context()["database"], children=True, temporary=True))
+                    nodes.append(self._node(name, "table", schema=metadata["schema"], database=context["database"], children=True, temporary=True))
             return nodes
         if self.db_type == "sqlite":
             return []
@@ -123,7 +129,8 @@ class ObjectExplorer:
             query = f"SELECT o.name FROM sys.objects o JOIN sys.schemas s ON s.schema_id=o.schema_id WHERE s.name={literal(schema)} AND o.type IN ({types}) ORDER BY o.name"
         else:
             query = f"SELECT routine_name AS name FROM information_schema.routines WHERE routine_schema={literal(schema)} AND routine_type={literal(routine_type)} ORDER BY routine_name"
-        return [self._node(str(row["name"]), category, schema=schema, database=self.context()["database"], children=False) for row in self._records(query)][:10000]
+        context = self.context()
+        return [self._node(str(row["name"]), category, schema=schema, database=context["database"], children=False) for row in self._records(query)]
 
     def columns(self, name, schema=""):
         temporary = getattr(self.connector, "_datapyn_temporary_tables", {}).get(name)
@@ -285,7 +292,7 @@ class ObjectExplorer:
         schemas = self._cached(("schemas", context["database"]), lambda: self.schemas(context["database"]))
         requested_schemas = [schema]
         from .sql_context import metadata_signature
-        references, prefixes, routines = metadata_signature(code)
+        references, prefixes, routines = metadata_signature(code, self.db_type)
         referenced_names = {part for path in references + prefixes for part in path}
         for candidate in schemas:
             if candidate != schema and candidate.casefold() in referenced_names:
@@ -298,7 +305,13 @@ class ObjectExplorer:
             if table["name"].casefold() in referenced_names:
                 self.columns(table["name"], table["schema"])
         catalog = context["database"] if self.db_type in {"databricks", "sqlserver"} else ""
-        result = {**context, "current_schema": schema, "databases": self._cached(("databases",), self.databases),
+        # Listing other databases may require extra catalog privileges. Keep
+        # local tables/columns usable when only that discovery call is denied.
+        try:
+            databases = self._cached(("databases",), self.databases)
+        except Exception:
+            databases = [context["database"]] if context["database"] else []
+        result = {**context, "current_schema": schema, "databases": databases,
                   "schemas": schemas,
                   "tables": [{"name": t["name"], "schema": t["schema"], "catalog": "" if t.get("temporary") else catalog, "key": ".".join(part for part in (("" if t.get("temporary") else catalog), t["schema"], t["name"]) if part), "type": t["kind"].upper(), **({"temporary": True} if t.get("temporary") else {})} for t in tables],
                   "columns": {".".join(part for part in (catalog, s, name) if part): columns for (s, name), columns in self.column_cache.items()},
@@ -329,9 +342,9 @@ class ObjectExplorer:
             def load_schemas(catalog=catalog):
                 if self.db_type == "databricks":
                     rows = self._records(f"SHOW SCHEMAS IN {quote(self.db_type, catalog)}")
-                    return [str(next(iter(row.values()))) for row in rows][:5000]
+                    return [str(next(iter(row.values()))) for row in rows]
                 rows = self._records(f"SELECT name FROM {quote(self.db_type, catalog)}.sys.schemas WHERE name NOT IN ('sys', 'INFORMATION_SCHEMA') ORDER BY name")
-                return [str(row["name"]) for row in rows][:5000]
+                return [str(row["name"]) for row in rows]
             try:
                 catalog_schemas[catalog] = self._cached(("completion_schemas", catalog), load_schemas)
             except Exception:
@@ -350,9 +363,9 @@ class ObjectExplorer:
             def load_tables(catalog=catalog, schema=schema):
                 if self.db_type == "databricks":
                     rows = self._records(f"SHOW TABLES IN {quote(self.db_type, catalog, schema)}")
-                    return [{"name": str(row["tablename"]), "kind": "TABLE"} for row in rows if row.get("tablename")][:10000]
+                    return [{"name": str(row["tablename"]), "kind": "TABLE"} for row in rows if row.get("tablename")]
                 rows = self._records(f"SELECT TABLE_NAME AS name, TABLE_TYPE AS kind FROM {quote(self.db_type, catalog)}.INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA={literal(schema)} ORDER BY TABLE_NAME")
-                return [{"name": str(row["name"]), "kind": "VIEW" if row.get("kind") == "VIEW" else "TABLE"} for row in rows][:10000]
+                return [{"name": str(row["name"]), "kind": "VIEW" if row.get("kind") == "VIEW" else "TABLE"} for row in rows]
             try:
                 tables = self._cached(("completion_tables", catalog, schema), load_tables)
             except Exception:

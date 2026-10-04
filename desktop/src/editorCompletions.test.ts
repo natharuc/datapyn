@@ -208,6 +208,14 @@ describe("instant local completion scope", () => {
       expect(localCompletions("sql",site("sql","normal.|"),scoped,"normal.")[0].insert_text).toBe(expectedColumn);
     }
   });
+  it.each([["sqlserver","[orders]"],["mysql","`orders`"],["mariadb","`orders`"],["databricks","`orders`"],["postgresql",'"orders"'],["sqlite",'"orders"']])("uses %s saved dialect before a metadata snapshot arrives",(dbType,expected)=>{
+    const scoped:CompletionContext={variables:[],tables:["orders"],dbType};
+    expect(localCompletions("sql",site("sql","FROM |"),scoped,"FROM ")[0].insert_text).toBe(expected);
+  });
+  it("keeps saved dialect authoritative when late metadata belongs to the previous connection",()=>{
+    const scoped:CompletionContext={variables:[],tables:["public.orders"],dbType:"mysql",schemaSnapshot:{db_type:"sqlserver",tables:{"public.orders":{name:"orders",schema:"public",columns:[{name:"customer_id"}]}}}};
+    expect(localCompletions("sql",site("sql","orders.|"),scoped,"orders.")[0].insert_text).toBe("`customer_id`");
+  });
   it("treats metadata object names containing a dot as a single identifier before remote enrichment", () => {
     const scoped:CompletionContext={variables:[],tables:["main.a.b"],schemaSnapshot:{db_type:"sqlite",tables:{"main.a.b":{name:"a.b",schema:"main",columns:[]}}}};
     expect(localCompletions("sql",site("sql","FROM |"),scoped,"FROM ")[0].insert_text).toBe('"main"."a.b"');

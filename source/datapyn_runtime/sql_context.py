@@ -100,9 +100,62 @@ def _parts(path):
                  for part in _PART.findall(path))
 
 
-def metadata_signature(code):
-    cleaned = sql_code_mask(code or "")
+def _comma_relations(code, db_type):
+    """Use the existing dialect lexer for comma-separated FROM sources."""
+    if "," not in code:
+        return set()
+    from sqlglot import Dialect
+    from sqlglot.tokens import TokenType
+    dialect = {"sqlserver": "tsql", "postgresql": "postgres", "mariadb": "mysql"}.get(db_type, db_type or "tsql")
+    # An unfinished quoted field must not hide valid FROM sources to its left.
+    masked = list(code)
+    for start, end, kind, closed in lexical_spans(code, db_type):
+        if kind == "identifier" and not closed:
+            masked[start:end] = [" " if char != "\n" else "\n" for char in code[start:end]]
+    cleaned = "".join(masked)
+    try:
+        tokens = Dialect.get_or_raise(dialect).tokenizer().tokenize(cleaned)
+    except Exception:
+        return set()
+    identifiers = {TokenType.VAR, TokenType.IDENTIFIER}
+    ending = {TokenType.WHERE, TokenType.GROUP_BY, TokenType.ORDER_BY, TokenType.HAVING,
+              TokenType.QUALIFY, TokenType.LIMIT, TokenType.OFFSET, TokenType.UNION,
+              TokenType.EXCEPT, TokenType.INTERSECT, TokenType.RETURNING, TokenType.SET,
+              TokenType.VALUES, TokenType.SEMICOLON, TokenType.SELECT}
+    depth, from_depths, references = 0, set(), set()
+    for index, token in enumerate(tokens):
+        kind = token.token_type
+        if kind == TokenType.L_PAREN:
+            depth += 1
+        elif kind == TokenType.R_PAREN:
+            from_depths.discard(depth)
+            depth = max(0, depth - 1)
+        elif kind == TokenType.FROM:
+            from_depths.add(depth)
+        elif kind in ending:
+            from_depths.discard(depth)
+        elif kind == TokenType.COMMA and depth in from_depths:
+            cursor = index + 1
+            if cursor >= len(tokens) or tokens[cursor].token_type not in identifiers:
+                continue
+            start, end = tokens[cursor].start, tokens[cursor].end + 1
+            cursor += 1
+            while cursor < len(tokens) and tokens[cursor].token_type == TokenType.DOT:
+                cursor += 1
+                if cursor < len(tokens) and tokens[cursor].token_type == TokenType.DOT:
+                    cursor += 1  # SQL Server database..table.
+                if cursor >= len(tokens) or tokens[cursor].token_type not in identifiers:
+                    break
+                end = tokens[cursor].end + 1
+                cursor += 1
+            references.add(_parts(cleaned[start:end]))
+    return references
+
+
+def metadata_signature(code, db_type=""):
+    cleaned = sql_code_mask(code or "", db_type)
     references = {_parts(match.group(1)) for match in _RELATION.finditer(cleaned)}
+    references.update(_comma_relations(cleaned, db_type))
     # Only the prefix ending at a dot matters. The partial field to its right
     # changes on every key and cannot introduce new database metadata.
     prefixes = {_parts(match.group(1)) for match in _DOTTED.finditer(cleaned)}

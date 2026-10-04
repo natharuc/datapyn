@@ -453,8 +453,8 @@ export class WorkspaceController {
     this.patchSession(sessionId, s => ({ ...s, connection: undefined, savedConnectionId: undefined, database: undefined, schema: undefined,extras:{...s.extras,connection_name:undefined,connection_group:undefined} }));
   }
   setContext(sessionId: string, context: { database?: string; schema?: string }, blockId?: string) {
-    if (blockId && this.session(sessionId)?.blocks[0].id !== blockId) { this.updateBlock(sessionId, blockId, { database_name: context.database, schema: context.schema }); return; }
-    this.patchSession(sessionId, s => ({ ...s, ...context }));
+    if (blockId) { this.updateBlock(sessionId, blockId, { database_name: context.database, schema: context.schema }); return; }
+    this.patchSession(sessionId, s => ({ ...s, ...context,modified:true }));
   }
   async startPeriodic(sessionId: string, seconds: number) {
     if (!Number.isFinite(seconds) || seconds < 1) throw new Error("Informe um intervalo de pelo menos um segundo.");

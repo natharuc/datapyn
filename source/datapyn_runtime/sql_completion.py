@@ -213,10 +213,12 @@ class RuntimeSqlAutoCompleteService(SqlAutoCompleteService):
                 return temporary[0] if len(temporary) == 1 else None
         current_catalog = self._normalize_name(self._schema.get("database", ""))
         current_schema = self._normalize_name(self._schema.get("current_schema", ""))
+        literal_current_schema = str(self._schema.get("current_schema", ""))
         def rank(entry):
             catalog = self._normalize_name(entry["catalog"])
             schema = self._normalize_name(entry["schema"])
             catalog_rank = 0 if catalog_name and catalog == self._normalize_name(catalog_name) else 1 if current_catalog and catalog == current_catalog else 2 if not catalog else 3
-            schema_rank = 0 if schema_name and schema == self._normalize_name(schema_name) else 1 if self._schema_db_type == "databricks" and current_schema and schema == current_schema else 2 if schema in DEFAULT_SCHEMA_PRIORITY else 3 if not schema else 4
+            selected_schema = entry["schema"] == literal_current_schema if self._schema_db_type in {"postgres", "postgresql"} else schema == current_schema
+            schema_rank = 0 if schema_name and schema == self._normalize_name(schema_name) else 1 if current_schema and selected_schema else 2 if schema in DEFAULT_SCHEMA_PRIORITY else 3 if not schema else 4
             return catalog_rank, schema_rank, DEFAULT_SCHEMA_PRIORITY.index(schema) if schema in DEFAULT_SCHEMA_PRIORITY else 0, entry["detail"]
         return min(exact, key=rank)

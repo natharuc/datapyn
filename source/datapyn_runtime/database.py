@@ -166,6 +166,11 @@ class ConnectorPool:
         database_override = params.get("database")
         schema_override = params.get("schema")
         if database_override and config.get("db_type") != "sqlite":
+            if str(database_override) != str(config.get("database") or "") and not schema_override:
+                # Schema defaults belong to a database/catalog. An inherited
+                # schema from the previous database can be absent in the new one.
+                for field in ("schema", "postgresql_schema", "databricks_schema"):
+                    config.pop(field, None)
             config["database"] = str(database_override)
         if schema_override and config.get("db_type") != "sqlite":
             config["schema"] = str(schema_override)

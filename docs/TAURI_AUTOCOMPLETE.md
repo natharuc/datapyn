@@ -2,6 +2,30 @@
 
 O editor retorna sugestões locais imediatamente. Jedi e metadados de bancos são enriquecidos em segundo plano, com caches limitados, debounce e cancelamento por requisição.
 
+## Seleção de banco/schema e preparação do editor
+
+O cabeçalho de cada bloco SQL mostra conexão, banco (catálogo no Databricks) e schema quando a plataforma possui esse contexto. Banco/schema abrem uma lista pesquisável com navegação por teclado, pesquisa local e renderização virtualizada. SQLite mostra o arquivo atual: trocar arquivos usa conexões; aliases `main`/`temp` não representam outra conexão.
+
+A seleção é específica do bloco, inclusive do primeiro. Trocar banco limpa o schema específico anterior e deixa o driver resolver o padrão do novo banco. Execução, diagnósticos, Explorer, exportações e autocomplete usam a mesma precedência. Novos blocos gerados pelo Explorer recebem o contexto de origem; trocar a conexão por arraste limpa banco/schema antigos.
+
+`language.prepare` agenda o catálogo do bloco focado antes da primeira solicitação de sugestões. Os pedidos usam a conexão e os defaults reais da configuração; o dialeto já está disponível no frontend antes de chegar o catálogo. O preparo acompanha mudanças de foco/contexto, agrupa pedidos equivalentes e mantém caches limitados, sem consultar o banco a cada tecla. Atualizar metadados força a recarga mesmo dentro do TTL. Alterações na configuração da conexão descartam os índices do servidor anterior.
+
+Eventos de metadados incluem `requested_scope` e o contexto resolvido pelo driver. O frontend relaciona esses dois endereços por identidade do snapshot, incluindo conexões implícitas (`transient`), e remove todos os aliases na invalidação. Eventos somente de variáveis preservam esse catálogo. Uma falha de acesso publica `metadata_state: error`, limpa o snapshot anterior e apresenta o erro na barra de status, evitando um catálogo silenciosamente vazio ou de outro schema.
+
+SQL Server, MySQL e MariaDB deixam de receber o schema artificial `default`. PostgreSQL descobre os bancos acessíveis e prioriza o schema focado quando existe o mesmo nome de tabela em outro schema. O preparo reconhece fontes separadas por vírgula e subqueries. Listas de nomes já obtidas do driver não são truncadas em 10 mil objetos; colunas continuam carregadas sob demanda e armazenadas em caches limitados.
+
+Teste do editor real, sem operar o desktop: `npm --prefix desktop run test:autocomplete`. Em uma máquina sem Chromium de teste, instalar com `npm --prefix desktop exec playwright install chromium`. O runner usa Monaco e os componentes de produção em Chromium headless, com a fronteira IPC controlada. Esse teste comprova interação e isolamento dos seis dialetos; integração com banco real usa SQLite. Bancos externos devem ser conferidos no ambiente configurado.
+
+## Aceite desta correção de contexto
+
+Em 04/10/2026, passaram 699 testes frontend, 768 testes do runtime, TypeScript, Ruff, 24 cenários com Monaco/seletores reais em Chromium headless e os três smokes do runtime congelado. O executável Tauri de produção foi recompilado após a última alteração do frontend. Não houve operação do desktop nem conexão a servidores externos neste aceite.
+
+O ensaio local com 100 mil tabelas passou de aproximadamente 111 ms para 0,019 ms na busca aquecida de prefixos por namespace. Resolução de alias aquecida: 0,022 ms; busca após FROM: 0,015 ms. O índice usa a identidade do snapshot, buscas por nomes pré-normalizados, geração posterior à filtragem e caches limitados por dialeto/banco/schema. Mudanças apenas de variáveis preservam o índice SQL. A criação inicial dos índices desse catálogo sintético ainda custa aproximadamente 41–53 ms por snapshot; esses números medem helpers, sem pintura do Monaco nem acesso ao banco.
+
+No runtime congelado atualizado, 40 chamadas aquecidas com SQLite apresentaram SQL p50 0,318 ms/p95 0,443 ms e Python p50 0,241 ms/p95 0,661 ms. O carregamento inicial do schema levou 37,162 ms. Esses valores não representam latência de bancos externos.
+
+O build com o Python 3.12.3 instalado apresentou duas falhas nativas durante a análise do PyInstaller. O pacote final foi gerado com Python 3.12.10 em ambiente de build isolado, reutilizando as mesmas dependências CPython 3.12, e passou todos os smokes. A causa dessas falhas não foi estabelecida; não foram adicionados retries automáticos ou monkeypatches ao produto. O script de build já permite escolher outro ambiente completo de build por `DATAPYN_RUNTIME_PYTHON`, com caminho absoluto para seu Python. A `.venv` original não foi substituída.
+
 ## Correções de contexto em 04/10/2026
 
 O índice local SQL agora considera o statement e o escopo da query no cursor. Colunas carregadas são sugeridas em SELECT, WHERE, ON e ORDER BY sem depender de um novo RPC. JOINs usam qualificadores; aliases de CTEs e tabelas derivadas ficam reservados à inferência do runtime e não recebem colunas de tabelas físicas homônimas.

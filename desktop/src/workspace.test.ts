@@ -604,3 +604,18 @@ describe("Execução e fila", () => {
     } finally { vi.useRealTimers(); }
   });
 });
+
+
+describe("block database selection",()=>{
+  it("updates the first block explicitly without changing sibling connection defaults",()=>{
+    const controller=new WorkspaceController(new FakeTransport()),session=controller.session()!,first=session.blocks[0],second=controller.addBlock(session.id,"sql","SELECT 1");
+    controller.patchSession(session.id,s=>({...s,savedConnectionId:"a",database:"original",schema:"private"}));
+    controller.updateBlock(session.id,first.id,{database_name:"older",schema:"older_schema"});
+    controller.setContext(session.id,{database:"chosen"},first.id);
+    expect(controller.session()!.blocks[0]).toMatchObject({database_name:"chosen",schema:undefined});
+    expect(controller.session()!.database).toBe("original");expect(controller.session()!.schema).toBe("private");
+    expect(controller.session()!.blocks.find(block=>block.id===second.id)?.database_name).toBeUndefined();
+    controller.setContext(session.id,{database:"chosen",schema:"public"},first.id);
+    expect(controller.session()!.blocks[0].schema).toBe("public");controller.dispose();
+  });
+});
