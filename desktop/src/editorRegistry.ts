@@ -70,15 +70,49 @@ export function setCompletionContext(blockId: string, context: CompletionContext
     if(current===record&&current.editor===editor&&editor.hasTextFocus()&&current.completionQuery===query&&current.model.getVersionId()===query.version&&query.intent===current.completionIntent&&query.navigation===current.completionNavigation&&cursor?.lineNumber===query.line&&cursor.column===query.column)triggerLocalSuggestions(blockId);
   });
 }
-export function selectedCode(blockId: string): string | undefined {
-  const record = models.get(blockId); if (!record || record.model.isDisposed()) return;
-  const selection = record.editor?.getSelection();
-  if (selection) return selection.isEmpty() ? undefined : record.model.getValueInRange(selection);
-  const cursor = record.viewState?.cursorState[0]; if (!cursor) return;
-  const a = cursor.selectionStart, b = cursor.position;
-  if (a.lineNumber === b.lineNumber && a.column === b.column) return;
+function savedSelectionPosition(input: unknown): { lineNumber: number; column: number } | undefined {
+  if (!input || typeof input !== "object") return;
+  const position = input as { lineNumber?: unknown; column?: unknown };
+  const coordinate = (value: unknown) => typeof value === "number" && !Number.isNaN(value) ? Math.floor(value) : 1;
+  return { lineNumber: coordinate(position.lineNumber), column: coordinate(position.column) };
+}
+function savedPositionOffset(code: string, position: { lineNumber: number; column: number }): number {
+  if (position.lineNumber < 1) return 0;
+  // Scan only line endings; never allocate an array or copies of the document's lines.
+  const endings = /\r\n|[\r\n]/g;
+  let line = 1, start = 0, ending: RegExpExecArray | null;
+  while (line < position.lineNumber) {
+    ending = endings.exec(code);
+    if (!ending) return code.length;
+    start = ending.index + ending[0].length;
+    line++;
+  }
+  ending = endings.exec(code);
+  const end = ending?.index ?? code.length;
+  return Math.min(end, start + Math.max(0, position.column - 1));
+}
+export function selectedCode(blockId: string, fallbackCode?: string): string | undefined {
+  const record = models.get(blockId); if (record?.model.isDisposed()) return;
+  const selection = record?.editor?.getSelection();
+  // Losing focus to a run button does not invalidate the live editor's selection.
+  if (selection) return selection.isEmpty() ? undefined : record!.model.getValueInRange(selection);
+  const cursor = (record?.viewState ?? restoredViews.get(blockId))?.cursorState[0]; if (!cursor) return;
+  const a = savedSelectionPosition(cursor.selectionStart), b = savedSelectionPosition(cursor.position);
+  if (!a || !b || (a.lineNumber === b.lineNumber && a.column === b.column)) return;
   const before = a.lineNumber < b.lineNumber || (a.lineNumber === b.lineNumber && a.column < b.column);
-  return record.model.getValueInRange({ startLineNumber: before ? a.lineNumber : b.lineNumber, startColumn: before ? a.column : b.column, endLineNumber: before ? b.lineNumber : a.lineNumber, endColumn: before ? b.column : a.column });
+  const start = before ? a : b, end = before ? b : a;
+  if (record) return record.model.getValueInRange({ startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column });
+  if (fallbackCode === undefined) return;
+  let startOffset = savedPositionOffset(fallbackCode, start), endOffset = savedPositionOffset(fallbackCode, end);
+  if (startOffset === endOffset) return;
+  // Monaco columns are UTF-16 offsets. Expand endpoints inside a surrogate pair.
+  const insideSurrogate = (offset: number) => {
+    const previous = fallbackCode.charCodeAt(offset - 1), next = fallbackCode.charCodeAt(offset);
+    return previous >= 0xd800 && previous <= 0xdbff && next >= 0xdc00 && next <= 0xdfff;
+  };
+  if (insideSurrogate(startOffset)) startOffset--;
+  if (insideSurrogate(endOffset)) endOffset++;
+  return fallbackCode.slice(startOffset, endOffset);
 }
 /** Reveal a virtualized block inside its own panel, keeping desktop/dock chrome still. */
 export function revealEditorBlock(element:HTMLElement):void {

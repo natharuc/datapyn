@@ -301,13 +301,13 @@ export function App() {
   const runCurrent = useCallback((advance = false) => {
     const current = workspace.session(); if (!current) return;
     const id = current.focusedBlockId;
-    const task = workspace.runBlock(current.id, id, advance ? undefined : selectedCode(id), advance);
+    const task = workspace.runBlock(current.id, id, undefined, advance);
     run(task.then(() => { if (advance) requestAnimationFrame(() => focusEditor(workspace.session(current.id)?.focusedBlockId ?? id)); }));
   }, [run]);
   const downloadBlock = useCallback(async(blockId:string)=>{
     const current=workspace.session(),block=current?.blocks.find(b=>b.id === blockId);if(!current || !block || !isDesktop())return;
     const defaults=(workspaceExtras.current.imported_defaults ?? {}) as ConfigurationDefaults;
-    setQueryDownload({sessionId:current.id,blockId:block.id,title:block.block_name || "consulta",selection:selectedCode(block.id),settings:documentExportSettings(current.extras,defaults),lastDirectory:typeof current.extras.download_last_dir === "string" ? current.extras.download_last_dir : undefined,openFolder:(current.extras.export_open_folder ?? defaults.export_open_folder) !== false});
+    setQueryDownload({sessionId:current.id,blockId:block.id,title:block.block_name || "consulta",selection:selectedCode(block.id,block.code),settings:documentExportSettings(current.extras,defaults),lastDirectory:typeof current.extras.download_last_dir === "string" ? current.extras.download_last_dir : undefined,openFolder:(current.extras.export_open_folder ?? defaults.export_open_folder) !== false});
   },[]);
   const addBlock = useCallback((language?: "sql" | "python") => {
     const current = workspace.session(); if (!current) return;
@@ -528,7 +528,7 @@ export function App() {
           <div className="document-heading"><span className="eyebrow">{translateUi("ANÁLISE")}</span><span className="document-title">{session.title}</span><span className="document-subtitle">{translateUi("Blocos independentes. Um namespace Python.")}</span></div>
           <ParameterPanel title={translateUi("Parâmetros compartilhados")} parameters={sharedParameters} enabled={session.extras.shared_parameters_enabled !== false} disabled={session.busy} onEnabled={enabled => workspace.patchSession(session.id,s=>({...s,modified:true,extras:{...s.extras,shared_parameters_enabled:enabled}}))} onChange={parameters => workspace.patchSession(session.id,s=>({...s,modified:true,extras:{...s.extras,shared_parameters:parameters}}))}/>
           {session.blocks.map((block, index) => <BlockCard locked={editingLocked} forceMount={startupActive && requiredEditor === block.id} onEditorReady={startupEditorInitialized} key={block.id} block={block} index={index} count={session.blocks.length} session={session} disabled={runDisabled} preferences={preferences} onFontSizeChange={editorFontSize=>setPreferences(p=>({...p,editorFontSize}))} onPickConnection={() => setConnectionPicker(block.id)} onDownload={()=>run(downloadBlock(block.id))}
-            onRun={() => run(workspace.runBlock(session.id, block.id, selectedCode(block.id)))} />)}
+            onRun={() => run(workspace.runBlock(session.id, block.id))} />)}
           <div className="add-block-row"><button onClick={() => addBlock("sql")}><Plus size={14} /><span className="sql-color">{translateUi("SQL")}</span></button><button onClick={() => addBlock("python")}><Plus size={14} /><span className="python-color">{translateUi("Python")}</span></button><span>{translateUi("Novo bloco")}<kbd>{shortcuts.addBlock}</kbd></span></div>
         </div>,
       results:<section className="results-panel">

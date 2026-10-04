@@ -29,6 +29,50 @@ describe("Editor focus across viewport virtualization",()=>{
     const read=vi.fn(()=>"selection");models.set("b",{model:{isDisposed:()=>false,getValueInRange:read},viewState:{cursorState:[{selectionStart:{lineNumber:8,column:4},position:{lineNumber:2,column:3}}]}} as never);
     expect(selectedCode("b")).toBe("selection");expect(read).toHaveBeenCalledWith({startLineNumber:2,startColumn:3,endLineNumber:8,endColumn:4});
   });
+  it("reads the live selection after toolbar blur instead of an older saved range",()=>{
+    const selection={isEmpty:()=>false,startLineNumber:2,startColumn:1,endLineNumber:3,endColumn:8};
+    const read=vi.fn(()=>"  selected = 1\r\nselected");
+    models.set("blurred",{model:{isDisposed:()=>false,getValueInRange:read},editor:{getSelection:()=>selection,hasTextFocus:()=>false},viewState:{cursorState:[{selectionStart:{lineNumber:1,column:1},position:{lineNumber:1,column:5}}]}} as never);
+    expect(selectedCode("blurred","never execute this")).toBe("  selected = 1\r\nselected");expect(read).toHaveBeenCalledWith(selection);
+  });
+  it("does not revive an old saved selection when the live cursor has collapsed",()=>{
+    const read=vi.fn();models.set("collapsed",{model:{isDisposed:()=>false,getValueInRange:read},editor:{getSelection:()=>({isEmpty:()=>true})},viewState:{cursorState:[{selectionStart:{lineNumber:1,column:1},position:{lineNumber:1,column:5}}]}} as never);
+    expect(selectedCode("collapsed","full code")).toBeUndefined();expect(read).not.toHaveBeenCalled();
+  });
+  it("preserves a live whitespace-only selection rather than treating it as no selection",()=>{
+    const selection={isEmpty:()=>false};models.set("spaces",{model:{isDisposed:()=>false,getValueInRange:()=>" \r\n\t "},editor:{getSelection:()=>selection},viewState:null} as never);
+    expect(selectedCode("spaces","never execute this")).toBe(" \r\n\t ");
+  });
+  it("reads reversed restored selection before the editor mounts without consuming its view state",()=>{
+    const state={cursorState:[{selectionStart:{lineNumber:3,column:9},position:{lineNumber:2,column:1}}],viewState:{scrollTop:0,scrollLeft:0},contributionsState:{}};
+    restoreEditorViewState("unmounted-selection",state);
+    expect(selectedCode("unmounted-selection","before = 1\r\n  selected = '😀'\r\nselected\r\nnever = True")).toBe("  selected = '😀'\r\nselected");
+    expect(models.has("unmounted-selection")).toBe(false);expect(takeRestoredEditorViewState("unmounted-selection")).toBe(state);
+  });
+  it.each(["\n","\r\n","\r"])("preserves %j line endings and whitespace in an unmounted restored range",ending=>{
+    const id=`restored-${JSON.stringify(ending)}`;
+    restoreEditorViewState(id,{cursorState:[{selectionStart:{lineNumber:2,column:1},position:{lineNumber:3,column:2}}],viewState:{},contributionsState:{}});
+    expect(selectedCode(id,`before${ending}   ${ending}\t ${ending}after`)).toBe(`   ${ending}\t`);disposeModel(id);
+  });
+  it("clamps and rounds restored coordinates to document boundaries as Monaco does",()=>{
+    restoreEditorViewState("clamped-selection",{cursorState:[{selectionStart:{lineNumber:-10,column:999},position:{lineNumber:2.9,column:999}}],viewState:{},contributionsState:{}});
+    expect(selectedCode("clamped-selection","first\r\nsecond\r\nthird")).toBe("first\r\nsecond");disposeModel("clamped-selection");
+    restoreEditorViewState("past-end-selection",{cursorState:[{selectionStart:{lineNumber:1,column:3},position:{lineNumber:999,column:1}}],viewState:{},contributionsState:{}});
+    expect(selectedCode("past-end-selection","first\nlast")).toBe("rst\nlast");disposeModel("past-end-selection");
+  });
+  it("keeps complete Unicode characters when restored endpoints are inside a surrogate pair",()=>{
+    restoreEditorViewState("unicode-selection",{cursorState:[{selectionStart:{lineNumber:1,column:3},position:{lineNumber:1,column:5}}],viewState:{},contributionsState:{}});
+    expect(selectedCode("unicode-selection","a😀😀z")).toBe("😀😀");disposeModel("unicode-selection");
+  });
+  it("returns no selection for collapsed, missing or invalid restored cursor metadata",()=>{
+    for(const [id,cursorState] of [
+      ["empty-restored",[]],
+      ["collapsed-restored",[{selectionStart:{lineNumber:2,column:3},position:{lineNumber:2,column:3}}]],
+      ["invalid-restored",[{selectionStart:null,position:{lineNumber:1,column:4}}]],
+      ["clamped-collapsed-restored",[{selectionStart:{lineNumber:50,column:1},position:{lineNumber:60,column:1}}]],
+    ] as const){restoreEditorViewState(id,{cursorState,viewState:{},contributionsState:{}});expect(selectedCode(id,"first\nlast")).toBeUndefined();disposeModel(id);}
+    expect(selectedCode("missing-restored","full code")).toBeUndefined();
+  });
   it("compares large editor context without serializing code and invalidates only real changes",()=>{
     const variable={name:"frame",type:"DataFrame"},context={variables:[variable],tables:["orders"],sessionId:"s",preamble:"x".repeat(200000)};
     setCompletionContext("b",context);const version=contextVersions.get("b");

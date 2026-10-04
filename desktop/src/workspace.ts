@@ -1,6 +1,6 @@
 import { errorText, isRuntimeEvent, type ExecutionFinished, type Language, type ResultRef, type RuntimeEvent, type RuntimeInfo, type RuntimeTransport, type Variable,type RichOutput } from "./runtime";
 import type { NativeDocumentRecord, NativeWorkspaceState } from "./nativeDrafts";
-import { flushEditorViewStates,restoreEditorViewState, subscribeEditorViewStates } from "./editorRegistry";
+import { flushEditorViewStates,restoreEditorViewState, selectedCode, subscribeEditorViewStates } from "./editorRegistry";
 
 export type BlockStatus = "idle" | "queued" | "running" | "cancelling" | "succeeded" | "failed" | "cancelled";
 export interface Block {
@@ -479,10 +479,12 @@ export class WorkspaceController {
     await this.ensureSession(sessionId);
     return this.transport.request("schema.get", { session_id: sessionId });
   }
-  async runBlock(sessionId: string, blockId: string, selectedCode?: string, advance = false) {
+  async runBlock(sessionId: string, blockId: string, selection?: string, advance = false) {
     const session = this.session(sessionId), block = session?.blocks.find((item) => item.id === blockId);
     if (!session || !block) return;
-    await this.runQueue(sessionId, [{ ...block, code: selectedCode ?? block.code }]);
+    // Capture before awaiting: blur and advancing focus must not change what runs.
+    const code = selection ?? selectedCode(blockId, block.code) ?? block.code;
+    await this.runQueue(sessionId, [{ ...block, code }]);
     if (advance) {
       const latest = this.session(sessionId); if (!latest) return;
       const index = latest.blocks.findIndex((item) => item.id === blockId);

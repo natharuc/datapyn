@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { captureEditorViewState,models,takeRestoredEditorViewState } from "./editorRegistry";
+import { captureEditorViewState,models,restoreEditorViewState,takeRestoredEditorViewState } from "./editorRegistry";
 import { diffNativeWorkspace } from "./nativeDrafts";
 import { WorkspaceController, applyRuntimeEvent, decodeDocument, encodeDocument, newSession } from "./workspace";
 import type { ExecutionFinished, RuntimeEvent, RuntimeTransport } from "./runtime";
@@ -279,6 +279,57 @@ describe("Execução e fila", () => {
     expect(transport.executions()[0].params).toMatchObject({ code: "SELECT 2;", variable_name: "sales" });
     await expect(controller.runBlock(session.id, block.id)).rejects.toThrow("em andamento");
     transport.finish(0); await job;
+  });
+  it.each([
+    ["sql", false, false], ["sql", false, true], ["sql", true, false], ["sql", true, true],
+    ["python", false, false], ["python", false, true], ["python", true, false], ["python", true, true],
+  ] as const)("executa %s com avanço=%s e seleção=%s pelo mesmo comando", async (language, advance, hasSelection) => {
+    const transport = new FakeTransport(), controller = new WorkspaceController(transport), session = controller.session()!, block = session.blocks[0];
+    const snippet = language === "sql" ? "SELECT 'selecionado';\r\n" : "if True:\r\n    selected = 'selecionado'\r\n";
+    const full = language === "sql" ? `DELETE FROM guard;\r\n${snippet}DROP TABLE guard;` : `before = True\r\n${snippet}after = True`;
+    controller.updateBlock(session.id, block.id, { language, code: full });
+    const next = controller.addBlock(session.id, language); controller.focusBlock(session.id, block.id);
+    models.set(block.id, { model: { isDisposed: () => false, getValueInRange: () => snippet }, editor: { getSelection: () => ({ isEmpty: () => !hasSelection }) } } as never);
+    try {
+      const job = controller.runBlock(session.id, block.id, undefined, advance);
+      // A toolbar blur/focus change after starting cannot replace the captured code.
+      models.delete(block.id);
+      await vi.waitFor(() => expect(transport.executions()).toHaveLength(1));
+      expect(transport.executions()[0].params).toMatchObject({ language, code: hasSelection ? snippet : full });
+      transport.finish(0); await job;
+      expect(controller.session(session.id)?.blocks[0].code).toBe(full);
+      expect(controller.session(session.id)?.focusedBlockId).toBe(advance ? next.id : block.id);
+    } finally { models.delete(block.id); controller.dispose(); }
+  });
+  it.each(["sql", "python"] as const)("não executa o bloco %s quando a seleção contém apenas espaços", async language => {
+    const transport = new FakeTransport(), controller = new WorkspaceController(transport), session = controller.session()!, block = session.blocks[0];
+    controller.updateBlock(session.id, block.id, { language, code: language === "sql" ? "DELETE FROM guard" : "guard = True" });
+    models.set(block.id, { model: { isDisposed: () => false, getValueInRange: () => " \r\n\t " }, editor: { getSelection: () => ({ isEmpty: () => false }) } } as never);
+    try { await controller.runBlock(session.id, block.id); expect(transport.executions()).toHaveLength(0); }
+    finally { models.delete(block.id); controller.dispose(); }
+  });
+  it.each(["sql", "python"] as const)("executa a seleção %s restaurada antes de montar o editor", async language => {
+    const transport = new FakeTransport(), controller = new WorkspaceController(transport), session = controller.session()!, block = session.blocks[0];
+    const snippet = language === "sql" ? "SELECT 'selected';" : "selected = 1";
+    controller.updateBlock(session.id, block.id, { language, code: `outside before\r\n${snippet}\r\noutside after` });
+    restoreEditorViewState(block.id, { cursorState: [{ selectionStart: { lineNumber: 2, column: 1 }, position: { lineNumber: 2, column: snippet.length + 1 } }], viewState: {}, contributionsState: {} });
+    try {
+      const job = controller.runBlock(session.id, block.id);
+      await vi.waitFor(() => expect(transport.executions()).toHaveLength(1));
+      expect(transport.executions()[0].params.code).toBe(snippet); transport.finish(0); await job;
+      expect(takeRestoredEditorViewState(block.id)).not.toBeNull();
+    } finally { takeRestoredEditorViewState(block.id); controller.dispose(); }
+  });
+  it.each(["sql", "python"] as const)("não amplia a seleção %s após erro", async language => {
+    const transport = new FakeTransport(), controller = new WorkspaceController(transport), session = controller.session()!, block = session.blocks[0];
+    controller.updateBlock(session.id, block.id, { language, code: "outside before\nselected error\noutside after" });
+    models.set(block.id, { model: { isDisposed: () => false, getValueInRange: () => "selected error" }, editor: { getSelection: () => ({ isEmpty: () => false }) } } as never);
+    try {
+      const job = controller.runBlock(session.id, block.id);
+      await vi.waitFor(() => expect(transport.executions()).toHaveLength(1)); transport.finish(0, "failed"); await job;
+      expect(transport.executions()).toHaveLength(1); expect(transport.executions()[0].params.code).toBe("selected error");
+      expect(controller.session(session.id)?.blocks[0].status).toBe("failed");
+    } finally { models.delete(block.id); controller.dispose(); }
   });
   it("duas abas executam em paralelo sem compartilhar seus resultados", async () => {
     const transport = new FakeTransport(), controller = new WorkspaceController(transport), first = controller.session()!, second = controller.createSession();

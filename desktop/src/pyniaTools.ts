@@ -131,14 +131,16 @@ export async function handlePyniaTool(workspace: WorkspaceController, event: Ser
   if (name === "datapyn_run") {
     const mode = String(args.mode ?? "block");
     if (mode === "all") { await workspace.runAll(sessionId); return { statuses: workspace.session(sessionId)?.blocks.map((block) => ({ block_id: block.id, status: block.status, error: block.error })) }; }
-    let block: Block;
+    let block: Block, executionCode: string | undefined;
     if (mode === "write") {
       if (session.busy) throw new Error("Aguarde a execução antes de escrever um bloco.");
       const code = source(args.code, true), matching = args.block_name ? session.blocks.find((item) => item.block_name === args.block_name) : args.block_index != null ? resolveBlock(session, args) : undefined;
+      executionCode = code;
       if (matching) { validateWholeBlockReplace(matching.code, code, args.force); updateCode(workspace, sessionId, matching, code); workspace.updateBlock(sessionId, matching.id, { language: language(args.language, matching.language) }); block = matching; }
       else { block = workspace.addBlock(sessionId, language(args.language), code, session.focusedBlockId); if (args.block_name) workspace.updateBlock(sessionId, block.id, { block_name: String(args.block_name) }); }
     } else if (mode === "block") block = resolveBlock(session, args); else throw new Error(`Modo de execução desconhecido: ${mode}.`);
-    await workspace.runBlock(sessionId, block.id);
+    // Write mode explicitly runs the supplied code, never a range from the old editor.
+    await workspace.runBlock(sessionId, block.id, executionCode);
     const completed = workspace.session(sessionId)!.blocks.find((item) => item.id === block.id)!;
     if (completed.status === "failed") throw new Error(completed.error || "A execução do bloco falhou.");
     return { ...summary(workspace.session(sessionId)!, completed), duration_ms: completed.duration_ms, results: workspace.session(sessionId)!.results };

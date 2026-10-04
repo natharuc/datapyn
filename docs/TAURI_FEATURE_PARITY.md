@@ -61,8 +61,8 @@ Inventário do código em `codex/tauri-migration`, revisto em 3 de outubro de 20
 
 | ID | Comportamento | Evidência PyQt | Tauri / aceite |
 |---|---|---|---|
-| X01 | F5 executa seleção se houver, caso contrário bloco focado | `editors/block_editor.py:453,1383`; `ui/main_window/_execution.py` | Implementado: F5/Ctrl+Enter usa seleção preservada do bloco focado, senão inteiro [RUN/EDIT]; regressões de seleção/toolbar. |
-| X02 | Shift+Enter executa e avança foco; Ctrl+F5 executa ativos em ordem | `editors/block_editor.py:475,598` | Implementado: Shift+Enter avança ID; Ctrl+F5 fila de ativos sequencial, para no erro [RUN]; ordem/erro/foco testados. |
+| X01 | F5 executa seleção se houver, caso contrário bloco focado | `editors/block_editor.py:453,1383`; `ui/main_window/_execution.py` | Implementado: SQL/Python usam a mesma regra central para F5/Ctrl+Enter/botões/Pynia block: seleção exata ou bloco inteiro. Captura antes de await, preserva seleção após blur e em editor restaurado ainda não montado; seleção só com espaços não executa o restante e erro não amplia o trecho [RUN/EDIT]. |
+| X02 | Shift+Enter executa e avança foco; Ctrl+F5 executa ativos em ordem | `editors/block_editor.py:475,598` | Implementado: Shift+Enter executa seleção ou bloco com a mesma regra de F5 e depois avança ID; Ctrl+F5 fila de ativos sequencial, para no erro [RUN]. Regressões SQL/Python/avanço/foco/erro. |
 | X03 | SQL retorna múltiplos resultsets e nomes estáveis | `ui/main_window/_workers.py`; `tests/test_execution_multi_result.py` | Implementado: multi-resultsets/names e abas por resultado [RUN/DB]; SQLite real, drivers produção reutilizados. |
 | X04 | Python namespace persistente por sessão; pandas/numpy/Polars | `services/python_execution_service.py`; `core/session.py:118` | Implementado: processo/namespace persistente por sessão com pandas/numpy/Polars [RUN]; stdio concorrente real. |
 | X05 | Última expressão Python e DataFrame alterado são exibidos | `services/python_execution_service.py`; `tests/test_new_features.py` | Implementado: última expressão AST/frames alterados/display múltiplo rico [RUN/RICH]; preserva compound statements. |
@@ -183,7 +183,7 @@ As funcionalidades têm implementação rastreável. A substituição do PyQt de
 | EXP | `desktop/src/ObjectExplorer.tsx`, `explorer.ts:8`; `source/datapyn_runtime/explorer.py` | `explorer.test.ts`, `sqlIdentifier.test.ts`; `runtime_tests/test_backend_parity.py:27,48,57,68,86` |
 | EDIT | `desktop/src/MonacoBlock.tsx:99`, `editorRegistry.ts`, `editorLanguage.ts`; `source/datapyn_runtime/language.py:95` | `editorRegistry.test.ts`, `editorLanguage.test.ts`; `test_backend_parity.py:110,121,169,214`; formatter frozen em `test_rich_outputs.py:37` |
 | UI | `desktop/src/App.tsx`, `ParameterPanel.tsx`, `EntityInfoDialog.tsx`, `PanelControls.tsx`, `DataActions.tsx`; callbacks do controller | `workspace.test.ts`, `documentWindows.test.ts`; integração root dos pickers/fontes/cores/menus/resultados/modais; gestos nativos restantes precisam de aceite |
-| RUN | `desktop/src/workspace.ts`, `App.tsx`; `source/datapyn_runtime/kernel.py`, `supervisor.py`, `process_group.py` | `workspace.test.ts`; `runtime_tests/test_runtime.py` usa broker stdio real: filas, sessões concorrentes, crash/restart, kill e subprocessos Windows |
+| RUN | `desktop/src/workspace.ts`, `App.tsx`; `source/datapyn_runtime/kernel.py`, `supervisor.py`, `process_group.py` | `workspace.test.ts`, `editorRegistry.test.ts`, `pyniaTools.test.ts`; seleção SQL/Python/blur/restauração/espaços/falha/avanço. Aceite Windows local em 2026-10-03 no release recompilado: F5/Ctrl+Enter/botões principal e do bloco/Shift+Enter executaram só a seleção em ambos os idiomas; SQLite confirmou zero inserts externos e Python não executou os raises externos. Sem seleção, ambas as linhas Python e ambos os resultsets SQL executaram. `runtime_tests/test_runtime.py` usa broker stdio real: filas, sessões concorrentes, crash/restart, kill e subprocessos Windows. |
 | PARAM | `desktop/src/ParameterPanel.tsx`; `source/datapyn_runtime/language.py`; scanner/binds legado em `source/src/utils/sql_parameter_service.py` | `runtime_tests/test_backend_parity.py:169,229`; regressões específicas do legado |
 | GRID | `desktop/src/ResultGrid.tsx:28`, `gridSelection.ts`, `gridClipboard.ts`, `gridFormat.ts` | `gridSelection.test.ts`, `gridClipboard.test.ts`, `gridFormat.test.ts`, `glideOwnerDocument.test.ts`, `glidePatch.test.ts`; Glide6.0.3 patch22arquivos SHA256/version guard,6testes foreign-realm/3installer; precisão/páginas em `runtime_tests/test_runtime.py:187` |
 | VIEW | `source/datapyn_runtime/frame_view.py`; `ResultStore.view` em `kernel.py`; `data_tools.py:83` | `runtime_tests/test_frame_view.py`: 10 testes; `test_backend_parity.py:145` comprova reutilização e invalidação da view |
@@ -214,7 +214,7 @@ A referência é `source/src/core/shortcut_manager.py:18`; o contrato Tauri est�
 |---|---|---|
 | execute_sql → run | F5; Ctrl+Enter alias | Seleção ou bloco com último foco |
 | execute_all → runAll | Ctrl+F5 | Fila dos blocos ativos |
-| execute_block_advance → runAdvance | Shift+Return/Enter | Executa e avança foco |
+| execute_block_advance → runAdvance | Shift+Return/Enter | Executa seleção ou bloco e avança foco |
 | clear_results → clearResults | Ctrl+Shift+L | Sessão ativa; libera resultados |
 | open_file → open | Ctrl+O | File chooser múltiplo |
 | save_file → save | Ctrl+S | Arquivo e formato atuais |
