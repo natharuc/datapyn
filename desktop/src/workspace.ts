@@ -562,7 +562,8 @@ export class WorkspaceController {
     this.patchSession(sessionId, (session) => ({ ...session, currentExecutionId: executionId, currentBlockId: block.id,
       blocks: session.blocks.map((item) => item.id === block.id ? { ...item, status: "running", error: undefined } : item) }));
     const acknowledged = this.transport.request("execution.run", { session_id: sessionId, execution_id: executionId,
-      language: block.language, code: block.code, variable_name: block.block_name || undefined,
+      language: block.language, code: block.code,
+      ...(block.language === "sql" ? { variable_name: block.block_name || undefined } : {}),
       connection_id: block.connection_id ?? this.session(sessionId)?.savedConnectionId,
       database: block.database_name ?? this.session(sessionId)?.database, schema: block.schema ?? this.session(sessionId)?.schema,
       sql_parameters: block.sql_parameters_enabled === false ? [] : block.sql_parameters ?? [],

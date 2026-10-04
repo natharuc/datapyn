@@ -69,6 +69,47 @@ class FakeTransport implements RuntimeTransport {
   }
 }
 
+describe("execution block names", () => {
+  it.each(["Tipos após nulos", "python_result"])("keeps Python name '%s' as a display label, without a result destination", async blockName => {
+    const transport = new FakeTransport(), baseRequest = transport.request.bind(transport);
+    transport.request = async <T>(method: string, params: Record<string, unknown> = {}): Promise<T> => {
+      const value = await baseRequest<T>(method, params);
+      if (method === "execution.run" && params.variable_name === "Tipos após nulos") {
+        throw new Error("variable_name must be a valid Python identifier");
+      }
+      return value;
+    };
+    const controller = new WorkspaceController(transport), session = controller.session()!, block = session.blocks[0];
+    const code = "frame = pd.DataFrame({'value': [1]})\nframe";
+    controller.updateBlock(session.id, block.id, { language: "python", code, block_name: blockName });
+    try {
+      const job = controller.runBlock(session.id, block.id);
+      // Observe request failures immediately, before waiting for the completion event.
+      const completed = job.then(() => undefined, error => error);
+      await vi.waitFor(() => expect(transport.executions()).toHaveLength(1));
+      const request = transport.executions()[0].params;
+      expect(request).toMatchObject({ language: "python", code });
+      expect(request).not.toHaveProperty("variable_name");
+      expect(request.notification).toMatchObject({ context: { block_name: blockName, block_id: block.id } });
+      transport.finish(0);
+      expect(await completed).toBeUndefined();
+      expect(controller.session(session.id)?.blocks[0]).toMatchObject({ block_name: blockName, status: "succeeded", error: undefined });
+      expect((encodeDocument(controller.session(session.id)!).blocks as Record<string, unknown>[])[0].block_name).toBe(blockName);
+    } finally { controller.dispose(); }
+  });
+  it("retains the SQL block name as the result destination", async () => {
+    const transport = new FakeTransport(), controller = new WorkspaceController(transport), session = controller.session()!, block = session.blocks[0];
+    controller.updateBlock(session.id, block.id, { language: "sql", code: "SELECT 1 AS value", block_name: "sql_result" });
+    try {
+      const job = controller.runBlock(session.id, block.id);
+      await vi.waitFor(() => expect(transport.executions()).toHaveLength(1));
+      expect(transport.executions()[0].params).toMatchObject({ language: "sql", code: "SELECT 1 AS value", variable_name: "sql_result" });
+      transport.finish(0); await job;
+      expect(controller.session(session.id)?.blocks[0].status).toBe("succeeded");
+    } finally { controller.dispose(); }
+  });
+});
+
 describe("execution notification identity", () => {
   it("captures the executed block while focus and active tab change", async () => {
     const transport = new FakeTransport(), controller = new WorkspaceController(transport), session = controller.session()!;
