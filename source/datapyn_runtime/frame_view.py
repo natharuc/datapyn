@@ -65,9 +65,7 @@ def _coerce(series, value, pd):
     return str(value) if pd.api.types.is_string_dtype(dtype) else value
 
 
-def apply_view(frame, params):
-    import pandas as pd
-
+def _specs(params):
     spec = params.get("filter") or {}
     if not isinstance(spec, dict):
         raise ValueError("filter must be an object")
@@ -77,27 +75,42 @@ def apply_view(frame, params):
     filters = list(filters)
     if "column" in spec:
         filters.append(spec)
-    mask = None
-    if "text" in spec and spec["text"]:
-        text = str(spec["text"])
-        if len(text) > 1000:
-            raise ValueError("filter text exceeds 1000 characters")
-        mask = pd.Series(False, index=frame.index)
-        for index in range(len(frame.columns)):
-            mask |= frame.iloc[:, index].astype("string").str.contains(text, case=False, regex=False, na=False)
     for item in filters:
         if not isinstance(item, dict):
             raise ValueError("Each column filter must be an object")
+        if item.get("operator", "contains") not in {"is_null", "not_null", "contains", "equals", "gt", "lt", "gte", "lte"}:
+            raise ValueError(f"Unsupported filter operator: {item.get('operator')}")
+        if item.get("operator", "contains") == "contains" and len(str(item.get("value", ""))) > 1000:
+            raise ValueError("filter text exceeds 1000 characters")
+    text = str(spec.get("text") or "")
+    if len(text) > 1000:
+        raise ValueError("filter text exceeds 1000 characters")
+    sort = params.get("sort") or {}
+    if not isinstance(sort, dict):
+        raise ValueError("sort must be an object")
+    if sort and sort.get("direction", "asc") not in {"asc", "desc"}:
+        raise ValueError("sort direction must be asc or desc")
+    return filters, text, sort
+
+
+def pandas_positions(frame, params):
+    """Filter/sort only positional indices and one key, never all data columns."""
+    import numpy as np
+    import pandas as pd
+    filters, text, sort = _specs(params)
+    mask = None
+    if text:
+        mask = np.zeros(len(frame), dtype=bool)
+        for index in range(len(frame.columns)):
+            mask |= frame.iloc[:, index].astype("string").str.contains(text, case=False, regex=False, na=False).to_numpy(dtype=bool, na_value=False)
+    for item in filters:
         series = frame[column_label(frame, item.get("column"))]
         operator, value = item.get("operator", "contains"), item.get("value")
         if operator in {"is_null", "not_null"}:
             part = series.isna() if operator == "is_null" else series.notna()
         elif operator == "contains":
-            text = str("" if value is None else value)
-            if len(text) > 1000:
-                raise ValueError("filter text exceeds 1000 characters")
-            part = series.astype("string").str.contains(text, case=False, regex=False, na=False)
-        elif operator in {"equals", "gt", "lt", "gte", "lte"}:
+            part = series.astype("string").str.contains(str("" if value is None else value), case=False, regex=False, na=False)
+        else:
             typed = _coerce(series, value, pd)
             if typed is None:
                 if operator != "equals":
@@ -105,18 +118,76 @@ def apply_view(frame, params):
                 part = series.isna()
             else:
                 part = getattr(series, {"equals": "eq", "gt": "gt", "lt": "lt", "gte": "ge", "lte": "le"}[operator])(typed).fillna(False)
-        else:
-            raise ValueError(f"Unsupported filter operator: {operator}")
+        part = part.to_numpy(dtype=bool, na_value=False)
         mask = part if mask is None else mask & part
-    if mask is not None:
-        frame = frame.loc[mask]
-    sort = params.get("sort") or {}
+    if mask is None and not sort:
+        return None
+    dtype = np.uint32 if len(frame) <= 2**32 else np.uint64
+    positions = np.flatnonzero(mask).astype(dtype, copy=False) if mask is not None else np.arange(len(frame), dtype=dtype)
     if sort:
-        if not isinstance(sort, dict):
-            raise ValueError("sort must be an object")
         label = column_label(frame, sort.get("column"))
-        direction = sort.get("direction", "asc")
-        if direction not in {"asc", "desc"}:
-            raise ValueError("sort direction must be asc or desc")
-        frame = frame.sort_values(label, ascending=direction == "asc", kind="mergesort", na_position="last")
-    return frame
+        keys = frame[label].iloc[positions]
+        narrow = pd.DataFrame({"key": keys.array, "position": positions})
+        positions = narrow.sort_values("key", ascending=sort.get("direction", "asc") == "asc", kind="mergesort", na_position="last")["position"].to_numpy(copy=True)
+    return positions
+
+
+def polars_positions(frame, params):
+    """Native expressions retain only mask/key/positions, not a pandas copy."""
+    import pandas as pd
+    import polars as pl
+    filters, text, sort = _specs(params)
+    expressions = []
+    if text:
+        parts = []
+        for name in frame.columns:
+            part = pl.col(name).cast(pl.String, strict=False).str.to_uppercase().str.contains(text.upper(), literal=True).fill_null(False)
+            if frame[name].dtype.is_float():
+                part = part & ~pl.col(name).is_nan().fill_null(False)
+            parts.append(part)
+        expressions.append(pl.any_horizontal(parts))
+    for item in filters:
+        name = column_label(frame, item.get("column"))
+        series = frame[name]
+        column = pl.col(name)
+        nulls = column.is_null() | column.is_nan() if series.dtype.is_float() else column.is_null()
+        operator, value = item.get("operator", "contains"), item.get("value")
+        if operator in {"is_null", "not_null"}:
+            part = nulls if operator == "is_null" else ~nulls
+        elif operator == "contains":
+            part = column.cast(pl.String, strict=False).str.to_uppercase().str.contains(str("" if value is None else value).upper(), literal=True)
+            part = part & ~nulls
+        else:
+            typed = _coerce(series.head(200).to_pandas(use_pyarrow_extension_array=True), value, pd)
+            if typed is None:
+                if operator != "equals":
+                    raise ValueError("Choose is_null or not_null to filter null values")
+                part = nulls
+            else:
+                part = {"equals": column.__eq__, "gt": column.__gt__, "lt": column.__lt__, "gte": column.__ge__, "lte": column.__le__}[operator](typed)
+                if series.dtype.is_float():
+                    part = part & ~nulls
+        expressions.append(part.fill_null(False))
+    if not expressions and not sort:
+        return None
+    position_name, key_name, mask_name = "__positions", "__key", "__mask"
+    selected = [pl.int_range(0, pl.len(), dtype=pl.UInt32 if len(frame) <= 2**32 else pl.UInt64).alias(position_name)]
+    if expressions:
+        selected.append(pl.all_horizontal(expressions).alias(mask_name))
+    if sort:
+        name = column_label(frame, sort.get("column"))
+        key = pl.col(name)
+        if frame[name].dtype.is_float():
+            key = pl.when(key.is_nan()).then(None).otherwise(key)
+        selected.append(key.alias(key_name))
+    index = frame.select(selected)
+    if expressions:
+        index = index.filter(pl.col(mask_name))
+    if sort:
+        index = index.sort(key_name, descending=sort.get("direction", "asc") == "desc", nulls_last=True, maintain_order=True)
+    return index[position_name].to_numpy().copy()
+
+
+def apply_view(frame, params):
+    positions = pandas_positions(frame, params)
+    return frame if positions is None else frame.iloc[positions]

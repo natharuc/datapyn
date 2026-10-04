@@ -1,21 +1,37 @@
 import { translate as t, useLocale, getLocale } from "./i18n";
 import { featureTranslate as featureText } from "./featureTranslations";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import DataEditor, { CompactSelection, GridCellKind, type GridCell, type GridColumn, type GridSelection, type Item, type Rectangle } from "@glideapps/glide-data-grid";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import DataEditor, { CompactSelection, GridCellKind, type DataEditorProps, type DataEditorRef, type GridCell, type GridColumn, type GridSelection, type Item, type Rectangle } from "@glideapps/glide-data-grid";
 import "@glideapps/glide-data-grid/dist/index.css";
 import { Copy, Filter, ArrowDownAZ, LoaderCircle, Settings2, X } from "lucide-react";
-import { errorText, type Column, type Primitive, type ResultPage, type ResultRef, type RuntimeTransport } from "./runtime";
+import { errorText, type Column, type Primitive, type ResultRef, type RuntimeTransport } from "./runtime";
 import { selectionRectangles,selectedCellCount } from "./gridSelection";
 import type { DataView } from "./dataTypes";
 import { formatCell, type ColumnFormat, type ColumnFormats } from "./gridFormat";
-import { boundedClipboard, cellSelected, htmlClipboard, jsonClipboard, MAX_COPY_CELLS, plainClipboard, selectedLayout, type CopyFormat, type CopyTable } from "./gridClipboard";
+import { cellSelected, MAX_COPY_CELLS, selectedLayout, type CopyFormat, type CopyTable } from "./gridClipboard";
+import { formatClipboard } from "./clipboardFormatClient";
 import { exportSource, requestSqlText } from "./dataExport";
 import { Modal } from "./PanelControls";
 import { useOwnerDocumentRevision } from "./useOwnerDocument";
+import { GridPageCache, GRID_PAGE_COLUMNS, GRID_PAGE_ROWS, type GridPage, type GridTile } from "./gridPageCache";
+import { GridPageScheduler, StaleGridRequest, viewportTiles } from "./gridPageScheduler";
+import { pageDamage } from "./gridPageDamage";
 import "./resultGrid.css";
 
-const PAGE_SIZE = 200;
-const CACHE_PAGES = 40;
+const GridCanvas = memo(DataEditor);
+const NO_DELETE = () => false;
+const GRID_KEYBINDINGS = { copy: false } as const;
+const LOADING_CELL: GridCell = { kind: GridCellKind.Loading, allowOverlay: false };
+const NULL_THEME = { textDark: "#8391a5" };
+function consecutiveRuns(indexes: readonly number[], maximum: number) {
+  const runs: { start: number; length: number }[] = [];
+  for (const index of indexes) {
+    const last = runs[runs.length - 1];
+    if (last && index === last.start + last.length && last.length < maximum) last.length++;
+    else runs.push({ start: index, length: 1 });
+  }
+  return runs;
+}
 const emptySelection = (): GridSelection => ({ columns: CompactSelection.empty(), rows: CompactSelection.empty() });
 export const displayCell = (value: Primitive) => formatCell(value);
 export const clipboardCell = (value: Primitive) => value === null ? "" : String(value).replace(/[\t\r\n]/g, " ");
@@ -39,10 +55,13 @@ export function ResultGrid({ sessionId, result, transport, onMessage, copySignal
   const [documentReady, setDocumentReady] = useState(false);
   useLayoutEffect(() => setDocumentReady(true), []);
   const hostDocument = panelRef.current?.ownerDocument;
-  const cache = useRef(new Map<number, ResultPage>()), pending = useRef(new Map<number, Promise<ResultPage>>());
+  const cache = useRef(new GridPageCache());
+  const editor = useRef<DataEditorRef>(null);
+  const visible = useRef<Rectangle>({ x: 0, y: 0, width: Math.min(GRID_PAGE_COLUMNS, result.columns.length), height: Math.min(GRID_PAGE_ROWS, displayRowLimit, result.row_count) });
+  const damage = useRef<Rectangle[]>([]), paintFrame = useRef<{ window: Window; id: number }>();
   const generation = useRef(0);
   const message = useRef(onMessage); message.current = onMessage;
-  const [revision, setRevision] = useState(0), [selection, setSelection] = useState<GridSelection>(emptySelection);
+  const [selection, setSelection] = useState<GridSelection>(emptySelection);
   const [loading, setLoading] = useState(false), [error, setError] = useState("");
   const [ready, setReady] = useState(false), [copying, setCopying] = useState(false);
   const [filter, setFilter] = useState(initialView?.filter?.text??""), [filterQuery, setFilterQuery] = useState(initialView?.filter?.text??"");
@@ -77,93 +96,162 @@ export function ResultGrid({ sessionId, result, transport, onMessage, copySignal
   useEffect(() => { setSeparator(copySeparator); setCopyNull(nullDisplay); }, [copySeparator, nullDisplay]);
   const columns = useMemo<GridColumn[]>(() => resultColumns.map((column,index) => ({ title: column.name,
     id: String(index), width: columnWidths[index] ?? 175, icon: /int|float|decimal|number/i.test(column.dtype) ? "headerNumber" : "headerString" })), [resultColumns, columnWidths]);
-  const requestPage = useCallback((page: number): Promise<ResultPage> => {
-    const saved = cache.current.get(page); if (saved) return Promise.resolve(saved);
-    const inflight = pending.current.get(page); if (inflight) return inflight;
-    const version = generation.current; setLoading(true);
-    const promise = transport.request<ResultPage>("result.page", { session_id: sessionId, result_id: result.result_id,
-      offset: page * PAGE_SIZE, limit: PAGE_SIZE, sort, filter: effectiveFilter }).then((data) => {
-      if (version !== generation.current) return data;
-      if (!Array.isArray(data.rows)) throw new Error(t("Resposta de resultados inválida."));
-      if (cache.current.size >= CACHE_PAGES) cache.current.delete(cache.current.keys().next().value!);
-      cache.current.set(page, data); setTotalRows(data.total_rows); setResultColumns(data.columns); setRevision((value) => value + 1); setError("");
-      if (page === 0) setReady(true);
-      return data;
-    }).catch((failure) => {
-      if (version === generation.current) { setError(errorText(failure)); message.current(errorText(failure)); }
-      throw failure;
-    }).finally(() => { if (version === generation.current) { pending.current.delete(page); setLoading(pending.current.size > 0); } });
-    pending.current.set(page, promise); return promise;
-  }, [sessionId, result.result_id, sort, effectiveFilter, transport]);
-
-  const previousView=useRef("");
-  useEffect(() => {
-    const key=JSON.stringify([sessionId,result.result_id,sort,effectiveFilter]);
-    generation.current++; cache.current.clear(); pending.current.clear(); if(previousView.current!==key)setSelection(emptySelection()); previousView.current=key; setReady(false);
-    setTotalRows(result.row_count); setResultColumns(result.columns); setError(""); void requestPage(0).catch(() => {});
-    return () => { generation.current++; };
-  }, [requestPage, result.row_count,refreshRevision]);
+  const cellContext = useRef({ formats, resultColumns, copyNull });
+  cellContext.current = { formats, resultColumns, copyNull };
+  const requestContext = useRef({ sessionId, resultId: result.result_id, sort, filter: effectiveFilter, transport });
+  requestContext.current = { sessionId, resultId: result.result_id, sort, filter: effectiveFilter, transport };
+  const queueDamage = useCallback((region: Rectangle) => {
+    damage.current.push(region);
+    if (paintFrame.current) return;
+    const host = panelRef.current?.ownerDocument.defaultView;
+    if (!host) return;
+    const id = host.requestAnimationFrame(() => {
+      paintFrame.current = undefined;
+      const cells = pageDamage(damage.current.splice(0), visible.current);
+      if (cells.length) editor.current?.updateCells(cells);
+    });
+    paintFrame.current = { window: host, id };
+  }, []);
+  const scheduler = useRef<GridPageScheduler<GridPage>>();
+  if (!scheduler.current) scheduler.current = new GridPageScheduler<GridPage>({
+    load: tile => {
+      const context = requestContext.current;
+      return context.transport.request<GridPage>("result.page", { session_id: context.sessionId, result_id: context.resultId,
+        offset: tile.rowOffset, limit: tile.rowLimit, column_offset: tile.columnOffset, column_limit: tile.columnLimit,
+        include_columns: false, sort: context.sort, filter: context.filter }).then(data => {
+        if (!Array.isArray(data.rows)) throw new Error(t("Resposta de resultados inválida."));
+        return data;
+      });
+    },
+    cached: tile => cache.current.get(tile),
+    receive: (data, tile) => {
+      if (!cache.current.set(tile, data)) throw new Error(t("A página excede o limite de memória da grade. Reduza a visualização ou exporte os dados."));
+      setTotalRows(previous => previous === data.total_rows ? previous : data.total_rows);
+      setReady(true); setError("");
+      queueDamage({ x: tile.columnOffset, y: data.offset, width: tile.columnLimit, height: data.rows.length });
+    },
+    failed: failure => { setError(errorText(failure)); message.current(errorText(failure)); },
+    busy: setLoading, concurrency: 2, debounceMs: 35, maxQueued: 32,
+  });
+  const onVisibleRegionChanged = useCallback((range: Rectangle) => {
+    visible.current = range;
+    scheduler.current!.setViewport(viewportTiles(range, totalRowsRef.current, cellContext.current.resultColumns.length));
+  }, []);
+  const totalRowsRef = useRef(totalRows); totalRowsRef.current = Math.min(totalRows, rowLimit);
+  const previousView = useRef("");
+  const copyAbort = useRef<AbortController>();
+  useLayoutEffect(() => {
+    const key = JSON.stringify([sessionId, result.result_id, sort, effectiveFilter]);
+    generation.current++; scheduler.current!.reset(); cache.current.clear(); copyAbort.current?.abort();
+    const sameView = previousView.current === key;
+    if (!sameView) setSelection(emptySelection());
+    previousView.current = key; setReady(false); setTotalRows(result.row_count); setError("");
+    setResultColumns(previous => previous.length === result.columns.length && previous.every((column, index) => column.name === result.columns[index].name && column.dtype === result.columns[index].dtype) ? previous : result.columns);
+    const first = { x: 0, y: 0, width: Math.min(GRID_PAGE_COLUMNS, result.columns.length), height: Math.min(GRID_PAGE_ROWS, rowLimit, Math.max(1, result.row_count)) };
+    // Even an empty filtered result must request its row count. No fetch originates from cell painting.
+    const region = sameView && visible.current.width ? visible.current : first;
+    visible.current = region;
+    const tiles = viewportTiles(region, Math.max(1, result.row_count), result.columns.length);
+    scheduler.current!.setViewport(tiles.length ? tiles : [{ rowOffset: 0, rowLimit: GRID_PAGE_ROWS, columnOffset: 0, columnLimit: Math.max(1, Math.min(GRID_PAGE_COLUMNS, result.columns.length)) }], true);
+    queueDamage(region);
+    return () => {
+      generation.current++; scheduler.current!.reset(); copyAbort.current?.abort();
+      if (paintFrame.current) paintFrame.current.window.cancelAnimationFrame(paintFrame.current.id);
+      paintFrame.current = undefined; damage.current = [];
+    };
+  }, [sessionId, result.result_id, result.row_count, result.columns, sort, effectiveFilter, transport, refreshRevision, queueDamage]);
   useEffect(() => { const timer = setTimeout(() => setFilterQuery(filter.trim()), 250); return () => clearTimeout(timer); }, [filter]);
-
+  useEffect(() => { queueDamage(visible.current); }, [formats, copyNull, queueDamage]);
+  const retry = useCallback(() => {
+    setError(""); scheduler.current!.setViewport(viewportTiles(visible.current, Math.max(1, totalRowsRef.current), cellContext.current.resultColumns.length), true);
+  }, []);
   const getCellContent = useCallback(([column, row]: Item): GridCell => {
-    const pageIndex = Math.floor(row / PAGE_SIZE), page = cache.current.get(pageIndex);
-    if (!page) { void requestPage(pageIndex).catch(() => {}); return { kind: GridCellKind.Loading, allowOverlay: false }; }
-    const value = page.rows[row - page.offset]?.[column] ?? null;
-    const text = formatCell(value, formats[resultColumns[column]?.name]);
-    return { kind: GridCellKind.Text, data: text, displayData: text, allowOverlay: true,
-      readonly: true, copyData: formatCell(value,formats[resultColumns[column]?.name],copyNull), themeOverride: value === null ? { textDark: "#8391a5" } : undefined };
-  }, [requestPage, revision,formats,resultColumns,copyNull]);
+    const context = cellContext.current, cached = cache.current.value(column, row, context.resultColumns.length);
+    if (!cached) return LOADING_CELL;
+    const value = cached.value, text = formatCell(value, context.formats[context.resultColumns[column]?.name]);
+    return { kind: GridCellKind.Text, data: text, displayData: text, allowOverlay: true, readonly: true,
+      copyData: value === null ? context.copyNull : text, themeOverride: value === null ? NULL_THEME : undefined };
+  }, []);
 
-  const getCells = useCallback((rectangle: Rectangle) => async () => {
-    if (rectangle.width * rectangle.height > MAX_COPY_CELLS) throw new Error(t("Seleção muito grande para a área de transferência; reduza para até 200 mil células."));
-    const pages = new Map<number, ResultPage>(), version = generation.current;
-    for (let page = Math.floor(rectangle.y / PAGE_SIZE); page <= Math.floor((rectangle.y + rectangle.height - 1) / PAGE_SIZE); page++) { pages.set(page, await requestPage(page)); if(version!==generation.current) throw new Error(t("Os resultados mudaram durante a cópia. Selecione novamente.")); }
-    return Array.from({ length: rectangle.height }, (_, y) => Array.from({ length: rectangle.width }, (_, x) => {
-      const row = rectangle.y + y, page = pages.get(Math.floor(row / PAGE_SIZE))!;
-      const value = page.rows[row - page.offset]?.[rectangle.x + x] ?? null;
-      return { kind: GridCellKind.Text, data: formatCell(value,formats[resultColumns[rectangle.x+x]?.name],copyNull), displayData: formatCell(value,formats[resultColumns[rectangle.x+x]?.name]), readonly: true, allowOverlay: false } as GridCell;
-    }));
-  }, [requestPage,formats,resultColumns,copyNull]);
-
-  const readSelection = useCallback(async (): Promise<CopyTable> => {
-    const selected = rectangles.length ? rectangles : totalRows && columns.length ? [{x:0,y:0,width:columns.length,height:totalRows}] : [];
+  const readSelection = useCallback(async (signal?: AbortSignal, selectedOverride?: Rectangle[]): Promise<CopyTable> => {
+    const selected = selectedOverride ?? (rectangles.length ? rectangles : totalRows && columns.length ? [{ x: 0, y: 0, width: columns.length, height: totalRows }] : []);
     if (!selected.length) throw new Error(t("Não há resultados para copiar."));
-    const layout = selectedLayout(selected), version = generation.current, pages = new Map<number,ResultPage>();
-    const pageIndexes = [...new Set(layout.rows.map(row=>Math.floor(row/PAGE_SIZE)))];
-    for(let first=0;first<pageIndexes.length;first+=4) {
-      const batch = await Promise.all(pageIndexes.slice(first,first+4).map(async index=>[index,await requestPage(index)] as const));
-      if(version!==generation.current) throw new Error(t("Os resultados mudaram durante a cópia. Selecione novamente."));
-      batch.forEach(([index,page])=>pages.set(index,page));
+    const layout = selectedLayout(selected), version = generation.current;
+    const rowIndexes = new Map(layout.rows.map((row, index) => [row, index])), columnIndexes = new Map(layout.columns.map((column, index) => [column, index]));
+    const rows: CopyTable["rows"] = layout.rows.map(() => Array<Primitive | undefined>(layout.columns.length).fill(undefined));
+    const rowRuns = consecutiveRuns(layout.rows, GRID_PAGE_ROWS), columnRuns = consecutiveRuns(layout.columns, GRID_PAGE_COLUMNS);
+    let yieldAt = performance.now() + 8;
+    for (const rowRun of rowRuns) for (const columnRun of columnRuns) {
+      if (signal?.aborted || version !== generation.current) throw new StaleGridRequest();
+      const page = await scheduler.current!.read({ rowOffset: rowRun.start, rowLimit: rowRun.length, columnOffset: columnRun.start, columnLimit: columnRun.length }, signal);
+      if (signal?.aborted || version !== generation.current) throw new StaleGridRequest();
+      for (let y = 0; y < page.rows.length; y++) {
+        const row = page.offset + y, values = page.rows[y], destination = rows[rowIndexes.get(row)!];
+        for (let x = 0; x < values.length; x++) {
+          const column = (page.column_offset ?? columnRun.start) + x;
+          if (cellSelected(column, row, selected)) destination[columnIndexes.get(column)!] = values[x];
+        }
+      }
+      if (performance.now() >= yieldAt) { await new Promise<void>(resolve => setTimeout(resolve, 0)); yieldAt = performance.now() + 8; }
     }
-    return {columns:layout.columns.map(index=>columns[index].title),rows:layout.rows.map(row=>{const page=pages.get(Math.floor(row/PAGE_SIZE))!;return layout.columns.map(column=>cellSelected(column,row,selected)?page.rows[row-page.offset]?.[column]??null:undefined);})};
-  },[rectangles,totalRows,columns,requestPage]);
-  const readSql = useCallback(async (tableName: string) => {
+    return { columns: layout.columns.map(index => columns[index].title), rows };
+  }, [rectangles, totalRows, columns]);
+  const selectionReader = useRef(readSelection); selectionReader.current = readSelection;
+  const getCells = useCallback((rectangle: Rectangle, signal: AbortSignal) => async () => {
+    if (rectangle.width * rectangle.height > MAX_COPY_CELLS) throw new Error(t("Seleção muito grande para a área de transferência; reduza para até 200 mil células."));
+    const table = await selectionReader.current(signal, [rectangle]), context = cellContext.current;
+    return table.rows.map(row => row.map((value, x) => {
+      const actual = value ?? null, text = formatCell(actual, context.formats[context.resultColumns[rectangle.x + x]?.name]);
+      return { kind: GridCellKind.Text, data: actual === null ? context.copyNull : text, displayData: text, readonly: true, allowOverlay: false } as GridCell;
+    }));
+  }, []);
+  const readSql = useCallback(async (tableName: string, signal?: AbortSignal) => {
+    if (signal?.aborted) throw new StaleGridRequest();
     const version = generation.current;
-    return requestSqlText(transport,exportSource(sessionId,result.result_id,{filter:effectiveFilter,sort,scope:rectangles.length?{rectangles}:undefined},rectangles.length>0),tableName,dbType,()=>version===generation.current);
+    const operationId = crypto.randomUUID();
+    const cancel = () => { void transport.request("result.export_cancel", { session_id: sessionId, operation_id: operationId }).catch(() => {}); };
+    signal?.addEventListener("abort", cancel, { once: true });
+    try {
+      return await requestSqlText(transport,{...exportSource(sessionId,result.result_id,{filter:effectiveFilter,sort,scope:rectangles.length?{rectangles}:undefined},rectangles.length>0),operation_id:operationId},tableName,dbType,()=>version===generation.current&&!signal?.aborted);
+    } finally { signal?.removeEventListener("abort", cancel); }
   },[sessionId,result.result_id,transport,effectiveFilter,sort,rectangles,dbType]);
   const copy = useCallback(async (format: CopyFormat="excel",headers=false,tableName?:string) => {
     if(copying||!ready) return; setCopying(true);
+    const controller = new AbortController(), version = generation.current;
+    copyAbort.current?.abort(); copyAbort.current = controller;
     try {
-      const sql=format==="sql"?await readSql(tableName??""):undefined;
-      const table=format==="sql"?undefined:await readSelection(),options={headers,separator,nullDisplay:copyNull,formats};
-      const plain=sql?sql.text:boundedClipboard(format==="json"?jsonClipboard(table!):plainClipboard(table!,options));
+      const sql=format==="sql"?await readSql(tableName??"",controller.signal):undefined;
+      const table=format==="sql"?undefined:await readSelection(controller.signal);
+      const formatted=sql?undefined:await formatClipboard(table!,{format:format as "excel"|"plain"|"json",headers,separator,nullDisplay:copyNull},formats,controller.signal);
+      if(controller.signal.aborted||version!==generation.current)throw new StaleGridRequest();
+      const plain=sql?sql.text:formatted!.plain;
       const view=panelRef.current?.ownerDocument.defaultView as (Window & typeof globalThis)|null|undefined;
       const clipboard=view?.navigator.clipboard;
       if(!clipboard)throw new Error(t("Área de transferência indisponível nesta janela."));
       if(format==="excel"&&view?.ClipboardItem&&clipboard.write) {
-        const html=boundedClipboard(htmlClipboard(table!,options));
+        const html=formatted!.html!;
         try {await clipboard.write([new view.ClipboardItem({"text/plain":new view.Blob([plain],{type:"text/plain"}),"text/html":new view.Blob([html],{type:"text/html"})})]);} catch {await clipboard.writeText(plain);}
       } else await clipboard.writeText(plain);
       message.current(t("{count} linhas copiadas{headers} ({format}).",{count:(sql?.row_count??table!.rows.length).toLocaleString(getLocale()),headers:headers?t(" com cabeçalhos"):"",format:format==="sql"?"INSERT":format==="json"?"JSON":format==="excel"?"Excel":t("texto")}));
       if(format==="sql") {setSqlDialog(false);setSqlError("");}
-    } catch(failure) {if(format==="sql")setSqlError(errorText(failure));message.current(errorText(failure));} finally {setCopying(false);}
+    } catch(failure) {
+      const text=controller.signal.aborted||failure instanceof StaleGridRequest?t("Cópia cancelada."):errorText(failure);
+      if(format==="sql")setSqlError(text);message.current(text);
+    } finally {if(copyAbort.current===controller){copyAbort.current=undefined;setCopying(false);}}
   },[copying,ready,readSelection,readSql,separator,copyNull,formats]);
   async function insertSelectedSql() {
     if (copying || !ready || !onInsertSql) return;
     setCopying(true); setSqlError("");
-    try { onInsertSql((await readSql(sqlTable)).text); setSqlDialog(false); }
-    catch (failure) {setSqlError(errorText(failure));message.current(errorText(failure));}
-    finally {setCopying(false);}
+    const controller = new AbortController(), version = generation.current;
+    copyAbort.current?.abort(); copyAbort.current = controller;
+    try {
+      const generated = await readSql(sqlTable, controller.signal);
+      if (controller.signal.aborted || version !== generation.current) throw new StaleGridRequest();
+      onInsertSql(generated.text); setSqlDialog(false);
+    } catch (failure) {
+      const text = controller.signal.aborted || failure instanceof StaleGridRequest ? t("Cópia cancelada.") : errorText(failure);
+      setSqlError(text); message.current(text);
+    } finally { if (copyAbort.current === controller) { copyAbort.current = undefined; setCopying(false); } }
   }
   const copyRef = useRef(copy); copyRef.current = copy;
   const previousCopySignal = useRef(copySignal);
@@ -173,6 +261,23 @@ export function ResultGrid({ sessionId, result, transport, onMessage, copySignal
   const selectedCount = useMemo(()=>selectedCellCount(rectangles),[rectangles]);
   const light=theme==="light"||(theme==="system"&&hostDocument?.defaultView?.matchMedia("(prefers-color-scheme: light)").matches);
 
+  const gridTheme = useMemo(() => ({ accentColor: "#3369ff", accentLight: light?"#e7edff":"#1d3158", bgCell: light?"#ffffff":"#0e1522", bgCellMedium:light?"#f8faff":"#121b2c", bgHeader:light?"#edf1f8":"#161f30",
+          bgHeaderHasFocus:light?"#dfe7f5":"#1e2c46", bgHeaderHovered:light?"#e2e9f5":"#1b2940", bgIconHeader: "#657791", textDark:light?"#243047":"#dce5f3", textMedium:light?"#52627b":"#9caec6",
+          textLight: "#657791", textHeader:light?"#384961":"#bccbdd", borderColor:light?"#d7dfea":"#243047", horizontalBorderColor:light?"#e7edf6":"#1a2538", fontFamily: `${uiFont}, sans-serif`,
+          baseFontStyle: `${fontSize}px`, headerFontStyle: `500 ${fontSize}px`, markerFontStyle:`${fontSize-1}px`,editorFontSize:`${fontSize}px`,cellHorizontalPadding: 12 }), [light, fontSize, uiFont]);
+  const columnsRef = useRef(columns); columnsRef.current = columns;
+  const onColumnResize = useCallback<NonNullable<DataEditorProps["onColumnResize"]>>((column, width) => {
+    const key = column.id ?? column.title;
+    setColumnWidths(previous => previous[key] === width ? previous : { ...previous, [key]: width });
+  }, []);
+  const onHeaderClicked = useCallback<NonNullable<DataEditorProps["onHeaderClicked"]>>((index, event) => {
+    const column = columnsRef.current[index];
+    if (!column || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    setSort(previous => ({ column: column.title, direction: previous?.column === column.title && previous.direction === "asc" ? "desc" : "asc" }));
+  }, []);
+  const onHeaderContextMenu = useCallback<NonNullable<DataEditorProps["onHeaderContextMenu"]>>((index, event) => { event.preventDefault(); setColumnDialog(index); }, []);
+  const onCellContextMenu = useCallback<NonNullable<DataEditorProps["onCellContextMenu"]>>((cell, event) => { event.preventDefault(); setColumnDialog(cell[0]); }, []);
+
   return <div ref={panelRef} className="result-grid-panel">
     <div className="grid-toolbar">
       <span className="result-meta"><span className="mono">{totalRows.toLocaleString(getLocale())}</span> {t("linhas")} <span className="dim">/ {columns.length} {t("colunas")}</span></span>
@@ -181,28 +286,24 @@ export function ResultGrid({ sessionId, result, transport, onMessage, copySignal
       {columnFilters.length>0&&<div className="grid-filter-chips">{columnFilters.map(item=><button key={item.column} className="text-button" title={`${t("Limpar filtro da coluna")} · ${item.operator}: ${item.value??""}`} onClick={()=>setColumnFilters(previous=>previous.filter(filter=>filter.column!==item.column))}><Filter size={13}/>{item.column}<X size={12}/></button>)}</div>}
       {sort && <button className="text-button" onClick={() => setSort(undefined)} title={t("Limpar ordenação")}><ArrowDownAZ size={13} />{sort.column} {sort.direction === "asc" ? "↑" : "↓"}</button>}
       {loading && <LoaderCircle className="spin" size={13} />}
+      {copying && <button className="text-button" onClick={() => copyAbort.current?.abort()} title={t("Cancelar")}><X size={13}/>{t("Cancelar")}</button>}
       <button className="text-button" disabled={!columns.length} onClick={()=>setColumnDialog(selection.current?.cell[0]??0)} title={t("Formatar ou filtrar uma coluna; clique direito no cabeçalho")}><Settings2 size={13}/>{t("Coluna")}</button>
       <button className="text-button" disabled={copying||!ready} onClick={() => void copy("excel",true)} title={t("Copiar seleção com cabeçalhos (Ctrl+Shift+C)")}><Copy size={13} /> {t("Cabeçalhos")}</button>
       <details className="grid-copy-menu"><summary title={t("Copiar resultados")}>{copying?<LoaderCircle className="spin" size={13}/>:<Copy size={13}/>}{t("Copiar ▾")}</summary><div>
         <button disabled={copying||!ready} onClick={()=>void copy("excel")}>Excel · Ctrl+C</button><button disabled={copying||!ready} onClick={()=>void copy("plain")}>{t("Texto delimitado")}</button><button disabled={copying||!ready} onClick={()=>void copy("json")}>{t("JSON")}</button><button disabled={copying||!ready} onClick={()=>{setSqlError("");setSqlDialog(true);}}>SQL INSERT…</button><button onClick={()=>setSettingsDialog(true)}>{t("Preferências de cópia…")}</button>
       </div></details>
     </div>
-    {error ? <div className="empty-results error-state"><p>{t(error)}</p><button onClick={() => { pending.current.clear(); void requestPage(0).catch(() => {}); }}>{t("Tentar novamente")}</button></div> : <div ref={gridViewport} className="grid-canvas" onKeyDownCapture={event=>{const target=event.target as HTMLElement;if(!(event.ctrlKey||event.metaKey)||event.key.toLowerCase()!=="c"||event.altKey||target.tagName==="INPUT"||target.tagName==="TEXTAREA"||target.isContentEditable)return;event.preventDefault();event.stopPropagation();void copy("excel",event.shiftKey);}}>
-      {documentReady&&hostDocument&&<DataEditor key={`${result.result_id}:${ownerDocumentRevision}`} ownerDocument={hostDocument} width="100%" height="100%" columns={columns} rows={Math.min(totalRows,rowLimit)} getCellContent={getCellContent}
+    {error ? <div className="empty-results error-state"><p>{t(error)}</p><button onClick={retry}>{t("Tentar novamente")}</button></div> : <div ref={gridViewport} className="grid-canvas" onKeyDownCapture={event=>{const target=event.target as HTMLElement;if(!(event.ctrlKey||event.metaKey)||event.key.toLowerCase()!=="c"||event.altKey||target.tagName==="INPUT"||target.tagName==="TEXTAREA"||target.isContentEditable)return;event.preventDefault();event.stopPropagation();void copy("excel",event.shiftKey);}}>
+      {documentReady&&hostDocument&&<GridCanvas ref={editor} key={`${result.result_id}:${ownerDocumentRevision}`} ownerDocument={hostDocument} width="100%" height="100%" columns={columns} rows={Math.min(totalRows,rowLimit)} getCellContent={getCellContent}
         getCellsForSelection={getCells} gridSelection={selection} onGridSelectionChange={setSelection}
-        rowMarkers="number" rowHeight={Math.max(30,fontSize+14)} headerHeight={Math.max(34,fontSize+18)} rangeSelect="multi-rect" smoothScrollY={false} keybindings={{copy:false}}
-        onVisibleRegionChanged={(range) => {
-          if(range.height) for (let page = Math.floor(range.y / PAGE_SIZE); page <= Math.floor((range.y + range.height-1) / PAGE_SIZE); page++) void requestPage(page).catch(() => {});
-        }}
-        onColumnResize={(column, width) => setColumnWidths((previous) => ({ ...previous, [column.id ?? column.title]: width }))}
-        onHeaderClicked={(index,event) => {if(!columns[index]||event.ctrlKey||event.metaKey||event.shiftKey)return;setSort((previous) => ({ column: columns[index].title, direction: previous?.column === columns[index].title && previous.direction === "asc" ? "desc" : "asc" }));}}
-        onHeaderContextMenu={(index,event)=>{event.preventDefault();setColumnDialog(index);}}
-        onCellContextMenu={(cell,event)=>{event.preventDefault();setColumnDialog(cell[0]);}}
-        onDelete={() => false}
-        theme={{ accentColor: "#3369ff", accentLight: light?"#e7edff":"#1d3158", bgCell: light?"#ffffff":"#0e1522", bgCellMedium:light?"#f8faff":"#121b2c", bgHeader:light?"#edf1f8":"#161f30",
-          bgHeaderHasFocus:light?"#dfe7f5":"#1e2c46", bgHeaderHovered:light?"#e2e9f5":"#1b2940", bgIconHeader: "#657791", textDark:light?"#243047":"#dce5f3", textMedium:light?"#52627b":"#9caec6",
-          textLight: "#657791", textHeader:light?"#384961":"#bccbdd", borderColor:light?"#d7dfea":"#243047", horizontalBorderColor:light?"#e7edf6":"#1a2538", fontFamily: `${uiFont}, sans-serif`,
-          baseFontStyle: `${fontSize}px`, headerFontStyle: `500 ${fontSize}px`, markerFontStyle:`${fontSize-1}px`,editorFontSize:`${fontSize}px`,cellHorizontalPadding: 12 }} />}
+        rowMarkers="number" rowHeight={Math.max(30,fontSize+14)} headerHeight={Math.max(34,fontSize+18)} rangeSelect="multi-rect" smoothScrollY={false} keybindings={GRID_KEYBINDINGS}
+        onVisibleRegionChanged={onVisibleRegionChanged}
+        onColumnResize={onColumnResize}
+        onHeaderClicked={onHeaderClicked}
+        onHeaderContextMenu={onHeaderContextMenu}
+        onCellContextMenu={onCellContextMenu}
+        onDelete={NO_DELETE}
+        theme={gridTheme} />}
     </div>}
     <div className="grid-selection-status" aria-live="polite">{selectedCount?t("{count} células selecionadas",{count:selectedCount.toLocaleString(getLocale())}):t("Ctrl+C: copiar · Shift+clique: intervalo · Ctrl+clique: múltiplos intervalos")}{copying&&t(" · Copiando…")}</div>
     {columnDialog!==undefined&&resultColumns[columnDialog]&&<ColumnDialog key={`${result.result_id}:${columnDialog}`} column={resultColumns[columnDialog]} format={formats[resultColumns[columnDialog].name]} currentFilter={columnFilters.find(item=>item.column===resultColumns[columnDialog].name)} onClose={()=>setColumnDialog(undefined)}

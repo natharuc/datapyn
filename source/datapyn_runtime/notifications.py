@@ -167,7 +167,12 @@ def render_template(template, context, namespace=None, result=None):
         if result_match:
             row, column = map(int, result_match.groups())
             try:
-                value = result.iloc[row, column] if hasattr(result, "iloc") else result[row][column]
+                if hasattr(result, "iloc"):
+                    value = result.iloc[row, column]
+                elif hasattr(result, "iter_rows"):
+                    value = result[row, column]
+                else:
+                    value = result[row][column]
                 return str(scalar(value))[:2000]
             except (IndexError, TypeError, KeyError):
                 return match.group(0)

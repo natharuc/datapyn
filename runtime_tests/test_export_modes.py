@@ -283,6 +283,18 @@ def test_decimal_and_unsigned_sqlite_table_values_never_pass_through_float():
         connector.disconnect()
 
 
+@pytest.mark.parametrize("temporary", [False, True])
+def test_native_polars_nullable_uint64_sqlite_table_remains_exact(temporary):
+    connector = SQLiteConnector(":memory:")
+    try:
+        frame = pl.DataFrame({"value": pl.Series([2**64 - 1, None], dtype=pl.UInt64)})
+        data_tools.dispatch("result.export_table", {"variable_name": "frame", "table": "native", "temporary": temporary},
+                            {"frame": frame}, ResultStore(pd, pl), connector)
+        assert connector.execute_query("SELECT value FROM native")["value"].tolist() == [str(2**64 - 1), None]
+    finally:
+        connector.disconnect()
+
+
 def test_sql_ddl_text_fallback_emits_string_literals_and_separate_schema_is_literal():
     decimal = Decimal("1." + "2" * 50)
     frame = pd.DataFrame({"decimal": [decimal]})

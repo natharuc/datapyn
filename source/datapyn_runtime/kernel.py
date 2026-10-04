@@ -4,16 +4,13 @@ from __future__ import annotations
 
 import ast
 import base64
-from collections import OrderedDict
 import io
-import json
 import os
 from pathlib import Path
 import sys
 import threading
 import time
 import traceback
-import uuid
 
 from . import database
 from .values import describe_variables, preview, scalar
@@ -24,8 +21,7 @@ from .desktop_services import enable_user_packages
 from .rich_outputs import RichOutputs
 
 MAX_OUTPUT_BYTES = 256 * 1024
-MAX_PAGE_ROWS = 1000
-MAX_RESULT_HANDLES = 64
+from .result_store import ResultStore, MAX_PAGE_ROWS, MAX_RESULT_HANDLES
 
 
 class OutputCapture:
@@ -107,111 +103,6 @@ class CapturedStream(io.TextIOBase):
     def isatty(self):
         return False
 
-
-class ResultStore:
-    """Only the kernel owns DataFrames; the wire exposes opaque handles."""
-
-    def __init__(self, pd, pl):
-        self.pd = pd
-        self.pl = pl
-        self.frames: OrderedDict[str, object] = OrderedDict()
-        self.descriptors = OrderedDict()
-        self.views = OrderedDict()
-        self.view_bytes = 0
-
-    def invalidate_views(self):
-        self.views.clear()
-        self.view_bytes = 0
-
-    def release(self, result_id):
-        released = self.frames.pop(result_id, None) is not None
-        self.descriptors.pop(result_id, None)
-        for key in list(self.views):
-            if key[0] == result_id:
-                _view, size = self.views.pop(key)
-                self.view_bytes -= size
-        return {"result_id": result_id, "released": released}
-
-    def is_frame(self, value):
-        return isinstance(value, (self.pd.DataFrame, self.pl.DataFrame, self.pd.Series, self.pl.Series))
-
-    def register(self, value, variable_name: str) -> dict:
-        if isinstance(value, self.pd.Series):
-            value = value.to_frame()
-        elif isinstance(value, self.pl.Series):
-            value = value.to_frame().to_pandas()
-        elif isinstance(value, self.pl.DataFrame):
-            value = value.to_pandas()
-        result_id = uuid.uuid4().hex
-        self.frames[result_id] = value
-        while len(self.frames) > MAX_RESULT_HANDLES:
-            identifier, _frame = self.frames.popitem(last=False)
-            self.descriptors.pop(identifier, None)
-            for key in list(self.views):
-                if key[0] == identifier:
-                    _view, size = self.views.pop(key)
-                    self.view_bytes -= size
-        descriptor = {
-            "result_id": result_id,
-            "variable_name": variable_name,
-            "columns": [{"name": str(column), "dtype": str(dtype)} for column, dtype in zip(value.columns, value.dtypes)],
-            "row_count": len(value),
-        }
-        self.descriptors[result_id] = descriptor
-        return descriptor
-
-    @staticmethod
-    def column_label(frame, wire_name):
-        """Map string DTO names to the original label without mutating a frame."""
-        if not isinstance(wire_name, str):
-            raise ValueError("column must be its string name from the result descriptor")
-        matches = [label for label in frame.columns if str(label) == wire_name]
-        if not matches:
-            raise ValueError(f"Unknown column: {wire_name}")
-        if len(matches) > 1:
-            raise ValueError(f"Ambiguous column name: {wire_name}; duplicate names cannot be sorted or filtered by name")
-        return matches[0]
-
-    def view(self, params: dict):
-        result_id = params["result_id"]
-        if result_id not in self.frames:
-            raise KeyError("Result is unavailable; it may have been released or the kernel restarted")
-        frame = self.frames[result_id]
-        filter_spec = params.get("filter") or {}
-        sort = params.get("sort") or {}
-        if not filter_spec and not sort:
-            return frame
-        key = (result_id, json.dumps({"filter": filter_spec, "sort": sort}, sort_keys=True, allow_nan=False))
-        if key in self.views:
-            self.views.move_to_end(key)
-            return self.views[key][0]
-        from .frame_view import apply_view
-        frame = apply_view(frame, params)
-        size = int(frame.memory_usage(index=True, deep=False).sum())
-        max_bytes = 256 * 1024 * 1024
-        if size <= max_bytes:
-            while self.views and (len(self.views) >= 4 or self.view_bytes + size > max_bytes):
-                _old_key, (_old_frame, old_size) = self.views.popitem(last=False)
-                self.view_bytes -= old_size
-            self.views[key] = (frame, size)
-            self.view_bytes += size
-        return frame
-
-    def page(self, params: dict):
-        offset = params.get("offset", 0)
-        limit = params.get("limit", 100)
-        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
-            raise ValueError("offset must be a non-negative integer")
-        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_PAGE_ROWS:
-            raise ValueError("limit must be between 1 and 1000")
-        frame = self.view(params)
-        rows = [[scalar(value) for value in row] for row in frame.iloc[offset : offset + limit].itertuples(index=False, name=None)]
-        return {
-            "columns": [{"name": str(column), "dtype": str(dtype)} for column, dtype in zip(frame.columns, frame.dtypes)],
-            "rows": rows,
-            "total_rows": len(frame),
-            "offset": offset,
-        }
 
 
 def execute_python(code: str, namespace: dict, filename: str):

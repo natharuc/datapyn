@@ -114,9 +114,13 @@ def smoke(executable=None, timeout=90, report=None):
             restored = client.execute("parity", "restored", "python", "assert df.shape == (2,3)\ndf")
             assert any(item["variable_name"] == "df" for item in restored["results"])
             client.request("snapshot.settings.set", {"settings": {"enabled": False}})
-            result = client.execute("parity", "million", "python", "large = pd.DataFrame({'id': np.arange(1000000), 'group': np.arange(1000000) % 10})\nlarge")
+            result = client.execute("parity", "million", "python", "large = pd.DataFrame({'id': np.arange(10000000), 'group': np.arange(10000000) % 10})\nlarge")
             ref = next(item for item in result["results"] if item["variable_name"] == "large")
-            assert ref["row_count"] == 1_000_000
+            assert ref["row_count"] == 10_000_000
+            last_page = client.request("result.page", {"session_id": "parity", "result_id": ref["result_id"],
+                "offset": 9_999_800, "limit": 200, "column_offset": 0, "column_limit": 1, "include_columns": False})
+            assert last_page["rows"][0] == [9_999_800] and last_page["rows"][-1] == [9_999_999]
+            assert last_page["columns"] == [] and last_page["total_columns"] == 2
             filtered = {"session_id": "parity", "result_id": ref["result_id"], "offset": 0, "limit": 100,
                         "filter": {"filters": [{"column": "group", "operator": "equals", "value": "4"}]},
                         "sort": {"column": "id", "direction": "desc"}}
@@ -125,11 +129,16 @@ def smoke(executable=None, timeout=90, report=None):
                 started = time.perf_counter()
                 page = client.request("result.page", filtered)
                 measurements.append((time.perf_counter() - started) * 1000)
-                assert len(page["rows"]) == 100 and page["total_rows"] == 100_000
-            metrics.update({"rows": 1_000_000, "page_rows": 100, "filter_sort_cold_ms": round(measurements[0], 2),
+                assert len(page["rows"]) == 100 and page["total_rows"] == 1_000_000
+            metrics.update({"rows": 10_000_000, "page_rows": 100, "filter_sort_cold_ms": round(measurements[0], 2),
                             "filter_sort_cached_median_ms": round(statistics.median(measurements[1:]), 2)})
             client.request("result.release", {"session_id": "parity", "result_id": ref["result_id"]})
-            client.execute("parity", "release", "python", "assert large.shape == (1000000,2)")
+            client.execute("parity", "release", "python", "assert large.shape == (10000000,2)")
+            native = client.execute("parity", "native-polars", "python", "native_large = pl.from_pandas(large)\nnative_large")
+            native_ref = next(item for item in native["results"] if item["variable_name"] == "native_large")
+            native_page = client.request("result.page", {"session_id": "parity", "result_id": native_ref["result_id"],
+                "offset": 9_999_999, "limit": 1, "column_offset": 1, "column_limit": 1, "include_columns": False})
+            assert native_page["rows"] == [[9]] and native_page["total_rows"] == 10_000_000
             assert client.request("pynia.catalog")["agents"]
             client.execute("parity", "drivers", "python", "import pyodbc, pymssql, psycopg2, pymysql, mysql.connector, databricks.sql, azure.identity, jedi, jinja2, openpyxl, fastexcel\nassert pyodbc.version")
             precision_probe = client.execute("parity", "combined-precision", "python", "precision_probe = pd.DataFrame(np.full((50,50), 2**52, dtype=np.int64))\nprecision_probe")
@@ -162,7 +171,7 @@ def smoke(executable=None, timeout=90, report=None):
                     os.environ[key] = value
     if report:
         Path(report).write_text(json.dumps(metrics, indent=2), encoding="utf-8")
-    print("Feature acceptance: SQLite/catalog, Explorer, completion/format, parameters, precise selections, five export formats, Excel import, PNG/JPEG/chart/rich exports, snapshot restart, precise streamed Parquet, paged million-row result and Qt-free kernel OK.")
+    print("Feature acceptance: SQLite/catalog, Explorer, completion/format, parameters, precise selections, five export formats, Excel import, PNG/JPEG/chart/rich exports, snapshot restart, precise streamed Parquet, projected ten-million-row Pandas/Polars results and Qt-free kernel OK.")
     print(json.dumps(metrics))
 
 

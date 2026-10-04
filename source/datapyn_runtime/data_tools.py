@@ -76,7 +76,7 @@ def _frame(params, namespace, store):
     if isinstance(frame, (store.pd.Series, store.pl.Series)):
         frame = frame.to_frame()
     if isinstance(frame, store.pl.DataFrame):
-        frame = frame.to_pandas()
+        frame = store.pandas_frame(frame)
     return frame
 
 

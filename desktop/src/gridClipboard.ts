@@ -4,22 +4,28 @@ import type { ColumnFormats } from "./gridFormat";
 import { formatCell } from "./gridFormat";
 import { quoteIdentifier, quoteIdentifierPart } from "./explorer";
 
-export const MAX_COPY_CELLS = 200_000;
-export const MAX_CLIPBOARD_BYTES = 16 * 1024 * 1024;
+import { MAX_COPY_CELLS, utf8Bytes } from "./clipboardLimits";
+export { MAX_COPY_CELLS, MAX_CLIPBOARD_BYTES } from "./clipboardLimits";
 export interface CopyTable { columns: string[]; rows: Array<Array<Primitive | undefined>> }
 export interface CopyOptions { headers?: boolean; separator?: string; nullDisplay?: string; formats?: ColumnFormats; raw?: boolean }
 export type CopyFormat = "excel" | "plain" | "json" | "sql";
 
 export function selectedLayout(rectangles: Rectangle[]) {
-  const rowSet = new Set<number>(), columnSet = new Set<number>();
+  const rowRanges: Array<[number,number]> = [], columnRanges: Array<[number,number]> = [];
   for (const r of rectangles) {
-    if (![r.x, r.y, r.width, r.height].every(Number.isSafeInteger) || r.x < 0 || r.y < 0 || r.width <= 0 || r.height <= 0) throw new Error("Seleção inválida.");
+    if (![r.x, r.y, r.width, r.height, r.x+r.width, r.y+r.height].every(Number.isSafeInteger) || r.x < 0 || r.y < 0 || r.width <= 0 || r.height <= 0) throw new Error("Seleção inválida.");
     if (r.width * r.height > MAX_COPY_CELLS) throw new Error("Use a exportação para seleções com mais de 200 mil células.");
-    for (let y = r.y; y < r.y + r.height; y++) rowSet.add(y);
-    for (let x = r.x; x < r.x + r.width; x++) columnSet.add(x);
-    if (rowSet.size * columnSet.size > MAX_COPY_CELLS) throw new Error("Use a exportação para seleções com mais de 200 mil células.");
+    rowRanges.push([r.y,r.y+r.height]); columnRanges.push([r.x,r.x+r.width]);
   }
-  return { rows: [...rowSet].sort((a, b) => a - b), columns: [...columnSet].sort((a, b) => a - b) };
+  const merge = (ranges:Array<[number,number]>) => {
+    ranges.sort((a,b)=>a[0]-b[0]); const merged:Array<[number,number]> = [];
+    for(const range of ranges) { const last=merged.at(-1); if(last && last[1]>=range[0]) last[1]=Math.max(last[1],range[1]); else merged.push([...range]); }
+    return merged;
+  };
+  const rows=merge(rowRanges), columns=merge(columnRanges), count=(ranges:Array<[number,number]>)=>ranges.reduce((total,[start,end])=>total+end-start,0);
+  if(count(rows)*count(columns)>MAX_COPY_CELLS) throw new Error("Use a exportação para seleções com mais de 200 mil células.");
+  const expand=(ranges:Array<[number,number]>)=>{const indices:number[]=[];for(const [start,end] of ranges)for(let index=start;index<end;index++)indices.push(index);return indices;};
+  return { rows: expand(rows), columns: expand(columns) };
 }
 export function cellSelected(x: number, y: number, rectangles: Rectangle[]) { return rectangles.some(r => x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height); }
 function escapedHtml(value: string) { return value.replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!); }
@@ -54,6 +60,6 @@ export function sqlClipboard(table: CopyTable, tableName: string, dialect = "pos
   return table.rows.map(row => `INSERT INTO ${target} (${columns}) VALUES (${row.map(value => sqlValue(value, dialect)).join(", ")});`).join("\n");
 }
 export function boundedClipboard(value: string) {
-  if (new TextEncoder().encode(value).byteLength > MAX_CLIPBOARD_BYTES) throw new Error("A cópia excede 16 MB. Reduza a seleção ou use a exportação.");
+  utf8Bytes(value);
   return value;
 }

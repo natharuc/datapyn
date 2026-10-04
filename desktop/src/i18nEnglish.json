@@ -1,4 +1,8 @@
 {
+  "Cópia cancelada.":"Copy cancelled.",
+  "Não foi possível preparar a cópia.":"Could not prepare the copy.",
+  "Formato de cópia inválido.":"Invalid copy format.",
+  "A página excede o limite de memória da grade. Reduza a visualização ou exporte os dados.":"The page exceeds the grid memory limit. Reduce the view or export the data.",
   "Tabela da conexão":"Connection table",
   "Maior ou igual":"Greater than or equal",
   "Menor ou igual":"Less than or equal",

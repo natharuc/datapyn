@@ -101,6 +101,23 @@ def test_json_excel_preserve_precision_and_do_not_execute_formula(tmp_path):
     book.close()
 
 
+@pytest.mark.parametrize("by_result", [False, True])
+def test_native_polars_export_preserves_nullable_uint64_and_decimal(tmp_path, by_result):
+    frame = pl.DataFrame({
+        "big": pl.Series([2**64 - 1, None], dtype=pl.UInt64),
+        "amount": pl.Series([Decimal("1.234567890123456789"), None], dtype=pl.Decimal(30, 18)),
+    })
+    store = ResultStore(pd, pl)
+    ref = store.register(frame, "df")
+    path = tmp_path / "native-polars.json"
+    params = {"result_id": ref["result_id"]} if by_result else {"variable_name": "df"}
+    tools.dispatch("result.export", {**params, "path": str(path)}, {"df": frame}, store)
+    assert json.loads(path.read_text()) == [
+        {"big": str(2**64 - 1), "amount": "1.234567890123456789"},
+        {"big": None, "amount": None},
+    ]
+
+
 def test_failed_export_does_not_truncate_existing_destination(context, tmp_path):
     path = tmp_path / "existing.txt"
     path.write_text("keep")

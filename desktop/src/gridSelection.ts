@@ -1,11 +1,25 @@
-import type { GridSelection, Rectangle } from "@glideapps/glide-data-grid";
+import type { CompactSelection, GridSelection, Rectangle } from "@glideapps/glide-data-grid";
 
-function groups(values: number[]): Array<{ start: number; length: number }> {
-  const ranges: Array<{ start: number; length: number }> = [];
-  for (const index of values) {
-    const last = ranges.at(-1);
-    if (last && last.start + last.length === index) last.length++;
-    else ranges.push({ start: index, length: 1 });
+/** Glide 6 exposes no range iterator. remove/length count ranges without visiting their indices. */
+export function compactRanges(selection: CompactSelection, limit: number): Array<[number, number]> {
+  if (!Number.isSafeInteger(limit) || limit <= 0 || !selection.length) return [];
+  let remaining = selection;
+  // Glide's remove can skip a following slice when deleting multiple slices; recheck each bound.
+  while (remaining.length && remaining.first()! < 0) remaining = remaining.remove([remaining.first()!, 0]);
+  while (remaining.length && remaining.last()! >= limit) remaining = remaining.remove([limit, remaining.last()! + 1]);
+  const ranges: Array<[number, number]> = [];
+  while (remaining.length) {
+    const start = remaining.first()!, end = remaining.last()! + 1, count = remaining.length;
+    if (end - start === count) { ranges.push([start, end]); break; }
+    // A prefix contains every index iff removing it reduces the compact count by its length.
+    let low = start + 1, high = end;
+    while (low + 1 < high) {
+      const middle = low + Math.floor((high - low) / 2);
+      if (remaining.remove([start, middle]).length === count - (middle - start)) low = middle;
+      else high = middle;
+    }
+    ranges.push([start, low]);
+    remaining = remaining.remove([start, low]);
   }
   return ranges;
 }
@@ -15,8 +29,8 @@ export function selectionRectangles(selection: GridSelection, columns: number, r
     const ranges = [selection.current.range, ...selection.current.rangeStack].map(r=>({x:Math.max(0,r.x),y:Math.max(0,r.y),width:Math.max(0,Math.min(columns,r.x+r.width)-Math.max(0,r.x)),height:Math.max(0,Math.min(rows,r.y+r.height)-Math.max(0,r.y))}));
     return ranges.filter((range, index) => range.width > 0 && range.height > 0 && ranges.findIndex((other) => other.x === range.x && other.y === range.y && other.width === range.width && other.height === range.height) === index);
   }
-  if (selection.rows.length) return groups(selection.rows.toArray().filter(index=>index>=0&&index<rows)).map((range) => ({ x: 0, y: range.start, width: columns, height: range.length }));
-  if (selection.columns.length) return groups(selection.columns.toArray().filter(index=>index>=0&&index<columns)).map((range) => ({ x: range.start, y: 0, width: range.length, height: rows }));
+  if (selection.rows.length) return compactRanges(selection.rows, rows).map(([start, end]) => ({ x: 0, y: start, width: columns, height: end - start }));
+  if (selection.columns.length) return compactRanges(selection.columns, columns).map(([start, end]) => ({ x: start, y: 0, width: end - start, height: rows }));
   return [];
 }
 /** Count the rectangle union without iterating every selected cell. */

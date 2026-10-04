@@ -25,4 +25,9 @@ describe("Result clipboard",()=>{
     expect(()=>selectedLayout([{x:0,y:0,width:20,height:20_000}])).toThrow(/exportação/);
     expect(()=>boundedClipboard("x".repeat(16*1024*1024+1))).toThrow(/16 MB/);
   });
+  it("rejects oversized cross-products of disjoint ranges before expanding their row indices",()=>{
+    expect(()=>selectedLayout([{x:0,y:0,width:1,height:150_000},{x:1,y:500_000,width:1,height:150_000}])).toThrow(/200 mil/);
+    expect(selectedLayout([{x:1,y:900_000,width:1,height:3},{x:1,y:900_001,width:1,height:3}])).toEqual({columns:[1],rows:[900_000,900_001,900_002,900_003]});
+    expect(()=>selectedLayout([{x:Number.MAX_SAFE_INTEGER,y:0,width:1,height:1}])).toThrow(/inválida/);
+  });
 });

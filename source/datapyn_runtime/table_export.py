@@ -15,7 +15,7 @@ def _typed_frame(frame, dialect, control):
     for index, column in enumerate(frame.columns):
         control.check()
         series = frame.iloc[:, index]
-        unsigned_sqlite = dialect == "sqlite" and str(series.dtype).lower() == "uint64"
+        unsigned_sqlite = dialect == "sqlite" and pd.api.types.is_unsigned_integer_dtype(series.dtype) and series.dtype.itemsize == 8
         inferred = pd.api.types.infer_dtype(series, skipna=True) if series.dtype == object or pd.api.types.is_string_dtype(series.dtype) else None
         if dialect in {"sqlserver", "mssql"} and inferred in {"string", "unicode", "mixed", "mixed-integer", "empty"}:
             dtype[column] = NVARCHAR()

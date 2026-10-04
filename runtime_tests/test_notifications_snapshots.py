@@ -33,6 +33,13 @@ def test_notification_templates_never_evaluate_code_and_use_live_result(isolated
     assert response["message"] == "1,000 42 Nathan {{__import__('os')}}"
 
 
+def test_notification_reads_native_polars_cells_without_converting_the_frame():
+    frame = pl.DataFrame({"first": [1, 2], "second": ["Água", "Café"]})
+    assert notify.render_template("{{result[1][1]}}", {}, result=frame) == "Café"
+    assert notify.render_template("{{result[4][1]}}", {}, result=frame) == "{{result[4][1]}}"
+    assert notify.render_template("{{result[1][1]}}", {}, result=[[1, "Água"], [2, "Café"]]) == "Café"
+
+
 @pytest.mark.parametrize("operator,left,right,expected", [("equals", " ABC ", "abc", True), ("not_equals", "a", "A", False),
     ("contains", "Abc", "B", True), ("not_contains", "Abc", "x", True), ("greater_than", "1,000", "999", True),
     ("less_than", "1", "2", True), ("is_empty", " ", "", True), ("is_not_empty", "x", "", True), ("greater_than", "text", "1", False)])
