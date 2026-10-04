@@ -405,12 +405,14 @@ class SessionRuntime:
     def context_key(params):
         return "|".join(str(params.get(key) or "") for key in ("connection_id", "database", "schema")) or "default"
 
-    def editor_context(self, params):
+    def editor_context(self, params, *, refresh=True):
         with self._lock:
             key = self.context_key(params)
             context = dict(self.language_contexts.get(key) or {})
             context["variables"] = dict(self.language_variables)
             context["version"] = self.language_version
+            if not refresh:
+                return context
             code = params.get("code", "")
             from .sql_context import metadata_signature
             signature = metadata_signature(code) if params.get("language") == "sql" and isinstance(code, str) and len(code) <= MAX_CODE_BYTES else ()
@@ -657,8 +659,7 @@ class Supervisor:
                     int(conversation.state.busy or conversation.state.config_loading or conversation.inline_lock.locked())
                     for conversation in list(self.pynia.conversations.values())
                 )
-            with self.background.lock:
-                background = self.background.active_count
+            background = self.background.active_count
             with self._internal_lock:
                 background += self._flushes
             packages = int(self.desktop_services.busy)
@@ -742,7 +743,31 @@ class Supervisor:
                 self._identifier(session_id, "session_id")
             return self.background.cancel_completion(session_id, self._identifier(params.get("block_id"), "block_id"),
                                                      self._identifier(params.get("completion_id"), "completion_id"))
-        if method in {"language.complete", "language.diagnostics", "language.format", "parameters.scan"}:
+        if method == "language.diagnostics.cancel":
+            session_id = params.get("session_id")
+            if session_id is not None:
+                self._identifier(session_id, "session_id")
+            return self.background.cancel_diagnostics(session_id, self._identifier(params.get("block_id"), "block_id"),
+                                                     self._identifier(params.get("diagnostic_id"), "diagnostic_id"))
+        if method == "language.diagnostics":
+            code = params.get("code")
+            if params.get("language") not in {"sql", "python"} or not isinstance(code, str):
+                raise RuntimeErrorResponse("invalid_params", "language must be sql/python and code a string")
+            for field in ("session_id", "block_id", "diagnostic_id"):
+                if params.get(field) is not None:
+                    self._identifier(params[field], field)
+            if len(code) > MAX_CODE_BYTES or len(code.encode("utf-8")) > MAX_CODE_BYTES:
+                if params.get("block_id"):
+                    self.background.diagnostic_jobs.cancel_block(params.get("session_id"), params["block_id"])
+                return {"status": "partial", "markers": [], "message": (
+                    "A validação foi pausada: o bloco ultrapassa o limite de 1 MiB."
+                    if params.get("locale") == "pt-BR" else
+                    "Validation paused: this block exceeds the 1 MiB limit.")}
+            routed = self._route(params)
+            context = self._session(params).editor_context(routed, refresh=False) if params.get("session_id") else {}
+            self.background.submit(request_id, method, routed, context)
+            return None
+        if method in {"language.complete", "language.format", "parameters.scan"}:
             routed = self._route(params)
             context = self._session(params).editor_context(routed) if params.get("session_id") else {}
             self.background.submit(request_id, method, routed, context)
@@ -766,6 +791,7 @@ class Supervisor:
             return {"session_id": session_id, "status": "created"}
         if method == "session.close":
             session = self._session(params)
+            self.background.diagnostic_jobs.cancel_session(session.session_id)
             self.pynia.detach(session.session_id)
             self._flush_snapshot(session)
             del self.sessions[session.session_id]

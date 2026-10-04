@@ -1,9 +1,26 @@
 import {afterEach,describe,expect,it,vi} from "vitest";
-import {captureEditorViewState,restoreEditorViewState,subscribeEditorViewStates,takeRestoredEditorViewState,consumePendingFocus,disposeModel,focusEditor,forceAutocomplete,insertInEditor,models,pendingInsertions,selectedCode,setCompletionContext,contexts,contextVersions,editorPreferences,revealEditorBlock,consumeManualSuggestions,triggerLocalSuggestions,getCompletionContext,setCompletionContextResolver,completionGates,inlineGates,diagnosticRefreshers} from "./editorRegistry";
+import {captureEditorViewState,restoreEditorViewState,subscribeEditorViewStates,takeRestoredEditorViewState,consumePendingFocus,disposeModel,focusEditor,forceAutocomplete,insertInEditor,models,pendingInsertions,selectedCode,setCompletionContext,contexts,contextVersions,editorPreferences,revealEditorBlock,consumeManualSuggestions,triggerLocalSuggestions,getCompletionContext,setCompletionContextResolver,completionGates,inlineGates,diagnosticRefreshers,revealEditorRange,takePendingReveal} from "./editorRegistry";
 import {registerDocument} from "./documentWindows";
 
 afterEach(()=>{models.clear();pendingInsertions.clear();contexts.clear();contextVersions.clear();completionGates.clear();inlineGates.clear();diagnosticRefreshers.clear();editorPreferences.clear();vi.unstubAllGlobals();});
 describe("Editor focus across viewport virtualization",()=>{
+  it("reveals a diagnostic range in a live editor without changing its code",()=>{
+    vi.stubGlobal("document",{querySelector:()=>null});vi.stubGlobal("CSS",{escape:(text:string)=>text});
+    const editor={focus:vi.fn(),setSelection:vi.fn(),revealRangeInCenter:vi.fn()},range={startLineNumber:8,startColumn:3,endLineNumber:8,endColumn:5};
+    models.set("diagnostic-live",{editor} as never);revealEditorRange("diagnostic-live",range);
+    expect(editor.focus).toHaveBeenCalledOnce();expect(editor.setSelection).toHaveBeenCalledWith(range);expect(editor.revealRangeInCenter).toHaveBeenCalledWith(range);expect(takePendingReveal("diagnostic-live")).toBeUndefined();
+  });
+  it("queues an offscreen diagnostic range until the editor mounts",()=>{
+    vi.stubGlobal("document",{querySelector:()=>null});vi.stubGlobal("CSS",{escape:(text:string)=>text});
+    const range={startLineNumber:12,startColumn:2,endLineNumber:12,endColumn:9};revealEditorRange("diagnostic-later",range);
+    expect(consumePendingFocus("diagnostic-later")).toBe(true);expect(takePendingReveal("diagnostic-later")).toEqual(range);expect(takePendingReveal("diagnostic-later")).toBeUndefined();disposeModel("diagnostic-later");
+  });
+  it("clears Monaco's persistent marker owner before disposing a datapyn URI and drops deferred ranges",()=>{
+    vi.stubGlobal("document",{querySelector:()=>null});vi.stubGlobal("CSS",{escape:(text:string)=>text});
+    const calls:string[]=[];models.set("diagnostic-close",{model:{dispose:()=>calls.push("dispose")},clearMarkers:()=>calls.push("clear")} as never);
+    revealEditorRange("diagnostic-close",{startLineNumber:1,startColumn:1,endLineNumber:1,endColumn:2});disposeModel("diagnostic-close");
+    expect(calls).toEqual(["clear","dispose"]);expect(takePendingReveal("diagnostic-close")).toBeUndefined();expect(models.has("diagnostic-close")).toBe(false);
+  });
   it("restores private cursor/scroll metadata and emits only changed view states without reading code",()=>{
     const state={cursorState:[],viewState:{scrollTop:30,scrollLeft:0},contributionsState:{}};
     expect(restoreEditorViewState("restored",state)).toBe(true);expect(takeRestoredEditorViewState("restored")).toBe(state);expect(takeRestoredEditorViewState("restored")).toBeNull();
@@ -123,11 +140,11 @@ describe("Editor focus across viewport virtualization",()=>{
     release();expect(getCompletionContext("owned")).toBe(context);expect(getCompletionContext("other")).toBeUndefined();
   });
   it("does not reschedule a diagnostic or suggestion request when that request lazily reads newer context",()=>{
-    let revision=1;const refresh=vi.fn(),invalidate=vi.fn();diagnosticRefreshers.set("lazy",refresh);completionGates.set("lazy",{invalidate} as never);
+    let revision=1;const refresh=vi.fn(),invalidate=vi.fn(),clearMarkers=vi.fn();diagnosticRefreshers.set("lazy",refresh);completionGates.set("lazy",{invalidate} as never);models.set("lazy",{clearMarkers} as never);
     const release=setCompletionContextResolver(()=>({variables:[],tables:[],sessionId:"s",namespaceVersion:revision}));
     expect(getCompletionContext("lazy")?.namespaceVersion).toBe(1);revision=2;expect(getCompletionContext("lazy")?.namespaceVersion).toBe(2);
     expect(refresh).not.toHaveBeenCalled();expect(invalidate).toHaveBeenCalledTimes(2);
-    setCompletionContext("lazy",{variables:[],tables:[],sessionId:"s",namespaceVersion:3});expect(refresh).toHaveBeenCalledOnce();release();
+    setCompletionContext("lazy",{variables:[],tables:[],sessionId:"s",namespaceVersion:3});expect(refresh).toHaveBeenCalledOnce();expect(clearMarkers).not.toHaveBeenCalled();release();
   });
   it("finds offscreen blocks in their popout document and activates that native window before focus",()=>{
     const main={querySelector:()=>null},view={focus:vi.fn()},scroll=vi.fn();

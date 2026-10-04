@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from dataclasses import asdict
 from functools import lru_cache
 from itertools import islice
 import json
@@ -307,13 +306,13 @@ def _format_python(code, options):
     return (result.stdout, None) if result.returncode == 0 else (code, result.stderr.strip())
 
 
-def dispatch(method, params, context=None):
+def dispatch(method, params, context=None, *, should_abort=None):
     from src.core.parameter_settings import use_shared_parameter_delimiter
     with use_shared_parameter_delimiter(params.get("shared_delimiter", "{{name}}")):
-        return _dispatch(method, params, context)
+        return _dispatch(method, params, context, should_abort=should_abort)
 
 
-def _dispatch(method, params, context=None):
+def _dispatch(method, params, context=None, *, should_abort=None):
     context = context or {}
     if method == "parameters.scan":
         from src.utils.sql_parameter_service import merge_parameter_definitions, merge_shared_parameter_definitions
@@ -333,6 +332,11 @@ def _dispatch(method, params, context=None):
         return {"sql_parameters": merge_parameter_definitions(code, params.get("sql_parameters"), schema),
                 "shared_parameters": merge_shared_parameter_definitions(codes, params.get("shared_parameters"), [schema])}
     code = params.get("code")
+    if method == "language.diagnostics" and isinstance(code, str):
+        from .syntax_diagnostics import diagnose
+        if params.get("language") not in {"python", "sql"}:
+            raise ValueError("language must be python or sql")
+        return diagnose(params, context, should_abort=should_abort)
     if not isinstance(code, str) or len(code.encode("utf-8")) > MAX_DOCUMENT_BYTES:
         raise ValueError("code must be a string of at most 1 MiB")
     language = params.get("language")
@@ -351,14 +355,6 @@ def _dispatch(method, params, context=None):
         else:
             items = _sql_complete(code, line, cursor, schema)
         return {"items": items, "context_version": context.get("version", 0)}
-    if method == "language.diagnostics":
-        from src.services.syntax_validator import validate_code
-        # A partial lazy schema has no columns for unreferenced tables. Syntax
-        # and names from the session remain useful without false schema errors.
-        complete_schema = schema if context.get("schema_complete", False) else None
-        markers = validate_code(language, code, db_type=schema.get("db_type"), schema=complete_schema,
-                                namespace=variables if language == "python" else None)
-        return {"markers": [asdict(marker) for marker in markers[:200]]}
     if method == "language.format":
         options = params.get("options") or {}
         if not isinstance(options, dict):

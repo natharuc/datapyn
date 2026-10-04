@@ -45,12 +45,14 @@ class BackgroundJobs:
         # killable main thread. Local threads cannot interrupt a stuck library.
         use_process = True if completion_process is None else completion_process
         self.completion_worker = CompletionProcess(self.closed) if use_process else None
+        from .diagnostic_jobs import DiagnosticJobs
+        self.diagnostic_jobs = DiagnosticJobs(self.emit, self.closed)
         self.tests = set()
         self.lock = threading.Lock()
         self.latest = {}
         self.completion_ids = {}
         self.sequence = 0
-        self.active_count = 0
+        self._active_count = 0
         self.test_jobs = {}
         if self.completion_worker is not None:
             self.warmup_thread = threading.Thread(target=self._warm_completion, name="editor-warmup", daemon=True)
@@ -65,6 +67,9 @@ class BackgroundJobs:
             pass
 
     def submit(self, request_id, method, params, context):
+        if method == "language.diagnostics":
+            self.diagnostic_jobs.submit(request_id, params, context)
+            return
         if not self.slots.acquire(blocking=False):
             raise ValueError("Too many editor requests; retry after the previous request finishes")
         key = None
@@ -77,9 +82,9 @@ class BackgroundJobs:
             if test_id:
                 self.test_jobs[test_id] = {"cancelled": cancelled, "group": None}
             self.sequence += 1
-            self.active_count += 1
+            self._active_count += 1
             sequence = self.sequence
-            if method in {"language.complete", "language.diagnostics", "parameters.scan"} and params.get("block_id"):
+            if method in {"language.complete", "parameters.scan"} and params.get("block_id"):
                 key = (params.get("session_id"), params["block_id"], method)
                 self.latest[key] = sequence
                 if method == "language.complete":
@@ -89,7 +94,7 @@ class BackgroundJobs:
             future = executor.submit(self._run, method, dict(params), context, key, sequence, cancelled)
         except BaseException:
             with self.lock:
-                self.active_count -= 1
+                self._active_count -= 1
                 if test_id:
                     self.test_jobs.pop(test_id, None)
             self.slots.release()
@@ -101,7 +106,7 @@ class BackgroundJobs:
                 message = {"error": {"code": "operation_failed", "message": f"{type(exc).__name__}: {exc}"}}
             finally:
                 with self.lock:
-                    self.active_count -= 1
+                    self._active_count -= 1
                     if key is not None and self.latest.get(key) == sequence:
                         self.latest.pop(key, None)
                         self.completion_ids.pop(key, None)
@@ -111,6 +116,15 @@ class BackgroundJobs:
             if not self.closed.is_set():
                 self.emit({"id": request_id, **message})
         future.add_done_callback(done)
+
+    @property
+    def active_count(self):
+        with self.lock:
+            active = self._active_count
+        return active + self.diagnostic_jobs.active_count
+
+    def cancel_diagnostics(self, session_id, block_id, diagnostic_id):
+        return self.diagnostic_jobs.cancel(session_id, block_id, diagnostic_id)
 
     def cancel_completion(self, session_id, block_id, completion_id):
         key = (session_id, block_id, "language.complete")
@@ -214,6 +228,7 @@ class BackgroundJobs:
 
     def close(self):
         self.closed.set()
+        self.diagnostic_jobs.close()
         if self.completion_worker is not None:
             self.completion_worker.close()
         with self.lock:

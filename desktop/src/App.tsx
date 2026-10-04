@@ -11,7 +11,8 @@ import { Activity, ArrowDown, ArrowUp, Braces, Check, ChevronDown, ChevronRight,
 import logo from "./assets/datapyn-logo.svg";
 import { errorText, isDesktop, runtime } from "./runtime";
 import { WorkspaceController, encodeDocument, type Block, type SessionDocument, type WorkspaceStorage } from "./workspace";
-import { disposeModel, focusEditor, insertInEditor, selectedCode, setCompletionContext,setCompletionContextResolver, editorAction, formatEditor, forceAutocomplete, transformEditorSelection, getRegisteredEditor } from "./editorRegistry";
+import { disposeModel, focusEditor, insertInEditor, selectedCode, setCompletionContext,setCompletionContextResolver, editorAction, formatEditor, forceAutocomplete, transformEditorSelection, getRegisteredEditor,revealEditorRange } from "./editorRegistry";
+import { BlockSyntaxDiagnostics } from "./BlockSyntaxDiagnostics";
 import type { EditorPreferences } from "./MonacoBlock";
 import { ResultGrid } from "./ResultGrid";
 import { ConnectionDialog } from "./ConnectionDialog";
@@ -87,6 +88,11 @@ export function App() {
   const session = state.sessions.find((item) => item.id === state.activeId)!;
   const languageContexts=useRef(new SessionLanguageContexts()),completionIndex=useRef(new SessionCompletionIndex());
   const [languageRevision,setLanguageRevision]=useState(0);
+  const diagnosticContext = useCallback((sessionId: string) => { const current = workspace.session(sessionId); return current ? completionIndex.current.diagnosticsContext(current) : { globalImports: "", preamble: "" }; }, []);
+  const diagnosticRevisionFor = useCallback((current: SessionDocument, block: Block) => {
+    const scope = languageContexts.current.get(current.id, block.connection_id ?? current.savedConnectionId, block.database_name ?? current.database, block.schema ?? current.schema);
+    return block.language === "python" ? `${scope?.namespaceVersion ?? 0}:${completionIndex.current.diagnosticsRevision(current)}` : String(scope?.version ?? 0);
+  }, []);
   useEffect(()=>setCompletionContextResolver(blockId=>{
     const snapshot=workspace.getSnapshot(),active=workspace.session();
     const owner=active?.blocks.some(b=>b.id===blockId) ? active : snapshot.sessions.find(s=>s.blocks.some(b=>b.id===blockId));
@@ -460,7 +466,7 @@ export function App() {
     observe(); const unsubscribe=workspace.subscribe(observe); return () => {unsubscribe();};
   }, [activateBottom]);
   useEffect(() => {
-    languageContexts.current.retain(new Set(state.sessions.map(s=>s.id)));
+    const ids = new Set(state.sessions.map(s=>s.id)); languageContexts.current.retain(ids); completionIndex.current.retain(ids);
     const context=completionIndex.current.context(session,session.focusedBlockId,languageContexts.current);
     if(context)setCompletionContext(session.focusedBlockId,context);
   }, [session.id, session.focusedBlockId, session.blocks, session.variables, session.results, session.savedConnectionId, session.database, session.schema,languageRevision,state.sessions]);
@@ -527,7 +533,7 @@ export function App() {
           {session.notice && <div className="session-notice" role="status">{session.notice}</div>}
           <div className="document-heading"><span className="eyebrow">{translateUi("ANÁLISE")}</span><span className="document-title">{session.title}</span><span className="document-subtitle">{translateUi("Blocos independentes. Um namespace Python.")}</span></div>
           <ParameterPanel title={translateUi("Parâmetros compartilhados")} parameters={sharedParameters} enabled={session.extras.shared_parameters_enabled !== false} disabled={session.busy} onEnabled={enabled => workspace.patchSession(session.id,s=>({...s,modified:true,extras:{...s.extras,shared_parameters_enabled:enabled}}))} onChange={parameters => workspace.patchSession(session.id,s=>({...s,modified:true,extras:{...s.extras,shared_parameters:parameters}}))}/>
-          {session.blocks.map((block, index) => <BlockCard locked={editingLocked} forceMount={startupActive && requiredEditor === block.id} onEditorReady={startupEditorInitialized} key={block.id} block={block} index={index} count={session.blocks.length} session={session} disabled={runDisabled} preferences={preferences} onFontSizeChange={editorFontSize=>setPreferences(p=>({...p,editorFontSize}))} onPickConnection={() => setConnectionPicker(block.id)} onDownload={()=>run(downloadBlock(block.id))}
+          {session.blocks.map((block, index) => <BlockCard diagnosticsReady={state.runtimeStatus === "ready"} diagnosticRevision={diagnosticRevisionFor(session, block)} diagnosticContext={diagnosticContext} locked={editingLocked} forceMount={startupActive && requiredEditor === block.id} onEditorReady={startupEditorInitialized} key={block.id} block={block} index={index} count={session.blocks.length} session={session} disabled={runDisabled} preferences={preferences} onFontSizeChange={editorFontSize=>setPreferences(p=>({...p,editorFontSize}))} onPickConnection={() => setConnectionPicker(block.id)} onDownload={()=>run(downloadBlock(block.id))}
             onRun={() => run(workspace.runBlock(session.id, block.id))} />)}
           <div className="add-block-row"><button onClick={() => addBlock("sql")}><Plus size={14} /><span className="sql-color">{translateUi("SQL")}</span></button><button onClick={() => addBlock("python")}><Plus size={14} /><span className="python-color">{translateUi("Python")}</span></button><span>{translateUi("Novo bloco")}<kbd>{shortcuts.addBlock}</kbd></span></div>
         </div>,
@@ -581,10 +587,12 @@ export function App() {
   </div>;
 }
 
-const BlockCard = memo(function BlockCard({ block, index, count, session, disabled, locked, onRun, preferences, onPickConnection, onDownload, onFontSizeChange, forceMount, onEditorReady }: { block: Block; index: number; count: number; session: SessionDocument; disabled: boolean; locked:boolean; onRun: () => void; preferences: Preferences; onPickConnection: () => void; onDownload:()=>void; onFontSizeChange:(size:number)=>void;forceMount:boolean;onEditorReady:(id:string)=>void }) {
+const BlockCard = memo(function BlockCard({ block, index, count, session, disabled, locked, onRun, preferences, onPickConnection, onDownload, onFontSizeChange, forceMount, onEditorReady, diagnosticsReady, diagnosticRevision, diagnosticContext }: { block: Block; index: number; count: number; session: SessionDocument; disabled: boolean; locked:boolean; onRun: () => void; preferences: Preferences; onPickConnection: () => void; onDownload:()=>void; onFontSizeChange:(size:number)=>void;forceMount:boolean;onEditorReady:(id:string)=>void;diagnosticsReady:boolean;diagnosticRevision:string;diagnosticContext:(sessionId:string)=>{globalImports:string;preamble:string} }) {
   const [height, setHeight] = useState(typeof block.height === "number" ? Math.max(130, block.height) : block.language === "sql" ? 210 : 190);
   const catalog = useSyncExternalStore(connections.subscribe, connections.getSnapshot);
   const customConnection = catalog.catalog.connections.find(c => c.id === block.connection_id);
+  const dialect = customConnection?.config.db_type ?? session.connection?.db_type ?? catalog.catalog.connections.find(c => c.id === session.savedConnectionId)?.config.db_type;
+  const diagnosticKey = JSON.stringify([session.id, block.connection_id ?? session.savedConnectionId, block.database_name ?? session.database, block.schema ?? session.schema, dialect, preferences.sharedDelimiter, preferences.locale, diagnosticRevision]);
   useParameterScan(block.language === "sql" ? [block.code] : [], (block.sql_parameters ?? []) as ParameterDefinition[], false, preferences.sharedDelimiter,
     parameters => workspace.updateBlock(session.id,block.id,{sql_parameters:parameters}));
   return <article style={{pointerEvents:locked ? "none" : undefined,...(session.maximizedBlockId && session.maximizedBlockId !== block.id ? {display:"none"} : {}),borderLeftColor:effectiveConnectionColor(block.connection_id ?? session.savedConnectionId ?? "",catalog.catalog)}} className={`code-block ${block.language} ${session.focusedBlockId === block.id ? "focused" : ""} ${session.maximizedBlockId === block.id ? "maximized" : ""}`} data-block-id={block.id}
@@ -601,6 +609,9 @@ const BlockCard = memo(function BlockCard({ block, index, count, session, disabl
       <IconButton title={translateUi("Excluir bloco")} disabled={session.busy} onClick={() => { workspace.removeBlock(session.id, block.id); disposeModel(block.id); }}><Trash2 size={12} /></IconButton>
       <button className="block-run" disabled={disabled} onClick={onRun} title={translateUi("Executar bloco ou seleção")}><Play size={12} fill="currentColor" /></button>
     </div>
+    <BlockSyntaxDiagnostics id={block.id} code={block.code} language={block.language} enabled={!block.cell_type || block.cell_type === "code"} ready={diagnosticsReady} focused={session.focusedBlockId === block.id} contextKey={diagnosticKey}
+      params={() => { const context = block.language === "python" ? diagnosticContext(session.id) : undefined; return { session_id: session.id, connection_id: block.connection_id ?? session.savedConnectionId, database: block.database_name ?? session.database, schema: block.schema ?? session.schema, db_type: dialect, shared_delimiter: preferences.sharedDelimiter, locale: preferences.locale, global_imports: context?.globalImports, preamble: context?.preamble }; }}
+      onReveal={marker => { workspace.updateBlock(session.id, block.id, { collapsed: false }); workspace.focusBlock(session.id, block.id); revealEditorRange(block.id, { startLineNumber: marker.start_line, startColumn: marker.start_column, endLineNumber: marker.end_line, endColumn: marker.end_column }); }} />
     {block.language === "sql" && <div className="block-context"><button disabled={session.busy} onClick={onPickConnection}><Database size={12}/>{customConnection?.name ?? session.connection?.name ?? translateUi("Conexão da aba")}</button><input aria-label={`Banco do bloco ${index+1}`} placeholder={session.database || translateUi("Banco padrão")} value={block.database_name ?? ""} disabled={session.busy} onChange={e=>workspace.updateBlock(session.id,block.id,{database_name:e.target.value || undefined})}/><input aria-label={`Schema do bloco ${index+1}`} placeholder={session.schema || translateUi("Schema padrão")} value={block.schema ?? ""} disabled={session.busy} onChange={e=>workspace.updateBlock(session.id,block.id,{schema:e.target.value || undefined})}/></div>}
     <div hidden={block.collapsed}>
     {block.cell_type && block.cell_type !== "code" ? <Suspense fallback={<pre>{block.code}</pre>}><MarkdownBlock code={block.code} raw={block.cell_type === "raw"} onChange={code=>workspace.updateBlock(session.id,block.id,{code})}/></Suspense> : <ViewportEditor forceMount={forceMount} onReady={onEditorReady} id={block.id} code={block.code} language={block.language} height={session.maximizedBlockId === block.id ? Math.max(200,window.innerHeight - 360) : height} preferences={{readOnly:locked,theme:preferences.theme,fontFamily:preferences.editorFont,fontSize:preferences.editorFontSize,wordWrap:preferences.wordWrap,minimap:preferences.minimap,lineNumbers:preferences.lineNumbers,tabSize:preferences.tabSize,autocomplete:preferences.autocomplete,aiAutocomplete:preferences.aiAutocomplete}} onFontSizeChange={onFontSizeChange} onChange={(code) => workspace.updateBlock(session.id, block.id, { code })} onFocus={() => workspace.focusBlock(session.id, block.id)} />}
@@ -612,7 +623,7 @@ const BlockCard = memo(function BlockCard({ block, index, count, session, disabl
       owner.addEventListener("pointermove", move); owner.addEventListener("pointerup", up, { once: true }); }} />
     </div>
   </article>;
-}, (before,after)=>before.block === after.block && before.index === after.index && before.count === after.count && before.disabled === after.disabled && before.locked === after.locked && before.forceMount === after.forceMount && before.onEditorReady === after.onEditorReady && before.preferences === after.preferences && before.session.focusedBlockId === after.session.focusedBlockId && before.session.maximizedBlockId === after.session.maximizedBlockId && before.session.connection === after.session.connection && before.session.database === after.session.database && before.session.schema === after.session.schema && before.session.busy === after.session.busy);
+}, (before,after)=>before.block === after.block && before.index === after.index && before.count === after.count && before.disabled === after.disabled && before.locked === after.locked && before.forceMount === after.forceMount && before.onEditorReady === after.onEditorReady && before.preferences === after.preferences && before.diagnosticsReady === after.diagnosticsReady && before.diagnosticRevision === after.diagnosticRevision && before.session.focusedBlockId === after.session.focusedBlockId && before.session.maximizedBlockId === after.session.maximizedBlockId && before.session.connection === after.session.connection && before.session.savedConnectionId === after.session.savedConnectionId && before.session.database === after.session.database && before.session.schema === after.session.schema && before.session.busy === after.session.busy);
 
 function ViewportEditor({forceMount,...props}:{id:string;code:string;language:"sql"|"python";height:number;preferences:EditorPreferences;onFontSizeChange:(size:number)=>void;onChange:(code:string)=>void;onFocus:()=>void;forceMount:boolean;onReady:(id:string)=>void}) {
   const container=useRef<HTMLDivElement>(null), [visible,setVisible]=useState(false),[startupPinned,setStartupPinned]=useState(forceMount);

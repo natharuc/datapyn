@@ -21,6 +21,13 @@ export const diagnosticRefreshers = new Map<string, () => void>();
 export const editorPreferences = new Map<string, EditorPreferences | undefined>();
 export const pendingInsertions = new Map<string, string[]>();
 const manualSuggestions = new Set<string>();
+const pendingReveals = new Map<string, monaco.IRange>();
+export function takePendingReveal(id: string): monaco.IRange | undefined { const range = pendingReveals.get(id); pendingReveals.delete(id); return range; }
+export function revealEditorRange(id: string, range: monaco.IRange) {
+  pendingReveals.set(id, range); focusEditor(id);
+  const editor = models.get(id)?.editor;
+  if (editor) { takePendingReveal(id); editor.setSelection(range); editor.revealRangeInCenter(range); }
+}
 interface EditorSuggestionController extends monaco.editor.IEditorContribution { triggerSuggest(onlyFrom?:Set<monaco.languages.CompletionItemProvider>,auto?:boolean,noFilter?:boolean):void }
 export function consumeManualSuggestions(id:string) { const requested = manualSuggestions.has(id); manualSuggestions.delete(id); return requested; }
 export function triggerLocalSuggestions(id:string) {
@@ -61,7 +68,7 @@ export function setCompletionContext(blockId: string, context: CompletionContext
   const previous=contexts.get(blockId);
   if(previous===context||(previous&&previous.sessionId===context.sessionId&&previous.connectionId===context.connectionId&&previous.database===context.database&&previous.schema===context.schema&&previous.globalImports===context.globalImports&&previous.preamble===context.preamble&&previous.schemaVersion===context.schemaVersion&&previous.namespaceVersion===context.namespaceVersion&&previous.schemaSnapshot===context.schemaSnapshot&&sameVariables(previous.variables,context.variables)&&shallowArray(previous.tables,context.tables)&&sameSiblings(previous.siblings,context.siblings)))return;
   contexts.set(blockId, context); contextVersions.set(blockId, (contextVersions.get(blockId) ?? 0) + 1);
-  completionGates.get(blockId)?.invalidate(); inlineGates.get(blockId)?.cancel(); models.get(blockId)?.clearMarkers?.();
+  completionGates.get(blockId)?.invalidate(); inlineGates.get(blockId)?.cancel();
   if(!notify)return;
   diagnosticRefreshers.get(blockId)?.();
   const record = models.get(blockId), query = record?.completionQuery, editor = record?.editor, position = editor?.getPosition?.();
@@ -168,6 +175,6 @@ export function replaceEditorCode(blockId: string, code: string) {
 export function disposeModel(blockId: string) {
   manualSuggestions.delete(blockId);
   restoredViews.delete(blockId);
-  models.get(blockId)?.model.dispose(); models.delete(blockId); contexts.delete(blockId); completionGates.get(blockId)?.invalidate(); completionGates.delete(blockId); inlineGates.get(blockId)?.cancel();inlineGates.delete(blockId);contextVersions.delete(blockId); diagnosticRefreshers.delete(blockId); editorPreferences.delete(blockId); pendingInsertions.delete(blockId); if (pendingFocus === blockId) pendingFocus = undefined;
+  models.get(blockId)?.clearMarkers?.(); models.get(blockId)?.model.dispose(); models.delete(blockId); contexts.delete(blockId); completionGates.get(blockId)?.invalidate(); completionGates.delete(blockId); inlineGates.get(blockId)?.cancel();inlineGates.delete(blockId);contextVersions.delete(blockId); diagnosticRefreshers.delete(blockId); editorPreferences.delete(blockId); pendingInsertions.delete(blockId); pendingReveals.delete(blockId); if (pendingFocus === blockId) pendingFocus = undefined;
   if (focusedEditor === blockId) focusedEditor = undefined;
 }

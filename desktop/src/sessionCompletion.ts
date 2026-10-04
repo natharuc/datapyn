@@ -30,7 +30,9 @@ export class SessionLanguageContexts {
         schemaSnapshot.tables![name]={name:table.name,schema:table.schema,temporary:table.temporary,columns:p.schema_snapshot.columns?.[name] ?? []};
       }
     }
-    scopes.delete(key);scopes.set(key,{version:p.version,schemaSnapshot,tables});
+    // Namespace-only publishes keep the loaded schema's revision stable.
+    const schemaVersion=p.schema_snapshot ? p.version : old?.version ?? p.version;
+    scopes.delete(key);scopes.set(key,{version:schemaVersion,schemaSnapshot,tables});
     while(scopes.size>32)scopes.delete(scopes.keys().next().value!);
     const variableSignature=JSON.stringify(p.variables),namespaceVersion=(previous?.namespaceVersion ?? 0)+(previous?.variableSignature===variableSignature ? 0 : 1);
     this.sessions.set(p.session_id,{variables:p.variables,variableSignature,namespaceVersion,version:p.version,scopes});return true;
@@ -50,6 +52,11 @@ export class SessionLanguageContexts {
 
 interface ParsedBlock {code:string;language:string;cellType?:string;imports:string[];hasCode:boolean;preamble:string}
 const MAX_PREAMBLE=200_000,MAX_IMPORTS=32_000;
+export interface SessionDiagnosticsContext { globalImports:string; preamble:string }
+interface DiagnosticBlockSource {id:string;code:string;language:string;cellType?:string;sqlName?:string}
+interface DiagnosticSessionSource {blocks:SessionDocument["blocks"];sources:DiagnosticBlockSource[];revision:number;context?:SessionDiagnosticsContext}
+const diagnosticCode=(block:Block)=>block.language==="python"&&(!block.cell_type||block.cell_type==="code")?block.code:"";
+const PYTHON_KEYWORDS=new Set("False None True and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield".split(" "));
 /** A truncated docstring/argument list must never absorb the next block or editable document. */
 function safePythonPrefix(code:string,limit=2500):string {
   const end=Math.min(code.length,limit);let quote="",triple=false,comment=false,depth=0,safe=0,visible="";
@@ -102,6 +109,27 @@ function pythonImportLines(code:string):string[]{
 /** Parse changed blocks once and build context only for the focused editor, never N preambles per key. */
 export class SessionCompletionIndex {
   private parsed=new Map<string,ParsedBlock>();
+  private diagnostics=new Map<string,DiagnosticSessionSource>();
+  private diagnosticSequence=0;
+  private diagnosticSource(session:SessionDocument):DiagnosticSessionSource {
+    const previous=this.diagnostics.get(session.id);if(previous?.blocks===session.blocks)return previous;
+    // Compare source references once per notebook edit; editor status/layout updates
+    // replace blocks too, but must not invalidate every sibling's diagnostics.
+    const unchanged=previous && previous.sources.length===session.blocks.length && session.blocks.every((block,index)=>{
+      const source=previous.sources[index];return source.id===block.id && source.code===diagnosticCode(block) && source.language===block.language && source.cellType===block.cell_type && source.sqlName===(block.language==="sql"?block.block_name:undefined);
+    });
+    if(unchanged){previous.blocks=session.blocks;return previous;}
+    const current={blocks:session.blocks,sources:session.blocks.map(block=>({id:block.id,code:diagnosticCode(block),language:block.language,cellType:block.cell_type,sqlName:block.language==="sql"?block.block_name:undefined})),revision:++this.diagnosticSequence};
+    this.diagnostics.set(session.id,current);return current;
+  }
+  /** O(1) for all sibling readers after the first source comparison for this blocks array. */
+  diagnosticsRevision(session:SessionDocument):number {return this.diagnosticSource(session).revision;}
+  /** Release closed sessions and deleted blocks without evicting other open notebooks. */
+  retain(ids:ReadonlySet<string>){
+    for(const id of this.diagnostics.keys())if(!ids.has(id))this.diagnostics.delete(id);
+    const blockIds=new Set<string>();for(const session of this.diagnostics.values())for(const source of session.sources)blockIds.add(source.id);
+    for(const id of this.parsed.keys())if(!blockIds.has(id))this.parsed.delete(id);
+  }
   private parse(block:Block){
     let entry=this.parsed.get(block.id);
     if(entry?.code===block.code && entry.language===block.language && entry.cellType===block.cell_type)return entry;
@@ -111,8 +139,26 @@ export class SessionCompletionIndex {
     }
     entry={code:block.code,language:block.language,cellType:block.cell_type,imports,hasCode:/\S/.test(block.code),preamble:block.language === "python" ? safePythonPrefix(block.code) : ""};this.parsed.set(block.id,entry);return entry;
   }
+  /** Diagnostics need peer declarations/imports only, never autocomplete metadata or DB access. */
+  diagnosticsContext(session:SessionDocument):SessionDiagnosticsContext {
+    const source=this.diagnosticSource(session);if(source.context)return source.context;
+    const imports=new Set<string>(["import pandas as pd","import numpy as np","import polars as pl"]),parts:string[]=[];
+    let size=0;
+    for(const block of session.blocks){
+      if(block.cell_type && block.cell_type!=="code")continue;
+      const parsed=this.parse(block);
+      for(const line of parsed.imports)imports.add(line);
+      const prefix=block.language==="python"?parsed.preamble:/^[A-Za-z_]\w*$/.test(block.block_name)&&!PYTHON_KEYWORDS.has(block.block_name)?`${block.block_name} = None`:"";
+      if(prefix && size+prefix.length+1<=MAX_PREAMBLE){parts.push(prefix);size+=prefix.length+1;}
+    }
+    const importParts:string[]=[];let importsLength=0;
+    for(const line of imports)if(importsLength+line.length+1<=MAX_IMPORTS){importParts.push(line);importsLength+=line.length+1;}
+    const context={globalImports:importParts.join("\n"),preamble:parts.join("\n")};
+    source.context=context;return context;
+  }
   context(session:SessionDocument,blockId:string,contexts:SessionLanguageContexts):CompletionContext|undefined {
     const block=session.blocks.find(b=>b.id===blockId);if(!block)return undefined;
+    this.diagnosticsRevision(session);
     const connectionId=block.connection_id ?? session.savedConnectionId,database=block.database_name ?? session.database,schema=block.schema ?? session.schema;
     const snapshot=contexts.get(session.id,connectionId,database,schema);
     const variables=new Map((snapshot ? [] : session.variables).map(v=>[v.name,{name:v.name,type:v.type} as CompletionContext["variables"][number]]));
@@ -135,8 +181,6 @@ export class SessionCompletionIndex {
         parts.push(parsed.preamble);size+=parsed.preamble.length+1;
       }
     }
-    // Removing blocks/profile switches must release potentially large source strings.
-    const ids=new Set(session.blocks.map(b=>b.id));for(const id of this.parsed.keys())if(!ids.has(id))this.parsed.delete(id);
     const importParts:string[]=[];let importsLength=0;
     for(const line of imports)if(importsLength+line.length+1<=MAX_IMPORTS){importParts.push(line);importsLength+=line.length+1;}
     return {sessionId:session.id,connectionId,database,schema,variables:[...variables.values()],tables:snapshot?.tables ?? [],

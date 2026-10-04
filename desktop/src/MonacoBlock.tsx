@@ -21,10 +21,11 @@ import "monaco-editor/editor/contrib/dropOrPasteInto/browser/copyPasteContributi
 import EditorWorker from "monaco-editor/editor/editor.worker.js?worker";
 import { runtime, type Language } from "./runtime";
 import {translate as t,useLocale} from "./i18n";
-import { models, getCompletionContext, completionGates, inlineGates, contextVersions, diagnosticRefreshers, editorPreferences, pendingInsertions, consumePendingFocus, markEditorFocused, wasEditorFocused, insertInEditor, takeRestoredEditorViewState,captureEditorViewState,consumeManualSuggestions,triggerLocalSuggestions,type EditorPreferences } from "./editorRegistry";
+import { models, getCompletionContext, completionGates, inlineGates, contextVersions, editorPreferences, pendingInsertions, consumePendingFocus, markEditorFocused, wasEditorFocused, insertInEditor, takeRestoredEditorViewState,captureEditorViewState,consumeManualSuggestions,triggerLocalSuggestions,takePendingReveal,type EditorPreferences } from "./editorRegistry";
+import { syntaxDiagnostics } from "./syntaxDiagnostics";
 export { selectedCode, focusEditor, editorAction, getRegisteredEditor, formatEditor, forceAutocomplete, transformEditorSelection, insertInEditor, replaceEditorCode, disposeModel, setCompletionContext } from "./editorRegistry";
 export type { EditorPreferences } from "./editorRegistry";
-import { InlineRequestGate, LanguageRequestGate, languageParams, mergeCompletions, type LanguageCompletion, type LanguageMarker } from "./editorLanguage";
+import { InlineRequestGate, LanguageRequestGate, languageParams, mergeCompletions, type LanguageCompletion } from "./editorLanguage";
 import { completionSite, completionInsertion, escapePythonString, filterCompletions, localCompletions, pythonSymbols } from "./editorCompletions";
 import { useOwnerDocumentRevision } from "./useOwnerDocument";
 
@@ -148,7 +149,7 @@ export const MonacoBlock = memo(function MonacoBlock({ id, code, language, heigh
     record.container = host;
     record.clearMarkers = () => { if (!record.model.isDisposed()) monaco.editor.setModelMarkers(record.model, "datapyn", []); };
     if (record.viewState) editor.restoreViewState(record.viewState);
-    if (consumePendingFocus(id) || (documentRevision > 0 && wasEditorFocused(id))) queueMicrotask(() => { if (record.editor === editor) editor.focus(); });
+    if (consumePendingFocus(id) || (documentRevision > 0 && wasEditorFocused(id))) queueMicrotask(() => { if (record.editor === editor) { editor.focus(); const range = takePendingReveal(id); if (range) { editor.setSelection(range); editor.revealRangeInCenter(range); } } });
     const changed = editor.onDidChangeModelContent(() => { record.completionQuery = undefined; completionGates.get(id)?.cancel();inlineGates.get(id)?.cancel();callbacks.current.onChange(record.model.getValue()); });
     const focused = editor.onDidFocusEditorText(() => { markEditorFocused(id); callbacks.current.onFocus(); });
     const blurred = editor.onDidBlurEditorText(() => { record.completionQuery = undefined; record.completionIntent = (record.completionIntent ?? 0) + 1; completionGates.get(id)?.cancel();inlineGates.get(id)?.cancel(); });
@@ -191,23 +192,12 @@ export const MonacoBlock = memo(function MonacoBlock({ id, code, language, heigh
   useEffect(() => { editorPreferences.set(id, preferences); applyTheme(preferences,container.current?.ownerDocument.defaultView??window); models.get(id)?.editor?.updateOptions({ fontFamily: preferences?.fontFamily ?? "'JetBrains Mono', 'Cascadia Code', 'Fira Code', Consolas, 'Courier New', monospace", fontSize: Math.max(8, Math.min(32, preferences?.fontSize ?? 13)), wordWrap: preferences?.wordWrap ? "on" : "off", minimap: { enabled: !!preferences?.minimap }, lineNumbers: preferences?.lineNumbers === false ? "off" : "on", tabSize: preferences?.tabSize ?? 4, readOnly: preferences?.readOnly ?? false, quickSuggestions: preferences?.autocomplete !== false, suggestOnTriggerCharacters: preferences?.autocomplete !== false, inlineSuggest: { enabled: !!preferences?.aiAutocomplete } }); }, [id, preferences,documentRevision]);
   useEffect(() => {
     const record = models.get(id); if (!record) return;
-    let timeout: ReturnType<typeof setTimeout> | undefined, disposed = false;
-    const validate = () => {
-      clearTimeout(timeout);
-      timeout = setTimeout(async () => {
-        const model = record.model, context = getCompletionContext(id);
-        if (!context?.sessionId || model.isDisposed()) return;
-        const version = model.getVersionId(), contextVersion = contextVersions.get(id);
-        try {
-          const { markers } = await runtime.request<{ markers: LanguageMarker[] }>("language.diagnostics", { ...languageParams(context, { language: model.getLanguageId() as Language, code: model.getValue() }), block_id: id });
-          if (disposed || model.isDisposed() || model.getVersionId() !== version || contextVersions.get(id) !== contextVersion) return;
-          monaco.editor.setModelMarkers(model, "datapyn", (markers ?? []).map((marker) => ({ startLineNumber: marker.start_line, startColumn: marker.start_column, endLineNumber: marker.end_line, endColumn: marker.end_column, message: marker.message, severity: marker.severity === "warning" ? monaco.MarkerSeverity.Warning : marker.severity === "info" ? monaco.MarkerSeverity.Info : monaco.MarkerSeverity.Error })));
-        } catch { /* Diagnostics never prevent editing or execution. */ }
-      }, 750);
+    const renderMarkers = () => {
+      if (record.model.isDisposed()) return;
+      monaco.editor.setModelMarkers(record.model, "datapyn", syntaxDiagnostics.snapshot(id).markers.map(marker => ({ startLineNumber: marker.start_line, startColumn: marker.start_column, endLineNumber: marker.end_line, endColumn: marker.end_column, message: marker.message, severity: marker.severity === "warning" ? monaco.MarkerSeverity.Warning : marker.severity === "info" ? monaco.MarkerSeverity.Info : monaco.MarkerSeverity.Error })));
     };
-    diagnosticRefreshers.set(id, validate);
-    const changed = record.model.onDidChangeContent(validate); validate();
-    return () => { disposed = true; clearTimeout(timeout); changed.dispose(); diagnosticRefreshers.delete(id); };
-  }, [id, language]);
+    const unsubscribe = syntaxDiagnostics.subscribe(id, renderMarkers); renderMarkers();
+    return unsubscribe;
+  }, [id, documentRevision]);
   return <div className="monaco-block" ref={container} style={{ height }} aria-label={`Editor ${language}`} />;
 });
