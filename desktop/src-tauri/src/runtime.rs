@@ -193,6 +193,8 @@ struct RuntimeClient {
     closed: Arc<AtomicBool>,
     #[cfg(windows)]
     _job: windows_job::Job,
+    #[cfg(test)]
+    _test_storage: Option<tempfile::TempDir>,
 }
 
 impl RuntimeClient {
@@ -210,7 +212,18 @@ impl RuntimeClient {
 
     #[cfg(test)]
     fn start_with_events(emit: impl Fn(Value) + Send + 'static) -> Result<Self, String> {
-        Self::start_command(runtime_command()?, emit)
+        let storage = tempfile::Builder::new()
+            .prefix("datapyn-native-test-")
+            .tempdir()
+            .map_err(|error| error.to_string())?;
+        let mut command = runtime_command()?;
+        configure_app_storage(&mut command, storage.path());
+        command.env("DATAPYN_SNAPSHOT_ROOT", storage.path().join("snapshots"));
+        let mut client = Self::start_command(command, emit)?;
+        // Parallel transport tests must never share the user's profile. Keep
+        // the directory alive until the owned broker has been stopped.
+        client._test_storage = Some(storage);
+        Ok(client)
     }
 
     fn start_command(
@@ -288,6 +301,8 @@ impl RuntimeClient {
             closed,
             #[cfg(windows)]
             _job: job,
+            #[cfg(test)]
+            _test_storage: None,
         })
     }
 
