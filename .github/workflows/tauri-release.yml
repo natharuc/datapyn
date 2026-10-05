@@ -100,6 +100,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: "desktop/src-tauri -> target"
+          # Retain dependencies when subsequent packaging/acceptance fails.
+          # Workspace binaries and bundle/signing outputs are excluded by the
+          # action's dependency cleanup; no signing directories are added.
+          cache-on-failure: "true"
+          cache-bin: "false"
       - name: Verify dedicated updater signing key
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.DATAPYN_TAURI_SIGNING_PRIVATE_KEY }}
