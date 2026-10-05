@@ -14,7 +14,7 @@ export interface LanguageContextUpdate {
   metadata_state?: "ready" | "error";
   schema_error?: string | null;
   requested_scope?: {connection_id?:string|null;database?:string|null;schema?:string|null};
-  schema_snapshot?: {db_type?: string; database?: string; current_schema?: string; tables?: Array<{key?: string; name: string; schema?: string; catalog?: string; temporary?: boolean}>;
+  schema_snapshot?: {db_type?: string; database?: string; current_schema?: string; default_schema?: string; tables?: Array<{key?: string; name: string; schema?: string; catalog?: string; temporary?: boolean}>;
     columns?: Record<string, Array<{name: string; type?: string; data_type?: string}>>};
 }
 export interface ResultExportProgress {

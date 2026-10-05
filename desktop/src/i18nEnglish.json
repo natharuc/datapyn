@@ -487,5 +487,10 @@
   "Pesquisar {label}…":"Search {label}…",
   "Nenhum resultado.":"No results.",
   "Não foi possível carregar os metadados SQL.":"Unable to load SQL metadata.",
-  "Schema":"Schema"
+  "Schema":"Schema",
+  "Abrindo conexão":"Opening connection",
+  "Falha na conexão":"Connection failed",
+  "Falha ao abrir a conexão":"Unable to open the connection",
+  "Preparando sessão…":"Preparing session…",
+  "Conectando e autenticando…":"Connecting and authenticating…"
 }

@@ -1,7 +1,8 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
-import { ChevronDown, Database, Filter, Folder, Plus, RefreshCw, Search, Star } from "lucide-react";
+import { ChevronDown, Database, Filter, Folder, GripVertical, LoaderCircle, MoreHorizontal, Play, Plus, RefreshCw, Search, Star } from "lucide-react";
 import { AgentIcon } from "../src/AgentIcon";
+import { SessionConnectionStatus } from "../src/SessionConnectionStatus";
 import "dockview-react/dist/styles/dockview.css";
 import "../src/docking.css";
 import "../src/connections.css";
@@ -21,11 +22,23 @@ import "../src/styles.css";
 
 // Isolated presentation fixture: real workbench CSS and DOM structures, no
 // application startup, IPC, user profile, or database access.
+function BlockHeaderPreview({ language="sql",longScope=false }: {language?:"sql"|"python";longScope?:boolean}) {
+  return <div className="block-header">
+    <div className="block-header-controls"><span draggable><GripVertical className="block-grip" size={13}/></span><button aria-label="Recolher bloco"><ChevronDown size={12}/></button><button className="block-run" aria-label="Executar bloco"><Play size={12} fill="currentColor"/></button><span className="block-index">01</span><select className={`language-select ${language}`} aria-label="Linguagem"><option>{language==="sql"?"SQL":"Python"}</option></select></div>
+    <div className="block-header-details"><input className="block-name" aria-label="Nome do resultado" placeholder={language==="sql"?"Nome do resultado (df)":"Nome do bloco"}/>{language==="sql"&&<><button className="block-scope"><Database size={13}/><span>{longScope?"MAG PRD DATABRICKS":"GREEN"}</span></button><div className="block-scope-picker"><button className="block-scope-trigger"><span className="block-scope-label">{longScope?"Catálogo":"Banco"}</span><span className="block-scope-value">{longScope?"mag_prata_seguradora_producao":"green"}</span><ChevronDown size={12}/></button>{longScope&&<button className="block-scope-trigger"><span className="block-scope-label">Schema</span><span className="block-scope-value">financeiro_movimentos_producao</span><ChevronDown size={12}/></button>}</div></>}{longScope&&<span className="block-status running"><LoaderCircle size={12} className="spin"/>Executando</span>}<button className="icon-button" aria-label="Ações do bloco"><MoreHorizontal size={15}/></button></div>
+  </div>;
+}
+
 function ThemeFixture() {
+  const retry=()=>{const browser=window as Window & {sessionConnectionRetryCount?:number};browser.sessionConnectionRetryCount=(browser.sessionConnectionRetryCount??0)+1;};
   return <main id="theme-fixture">
     <div className="app-header"><span className="brand"><span>DataPyn</span></span><div className="app-menu"><button>Abrir</button><button>Configurações</button><button>Exibir</button></div></div>
     <div className="session-bar"><div className="session-tab"><button role="tab"><span>Análise 1</span></button></div><div className="session-tab active"><button role="tab"><span>Análise 2</span></button></div></div>
     <div className="workspace-toolbar"><button className="connection-button"><Database size={14}/><span>GREEN</span><ChevronDown size={12}/></button><button className="primary-button run-button">Executar <kbd>F5</kbd></button><button className="text-button">Executar tudo</button></div>
+    <div id="connection-preparing" className="connection-status-preview" data-phase="preparing"><SessionConnectionStatus state={{phase:"preparing",name:"MAG PRD DATABRICKS"}}/></div>
+    <div id="connection-connecting" className="connection-status-preview" data-phase="connecting"><SessionConnectionStatus state={{phase:"connecting",name:"MAG PRD DATABRICKS financeiro_movimentos_producao"}}/></div>
+    <div id="connection-error" className="connection-status-preview" data-phase="error"><SessionConnectionStatus state={{phase:"error",name:"MAG PRD DATABRICKS",error:"Não foi possível autenticar na conexão. O servidor não respondeu dentro do tempo esperado.\nhttps://servidor-de-dados.exemplo.invalid/sql/protocolv1/o/123456789012345678901234567890123456789012345678901234567890/warehouse-financeiro-producao"}} onRetry={retry}/></div>
+    <div id="connection-ready" className="connection-status-preview" data-phase="ready"><SessionConnectionStatus state={{phase:"ready",name:"GREEN"}}/></div>
     <div className="preview-grid">
       <section className="preview-panel connections-sidebar">
         <div className="connections-active"><Database size={15}/><div><strong>GREEN</strong><small>mysql · green</small></div></div>
@@ -44,7 +57,9 @@ function ThemeFixture() {
         <div className="data-form"><label className="variable-archive-search"><Search size={13}/><input aria-label="Buscar arquivos" placeholder="Filtrar variáveis…"/></label></div>
       </section>
     </div>
-    <div className="code-block sql focused"><div className="block-header"><span className="block-index">01</span><select className="language-select sql" aria-label="Linguagem"><option>SQL</option></select><input className="block-name" placeholder="Nome do resultado (df)"/><button className="block-scope"><Database size={13}/><span>GREEN</span></button><div className="block-scope-picker"><button className="block-scope-trigger"><span className="block-scope-label">Banco</span><span className="block-scope-value">green</span><ChevronDown size={12}/></button></div><button className="block-run">▶</button></div><div className="syntax-diagnostics warning"><div className="syntax-summary"><button>1 aviso</button><button className="syntax-first">L2:C7 Coluna desconhecida 'a'</button></div></div><pre className="preview-code">SELECT * FROM acesso</pre></div>
+    <div className="code-block sql focused"><BlockHeaderPreview/><div className="syntax-diagnostics warning"><div className="syntax-summary"><button>1 aviso</button><button className="syntax-first">L2:C7 Coluna desconhecida 'a'</button></div></div><pre className="preview-code">SELECT * FROM acesso</pre></div>
+    <div className="code-block sql"><BlockHeaderPreview longScope/><pre className="preview-code">SELECT * FROM movimento</pre></div>
+    <div className="code-block python"><BlockHeaderPreview language="python"/><pre className="preview-code">df.head()</pre></div>
     <div className="add-block-row"><button><Plus size={12}/>SQL</button><button><Plus size={12}/>Python</button></div>
     <section className="results-panel"><div className="bottom-tabs"><button className="active">Resultados</button><button>Saída</button></div><div className="result-tabs"><button className="active">df <span>14.769</span></button><button>clientes</button></div><div className="grid-toolbar"><span className="result-meta">14.769 linhas / 29 colunas</span><label className="grid-filter"><Filter size={12}/><input aria-label="Filtrar resultados" placeholder="Filtrar valores…"/></label><button className="text-button">Copiar</button></div></section>
     <section className="datapyn-dock dockview-theme-light preview-dock"><div className="dv-groupview dv-active-group"><div className="dv-tabs-and-actions-container"><div className="dv-tabs-container"><div className="dv-tab dv-active-tab">Análise</div><div className="dv-tab dv-inactive-tab">Conexões</div></div></div></div></section>

@@ -4,6 +4,8 @@ O Tauri grava sessões internas em `workspace_sessions.sqlite3` dentro de cada p
 
 Os formatos públicos `.dpw`, `.sql`, `.py` e `.ipynb` continuam usando os leitores/escritores existentes. O banco é privado do aplicativo, separado da exportação de arquivos e do cache Parquet opt-in. Não serializa DataFrames, engines, objetos Python ou pickle.
 
+Ao abrir uma análise restaurada, o frontend prepara sua sessão e autentica a conexão salva antes de liberar o contexto SQL. Banco/schema focados no documento são enviados ao runtime antes de autenticar, inclusive na nova tentativa, mesmo quando diferem dos valores configurados na conexão. A resposta resolvida pelo driver determina o contexto da UI e do namespace Python. As outras análises são preparadas quando ativadas; nenhum código é executado por essa etapa. O indicador de abertura, o erro e o estado de autenticação são transitórios: não entram no `.dpw` nem provocam regravação do documento ou header a cada mudança de status. Senhas também não entram no objeto de conexão mantido pelo controller.
+
 ## Estrutura
 
 | Tabela | Conteúdo |

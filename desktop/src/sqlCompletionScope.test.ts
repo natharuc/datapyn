@@ -17,12 +17,12 @@ function complete(marked: string, supplied = context) {
 describe("SQL completion query scopes", () => {
   it("offers loaded columns immediately at SELECT, WHERE, ON and ORDER BY", () => {
     for (const marked of ["SELECT va| FROM sales s", "SELECT * FROM sales s WHERE va|", "SELECT * FROM sales s ORDER BY va|", "SELECT * FROM sales s JOIN customers c ON va|"]) {
-      expect(complete(marked)).toContainEqual(expect.objectContaining({ label: "value", kind: "column", insert_text: '"value"' }));
+      expect(complete(marked)).toContainEqual(expect.objectContaining({ label: "value", kind: "column", insert_text: 'value' }));
     }
-    expect(complete("SELECT * FROM sales s JOIN customers c ON customer_n|")).toContainEqual(expect.objectContaining({ label: "customer_name", insert_text: '"customer_name"',detail:"main.customers · " }));
+    expect(complete("SELECT * FROM sales s JOIN customers c ON customer_n|")).toContainEqual(expect.objectContaining({ label: "customer_name", insert_text: 'customer_name',detail:"main.customers · " }));
     const shared=complete("SELECT * FROM sales s JOIN customers c ON shar|");
-    expect(shared).toContainEqual(expect.objectContaining({label:"s.shared",insert_text:'"s"."shared"'}));
-    expect(shared).toContainEqual(expect.objectContaining({label:"c.shared",insert_text:'"c"."shared"'}));
+    expect(shared).toContainEqual(expect.objectContaining({label:"s.shared",insert_text:'s.shared'}));
+    expect(shared).toContainEqual(expect.objectContaining({label:"c.shared",insert_text:'c.shared'}));
     expect(shared.some(item=>item.label==="shared")).toBe(false);
   });
   it("keeps alias suggestions within the statement at the actual cursor", () => {

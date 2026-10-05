@@ -203,6 +203,8 @@ def test_profile_routes_keep_separate_engines_and_namespace(client):
     a, b = saved(client, "a"), saved(client, "b")
     connected = client.request("connection.connect", {"session_id": "a", "connection_id": a})
     assert connected["connection_id"] == a and connected["schema"] == "main" and "password" not in connected["config"]
+    assert connected["config"]["schema"] == connected["schema"]
+    assert connected["config"]["database"] == connected["database"] == ":memory:"
     for identifier, value in ((a, 7), (b, 13)):
         result = client.execute(f"CREATE TABLE routed(value INTEGER); INSERT INTO routed VALUES ({value}); SELECT * FROM routed;",
                                 f"sql-{value}", language="sql", connection_id=identifier)

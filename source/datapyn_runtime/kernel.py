@@ -210,12 +210,13 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
             if key not in pool.items:
                 del connection_labels[key]
         context_key = "|".join(str(params.get(key) or "") for key in ("connection_id", "database", "schema")) or "default"
+        resolved = pool.explorer().context()
         namespace.update({
             "db_engine": connector.engine, "db_type": connector.db_type,
-            "db_database": connector.connection_params.get("database", ""),
+            "db_database": resolved["database"],
             "db_host": connector.connection_params.get("host", ""),
             "db_username": connector.connection_params.get("username", ""),
-            "db_schema": pool.explorer().context()["schema"],
+            "db_schema": resolved["schema"],
         })
         return connector
 
@@ -385,9 +386,10 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
             try:
                 if method == "connection.connect":
                     activate(params, default=True)
-                    safe_config = {key: value for key, value in (pool.default_config or {}).items()
-                                   if key not in {"password", "token", "access_token", "client_secret"}}
-                    result = {"status": "connected", "connection_id": params.get("connection_id"), "config": safe_config, **pool.explorer().context()}
+                    from .connection_catalog import without_secrets
+                    resolved = pool.explorer().context()
+                    safe_config = without_secrets({**(pool.default_config or {}), **resolved})
+                    result = {"status": "connected", "connection_id": params.get("connection_id"), "config": safe_config, **resolved}
                     publish_context()
                 elif method == "connection.disconnect":
                     pool.disconnect(params.get("connection_id"))

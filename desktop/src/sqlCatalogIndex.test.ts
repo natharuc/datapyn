@@ -16,32 +16,32 @@ const large: CompletionContext = { variables: [], tables: Object.keys(largeTable
 
 describe("large SQL catalogs", () => {
   it("reaches the final table by bare and qualified prefixes without losing names beyond the visible bound", () => {
-    expect(complete("SELECT * FROM table_099999|", large)).toEqual([expect.objectContaining({ label: "table_099999",detail:"main.analytics.table_099999", insert_text: "`table_099999`" })]);
-    expect(complete("SELECT * FROM main.analytics.table_099999|", large)).toEqual([expect.objectContaining({ label: "table_099999", insert_text: "`table_099999`" })]);
-    expect(complete("SELECT t.va| FROM table_099999 t", large)).toEqual([expect.objectContaining({ label: "value", insert_text: "`value`" })]);
+    expect(complete("SELECT * FROM table_099999|", large)).toEqual([expect.objectContaining({ label: "table_099999",detail:"table",documentation:"main.analytics.table_099999", insert_text: "table_099999" })]);
+    expect(complete("SELECT * FROM main.analytics.table_099999|", large)).toEqual([expect.objectContaining({ label: "table_099999", insert_text: "table_099999" })]);
+    expect(complete("SELECT t.va| FROM table_099999 t", large)).toEqual([expect.objectContaining({ label: "value", insert_text: "value" })]);
     expect(complete("SELECT t.va| FROM main.analytics.table_099999 t", large)).toEqual([expect.objectContaining({ label: "value" })]);
   });
   it("preserves metadata order for bounded broad searches and never duplicates a full/bare match", () => {
     const broad = complete("SELECT * FROM table_|", large);
     expect(broad).toHaveLength(500);
-    expect(broad[0]).toMatchObject({label:"table_000000",detail:"main.analytics.table_000000"}); expect(broad.at(-1)).toMatchObject({label:"table_000499",detail:"main.analytics.table_000499"});
+    expect(broad[0]).toMatchObject({label:"table_000000",detail:"table",documentation:"main.analytics.table_000000"}); expect(broad.at(-1)).toMatchObject({label:"table_000499",detail:"table",documentation:"main.analytics.table_000499"});
     const namespaced = complete("SELECT * FROM main.analytics.table_|", large);
     expect(namespaced).toHaveLength(500); expect(namespaced[0].label).toBe("table_000000"); expect(namespaced.at(-1)?.label).toBe("table_000499");
     const mixed: CompletionContext = { variables: [], tables: ["foo_schema.foo", "foo_schema.bar", "other.foo_table"], dbType: "sqlite" };
     expect(complete("FROM foo|", mixed).map(item => item.label)).toEqual(["foo_schema.foo", "foo_schema.bar", "other.foo_table"]);
   });
   it.each([
-    ["sqlserver", "[table_099999]", "[value]"],
+    ["sqlserver", "analytics.table_099999", "value"],
     ["postgresql", '"table_099999"', '"value"'],
-    ["mysql", "`analytics`.`table_099999`", "`value`"],
-    ["mariadb", "`analytics`.`table_099999`", "`value`"],
-    ["sqlite", '"table_099999"', '"value"'],
-    ["databricks", "`table_099999`", "`value`"],
+    ["mysql", "analytics.table_099999", "value"],
+    ["mariadb", "analytics.table_099999", "value"],
+    ["sqlite", "table_099999", "value"],
+    ["databricks", "table_099999", "value"],
   ])("shares names without borrowing cached insertion quoting from another dialect: %s", (dbType, table, column) => {
     const scoped = { ...large, dbType };
     expect(complete("FROM table_099999|", scoped)[0].insert_text).toBe(table);
     expect(complete("SELECT t.va| FROM table_099999 t", scoped)[0].insert_text).toBe(column);
-    expect(complete("FROM main.analytics.table_099999|", scoped)[0].insert_text).toBe(column.startsWith("[") ? "[table_099999]" : column.startsWith('"') ? '"table_099999"' : "`table_099999`");
+    expect(complete("FROM main.analytics.table_099999|", scoped)[0].insert_text).toBe(dbType==="postgresql" ? '"table_099999"' : "table_099999");
   });
   it("continues to resolve SQL columns after the live Python namespace changes", () => {
     expect(complete("SELECT t.va| FROM table_099999 t", large).map(item => item.label)).toEqual(["value"]);
@@ -80,9 +80,9 @@ describe("large SQL catalogs", () => {
   });
   it("treats prototype-like fallback names as SQL identifiers rather than inherited objects", () => {
     const bare: CompletionContext = { variables: [], tables: ["constructor", "toString", "__proto__"], dbType: "sqlite", schemaSnapshot: { tables: {} } };
-    expect(complete("FROM con|", bare)[0].insert_text).toBe('"constructor"');
-    expect(complete("FROM toS|", bare)[0].insert_text).toBe('"toString"');
-    expect(complete("FROM __pro|", bare)[0].insert_text).toBe('"__proto__"');
+    expect(complete("FROM con|", bare)[0].insert_text).toBe('constructor');
+    expect(complete("FROM toS|", bare)[0].insert_text).toBe('toString');
+    expect(complete("FROM __pro|", bare)[0].insert_text).toBe('__proto__');
     expect(complete("constructor.|", bare)).toEqual([]);
     const defined = Object.fromEntries(["constructor", "toString", "__proto__"].map(name => [name, { name, columns: [{ name: "actual_column" }] }]));
     const explicit: CompletionContext = { ...bare, schemaSnapshot: { tables: defined } };

@@ -2,6 +2,7 @@ import type { CompletionContext, LanguageCompletion } from "./editorLanguage";
 import type { Language } from "./runtime";
 import { dataframeLibrary, dataframeMemberNames, dataframeMembers } from "./dataframeMembers";
 import { sqlCompletionScope, sqlStringEscapesBackslash } from "./sqlCompletionScope";
+import { plainSqlIdentifier } from "./sqlIdentifierKeywords";
 
 const SQL_KEYWORDS = "SELECT FROM WHERE AND OR NOT IN BETWEEN LIKE IS NULL JOIN INNER LEFT RIGHT FULL OUTER CROSS ON AS ORDER BY GROUP HAVING LIMIT OFFSET DISTINCT INSERT INTO VALUES UPDATE SET DELETE CREATE TABLE DROP ALTER COUNT SUM AVG MIN MAX CASE WHEN THEN ELSE END EXISTS UNION ALL TOP WITH OVER PARTITION ROW_NUMBER RANK DENSE_RANK LAG LEAD ASC DESC USE EXEC CALL DECLARE BEGIN COMMIT ROLLBACK COALESCE CAST CONVERT".split(" ");
 const PYTHON_KEYWORDS = "def class if elif else for while return import from as try except finally with lambda yield True False None and or not in is pass break continue async await raise assert del global nonlocal match case".split(" ");
@@ -142,9 +143,11 @@ function normalizedSqlName(parts: SqlIdentifierPart[] | undefined, fallback: str
 }
 
 function quoteSqlPart(name: string, dbType = "sqlserver") {
+  if (plainSqlIdentifier(name, dbType)) return name;
   if (dbType === "sqlserver" || dbType === "mssql") return `[${name.replace(/\]/g, "]]")}]`;
   if (dbType === "mysql" || dbType === "mariadb" || dbType === "databricks") return `\`${name.replace(/`/g, "``")}\``;
-  // Quote every identifier, matching the runtime without a partial keyword list.
+  // PostgreSQL preserves physical identifier case; special/reserved names in
+  // other dialects still need delimiters even when ordinary names remain plain.
   return `"${name.replace(/"/g, '""')}"`;
 }
 function ownTable(tables: SqlTables | undefined, key: string) { return tables && Object.hasOwn(tables, key) ? tables[key] : undefined; }
@@ -156,6 +159,14 @@ function tableParts(key: string, context: CompletionContext | undefined): string
   return schema&&(prefix===schema||prefix.endsWith(`.${schema}`))
     ? [...(prefix===schema?[]:metadata.catalog?[metadata.catalog]:prefix.slice(0,-schema.length-1).split(".")),schema,name]
     : [...(prefix?prefix.split("."):[]),name];
+}
+function sameNamespace(left:string|undefined,right:string|undefined,dbType?:string):boolean {
+  return Boolean(left&&right)&&(dbType==="postgresql"?left===right:left!.toLowerCase()===right!.toLowerCase());
+}
+function tableNamespace(key:string,context:CompletionContext|undefined) {
+  const metadata=ownTable(context?.schemaSnapshot?.tables,key),parts=tableParts(key,context);
+  return {parts,name:metadata?.name??parts.at(-1)!,schema:metadata?.schema??parts.at(-2),
+    catalog:metadata?.catalog??(parts.length===3?parts[0]:undefined),temporary:metadata?.temporary};
 }
 type SqlTables = NonNullable<NonNullable<CompletionContext["schemaSnapshot"]>["tables"]>;
 type NameLookup = Map<string, string | string[]>;
@@ -216,14 +227,17 @@ function resolveTable(name: string | undefined, context: CompletionContext | und
   if (Object.hasOwn(tables, name)) return name;
   const index = getIndex();
   if (index.extras.has(name)) return name;
+  const database=context?.database??context?.schemaSnapshot?.database,
+    qualified=name.includes(".")&&database?`${database}.${name}`:undefined;
+  if(qualified&&(Object.hasOwn(tables,qualified)||index.extras.has(qualified)))return qualified;
   bareNames(index);
-  const folded = strictCase ? [] : name.includes(".") ? lookupNames(fullNames(index), query)
+  const folded = strictCase ? [] : name.includes(".") ? [...lookupNames(fullNames(index),query),...(qualified?lookupNames(fullNames(index),qualified.toLowerCase()):[])]
     : [...(Object.hasOwn(tables, query) || index.extras.has(query) ? [query] : []), ...lookupNames(index.foldedRoots!, query)];
   if(folded.length)return folded.length===1?folded[0]:undefined;
   const chooseScope=(candidates:string[])=>{
     const temporary=candidates.filter(key=>ownTable(tables,key)?.temporary);
     if(temporary.length)return temporary.length===1?temporary[0]:undefined;
-    const catalogOf=(key:string)=>ownTable(tables,key)?.catalog;
+    const catalogOf=(key:string)=>tableNamespace(key,context).catalog;
     const selectedCatalog=context?.database ?? context?.schemaSnapshot?.database;
     if(selectedCatalog){const sameCatalog=candidates.filter(key=>!catalogOf(key)|| (strictCase?catalogOf(key)===selectedCatalog:catalogOf(key)?.toLowerCase()===selectedCatalog.toLowerCase()));if(sameCatalog.length)candidates=sameCatalog;}
     const schemaOf=(key:string)=>ownTable(tables,key)?.schema??key.split(".").at(-2),dbType=context?.dbType??context?.schemaSnapshot?.db_type,
@@ -261,25 +275,26 @@ function prefixRange(names: SearchName[], query: string, field: "folded" | "bare
   return { start: bound(false), end: bound(true) };
 }
 /** Filter names first; construct and escape at most the visible 500 suggestions. */
-function matchingTableNames(index: SqlIndex, prefix: string, qualifier?: string,strictNamespace=false): string[] {
-  const query = prefix.toLowerCase(), namespace = qualifier ? `${qualifier.toLowerCase()}.` : "";
-  if (!query && !namespace) return index.names.slice(0, 500);
-  const cacheKey=JSON.stringify([query,namespace,strictNamespace?qualifier:undefined]),cached=index.matches.get(cacheKey);
+function matchingTableNames(index: SqlIndex, prefix: string, qualifier?: string,strictNamespace=false,database?:string): string[] {
+  const query=prefix.toLowerCase(),qualifiers=qualifier?[qualifier,...(database&&!qualifier.includes(".")?[`${database}.${qualifier}`]:[])]:[],
+    namespaces=qualifiers.map(name=>`${name.toLowerCase()}.`);
+  if (!query && !namespaces.length) return index.names.slice(0, 500);
+  const cacheKey=JSON.stringify([query,namespaces,strictNamespace?qualifiers:undefined]),cached=index.matches.get(cacheKey);
   if(cached)return cached;
-  const search = searchNames(index), fullQuery = namespace + query;
-  const full = prefixRange(search.full, fullQuery, "folded"), bare = query ? prefixRange(search.bare, query, "bare") : { start: 0, end: 0 };
-  const inNamespace=(entry:SearchName)=>!namespace||(strictNamespace?entry.key.startsWith(`${qualifier}.`):entry.folded.startsWith(namespace));
+  const search=searchNames(index),fullQueries=namespaces.length?namespaces.map(namespace=>namespace+query):[query],
+    full=fullQueries.map(value=>prefixRange(search.full,value,"folded")),bare=query?prefixRange(search.bare,query,"bare"):{start:0,end:0};
+  const inNamespace=(entry:SearchName)=>!namespaces.length||qualifiers.some((value,index)=>strictNamespace?entry.key.startsWith(`${value}.`):entry.folded.startsWith(namespaces[index]));
   const matches = (entry: SearchName) => inNamespace(entry)
-    && (!query || entry.folded.startsWith(fullQuery) || entry.bare.startsWith(query));
+    && (!query || fullQueries.some(value=>entry.folded.startsWith(value)) || entry.bare.startsWith(query));
   let result:string[];
-  if (full.end - full.start + bare.end - bare.start > 5_000) {
+  if (full.reduce((count,range)=>count+range.end-range.start,0) + bare.end - bare.start > 5_000) {
     // Broad matches need only the first 500 in metadata order, without
     // collecting or sorting an entire matching namespace on each key.
     result = [];
     for (const entry of search.names) if (matches(entry)) { result.push(entry.key); if (result.length === 500) break; }
   }else{
     const candidates = new Map<number, SearchName>();
-    for (let index = full.start; index < full.end; index++) { const entry = search.full[index]; if (matches(entry)) candidates.set(entry.order, entry); }
+    for(const range of full)for (let index = range.start; index < range.end; index++) { const entry = search.full[index]; if (matches(entry)) candidates.set(entry.order, entry); }
     for (let index = bare.start; index < bare.end; index++) { const entry = search.bare[index]; if (matches(entry)) candidates.set(entry.order, entry); }
     result=[...candidates.values()].sort((a, b) => a.order - b.order).slice(0, 500).map(entry => entry.key);
   }
@@ -296,22 +311,47 @@ function matchingTableNames(index: SqlIndex, prefix: string, qualifier?: string,
   while(index.matches.size>64)index.matches.delete(index.matches.keys().next().value!);
   return result;
 }
-function focusedTableParts(key:string,context:CompletionContext|undefined,getIndex:()=>SqlIndex,qualifier?:string):string[]{
-  const parts=tableParts(key,context),metadata=ownTable(context?.schemaSnapshot?.tables,key),dbType=context?.dbType??context?.schemaSnapshot?.db_type;
-  if(qualifier){for(let count=1;count<parts.length;count++){const prefix=parts.slice(0,count).join(".");if(dbType==="postgresql"?prefix===qualifier:prefix.toLowerCase()===qualifier.toLowerCase())return parts.slice(count);}return parts;}
-  const name=metadata?.name??parts.at(-1)!,database=context?.database??context?.schemaSnapshot?.database,schema=context?.schema??context?.schemaSnapshot?.current_schema;
-  const equal=(left:string|undefined,right:string|undefined)=>left!==undefined&&right!==undefined&&(dbType==="postgresql"?left===right:left.toLowerCase()===right.toLowerCase());
-  const inDatabase=!metadata?.catalog||equal(metadata.catalog,database),inScope=metadata?.temporary||
-    ((dbType==="mysql"||dbType==="mariadb")?equal(metadata?.schema,database):equal(metadata?.schema,schema));
+function qualifierTail(parts:string[],qualifier:string,dbType:string|undefined,database:string|undefined):string[]|undefined {
+  const starts=parts.length===3&&sameNamespace(parts[0],database,dbType)?[0,1]:[0];
+  for(const start of starts)for(let count=start+1;count<parts.length;count++)
+    if(sameNamespace(parts.slice(start,count).join("."),qualifier,dbType))return parts.slice(count);
+}
+function focusedParts(parts:string[],schema:string|undefined,catalog:string|undefined,temporary:boolean|undefined,
+  context:CompletionContext|undefined,canUseBare:boolean,qualifier?:string,insertion=true):string[]{
+  const dbType=context?.dbType??context?.schemaSnapshot?.db_type;
+  if(qualifier)return qualifierTail(parts,qualifier,dbType,context?.database??context?.schemaSnapshot?.database)??parts;
+  const name=parts.at(-1)!,database=context?.database??context?.schemaSnapshot?.database,
+    selectedSchema=context?.schema||context?.schemaSnapshot?.current_schema;
+  const inDatabase=!catalog||sameNamespace(catalog,database,dbType),inScope=temporary||
+    ((dbType==="mysql"||dbType==="mariadb")?sameNamespace(schema,database,dbType):sameNamespace(schema,selectedSchema,dbType));
+  // A SQL Server schema picker cannot alter a login's physical default schema.
+  // Only its actual default can omit the schema; explicit typed qualifiers own it.
+  const needsSchema=insertion&&(dbType==="sqlserver"||dbType==="mssql")&&Boolean(schema)&&
+    !sameNamespace(schema,context?.schemaSnapshot?.default_schema??"dbo",dbType);
   // A short name must resolve to this exact object in the focused namespace.
   // Other schemas/catalogs and shadowed permanent tables retain qualification.
-  if(parts.length===1||(inDatabase&&inScope&&resolveTable(name,context,getIndex)===key))return [name];
-  if(parts.length>=3&&equal(parts[0],database))return parts.slice(1);
+  if(parts.length===1)return needsSchema?[schema!,name]:parts;
+  if(parts.length<=3&&!needsSchema&&inDatabase&&inScope&&canUseBare)return [name];
+  if(parts.length===3&&sameNamespace(parts[0],database,dbType))return parts.slice(1);
   return parts;
 }
+function namedTableCompletion(parts:string[],detail:string,dbType?:string,displayParts=parts):LanguageCompletion {
+  const label=displayParts.join(".");
+  return {label,kind:"table",detail:"table",documentation:detail,insert_text:parts.map(part=>quoteSqlPart(part,dbType)).join("."),filterText:label,sortText:`0:${displayParts.length===1?"0":"1"}:${label}`};
+}
+function tableDocumentation(path:string,documentation?:string):string {
+  return documentation?documentation.includes(path)?documentation:`${documentation}\n\n${path}`:path;
+}
 function tableCompletion(key:string,context:CompletionContext|undefined,getIndex:()=>SqlIndex,qualifier?:string):LanguageCompletion{
-  const parts=focusedTableParts(key,context,getIndex,qualifier),label=parts.join("."),dbType=context?.dbType??context?.schemaSnapshot?.db_type;
-  return {label,kind:"table",detail:key,insert_text:parts.map(part=>quoteSqlPart(part,dbType)).join("."),filterText:label,sortText:`0:${parts.length===1?"0":"1"}:${label}`};
+  const {parts,name,schema,catalog,temporary}=tableNamespace(key,context),canUseBare=resolveTable(name,context,getIndex)===key;
+  return namedTableCompletion(focusedParts(parts,schema,catalog,temporary,context,canUseBare,qualifier),key,context?.dbType??context?.schemaSnapshot?.db_type,
+    focusedParts(parts,schema,catalog,temporary,context,canUseBare,qualifier,false));
+}
+function completionIdentifierParts(item:LanguageCompletion):string[]|undefined {
+  if(item.is_snippet)return;
+  const inserted=identifierParts(item.insert_text??item.insertText??item.label),labelled=identifierParts(item.label);
+  // A quoted literal dot belongs to one physical identifier, not a namespace.
+  return (inserted&&(inserted.length>1||inserted[0].name.includes(".")||!labelled)?inserted:labelled??inserted)?.map(part=>part.name);
 }
 /** Remote inference must not restore fully qualified names after local results. */
 export function contextualCompletions(items:LanguageCompletion[],site:CompletionSite,context:CompletionContext|undefined,language:Language,local:LanguageCompletion[]=[]):LanguageCompletion[]{
@@ -323,25 +363,39 @@ export function contextualCompletions(items:LanguageCompletion[],site:Completion
       const qualified=local.filter(entry=>entry.kind==="column"&&entry.filterText===item.label&&entry.label!==item.label);
       if(qualified.length)return qualified.map(entry=>({...item,...entry,documentation:item.documentation}));
     }
-    if(item.kind?.toLowerCase()!=="table")return [item];
-    const key=(qualifier?resolveTable(`${qualifier}.${item.label}`,context,getIndex):undefined)??resolveTable(item.label,context,getIndex);
-    if(!key)return [item];
-    if(qualifier&&dbType==="postgresql"){
-      const parts=tableParts(key,context);
-      if(!parts.some((_part,index)=>index>0&&parts.slice(0,index).join(".")===qualifier))return [];
+    const kind=(item.kind??item.category)?.toLowerCase(),parts=completionIdentifierParts(item);
+    if(kind!=="table")return parts&&["column","field","schema","database","catalog"].includes(kind??"")
+      ? [{...item,insert_text:parts.map(part=>quoteSqlPart(part,dbType)).join(".")}] : [item];
+    const raw=parts?.join(".")??item.label;
+    const key=(qualifier?resolveTable(`${qualifier}.${raw}`,context,getIndex):undefined)??resolveTable(raw,context,getIndex);
+    if(!key){
+      if(!parts)return [item];
+      // Inference may arrive before the immutable catalog. Qualified RPC names
+      // still prove their namespace; never let enrichment restore a full prefix.
+      if(qualifier&&parts.length>1&&!qualifierTail(parts,qualifier,dbType,context?.database??context?.schemaSnapshot?.database))return [];
+      const name=parts.at(-1)!,resolved=resolveTable(name,context,getIndex),index=getIndex();bareNames(index);
+      const known=index.bare!.has(name)||index.bare!.has(name.toLowerCase())||index.foldedBare!.has(name.toLowerCase());
+      const schema=parts.at(-2)??(parts.length===1?context?.schema||context?.schemaSnapshot?.current_schema:undefined),
+        catalog=parts.length===3?parts[0]:undefined;
+      const canUseBare=!known||resolved===raw,focused=focusedParts(parts,schema,catalog,false,context,canUseBare,qualifier);
+      return [{...item,...namedTableCompletion(focused,raw,dbType,focusedParts(parts,schema,catalog,false,context,canUseBare,qualifier,false)),documentation:tableDocumentation(raw,item.documentation)}];
     }
-    return [{...item,...tableCompletion(key,context,getIndex,qualifier),documentation:item.documentation}];
+    if(qualifier){
+      const parts=tableParts(key,context);
+      if(!qualifierTail(parts,qualifier,dbType,context?.database??context?.schemaSnapshot?.database))return [];
+    }
+    return [{...item,...tableCompletion(key,context,getIndex,qualifier),documentation:tableDocumentation(key,item.documentation)}];
   });
 }
 function tableSuggestions(index: SqlIndex, context: CompletionContext | undefined, prefix: string, qualifier?: string) {
   const scope = JSON.stringify([context?.dbType ?? context?.schemaSnapshot?.db_type, context?.database ?? context?.schemaSnapshot?.database,
-    context?.schema ?? context?.schemaSnapshot?.current_schema]);
+    context?.schema ?? context?.schemaSnapshot?.current_schema,context?.schemaSnapshot?.default_schema]);
   let cache = index.items.get(scope);
   if (!cache) {
     cache = new Map(); index.items.set(scope, cache);
     while (index.items.size > 8) index.items.delete(index.items.keys().next().value!);
   }
-  return matchingTableNames(index, prefix, qualifier,(context?.dbType??context?.schemaSnapshot?.db_type)==="postgresql").map(key => {
+  return matchingTableNames(index,prefix,qualifier,(context?.dbType??context?.schemaSnapshot?.db_type)==="postgresql",context?.database??context?.schemaSnapshot?.database).map(key => {
     const itemKey = JSON.stringify([key, qualifier]), existing = cache!.get(itemKey);
     if (existing) return existing;
     const item=tableCompletion(key,context,()=>index,qualifier);

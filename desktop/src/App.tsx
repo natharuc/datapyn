@@ -7,7 +7,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { requestPermission } from "@tauri-apps/plugin-notification";
-import { Activity, ChevronDown, ChevronRight, Circle, Database, FileCode2, FolderOpen, GripVertical, Layers3, LoaderCircle, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Play, Plus, RefreshCw, Save, Settings2, Square, Table2, Terminal, Variable, X } from "lucide-react";
+import { Activity, AlertTriangle, ChevronDown, ChevronRight, Circle, Database, FileCode2, FolderOpen, GripVertical, Layers3, LoaderCircle, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Play, Plus, RefreshCw, Save, Settings2, Square, Table2, Terminal, Variable, X } from "lucide-react";
 import { ContextMenu } from "./ContextMenu";
 import { MoreHorizontal, Bell } from "lucide-react";
 import logo from "./assets/datapyn-logo.svg";
@@ -53,6 +53,7 @@ import {SessionCompletionIndex,SessionLanguageContexts,completionConnectionScope
 import {BlockScopePicker} from "./BlockScopePicker";
 import {blockScopeOptions} from "./blockScopeModel";
 import {ScopePreparation} from "./ScopePreparation";
+import {connectionPending,SessionConnectionStatus} from "./SessionConnectionStatus";
 import type {ExplorerContext} from "./explorer";
 import {exportContext} from "./exportContext";
 import {downloadDirectory} from "./queryDownload";
@@ -102,6 +103,9 @@ export function App() {
   const catalogState=useSyncExternalStore(connections.subscribe,connections.getSnapshot);
   const state = useSyncExternalStore(workspace.subscribe, workspace.getSnapshot);
   const session = state.sessions.find((item) => item.id === state.activeId)!;
+  const openingConnection=connectionPending(session.connectionState);
+  const connectionBlocked=openingConnection||session.connectionState?.phase==="error";
+  const retryConnectionId=session.connectionState?.phase==="error"&&session.connectionState.name?session.connectionState.connectionId:session.connectionState?.connectionId??session.savedConnectionId;
   const languageContexts=useRef(new SessionLanguageContexts()),completionIndex=useRef(new SessionCompletionIndex());
   const [languageRevision,setLanguageRevision]=useState(0),[preparationRevision,setPreparationRevision]=useState(0);
   const preparation=useRef(new ScopePreparation(runtime,scope=>{
@@ -338,9 +342,11 @@ export function App() {
   }, [preferences, leftVisible, rightVisible, resultHeight]);
   useEffect(()=>{if(preferences.theme !== "system")return;const query=matchMedia("(prefers-color-scheme: light)"),update=()=>{document.documentElement.dataset.theme=query.matches?"light":"dark";};query.addEventListener("change",update);return()=>query.removeEventListener("change",update);},[preferences.theme]);
   useEffect(() => {
-    if (state.runtimeStatus === "ready" && profile && !switchingProfile) run(workspace.ensureSession(session.id).then(()=>setPreparedSession(`${profile.active_id}:${session.id}`)));
+    let current=true;
+    if (state.runtimeStatus === "ready" && profile && !switchingProfile) run(workspace.prepareSession(session.id).then(()=>{if(current)setPreparedSession(`${profile.active_id}:${session.id}`);}));
     requestAnimationFrame(() => focusEditor(session.focusedBlockId));
-  }, [session.id, state.runtimeStatus,profile?.active_id,switchingProfile]);
+    return()=>{current=false;};
+  }, [session.id, session.savedConnectionId,state.runtimeStatus,profile?.active_id,switchingProfile]);
   const applyProfile=(loaded:ProfileState,defaults:ConfigurationDefaults={})=>{
     chartSources.current.clear();
     workspaceExtras.current=Object.fromEntries(Object.entries(loaded.state ?? {}).filter(([key])=>!["documents","activeIndex","preferences","shortcuts","layout","saved_at","revision"].includes(key)));
@@ -426,8 +432,8 @@ export function App() {
   };
   const connectSaved = useCallback(async (connection: SavedConnection, newTab = false) => {
     const target = newTab ? workspace.createSession() : workspace.session(); if (!target) return;
-    await workspace.connectSaved(target.id, connection.id);
-    workspace.patchSession(target.id, s => ({ ...s, connection: connection.config,extras:{...s.extras,connection_name:connection.name,connection_group:connections.getSnapshot().catalog.groups.find(g=>g.id === connection.group_id)?.name ?? ""} }));
+    await workspace.connectSaved(target.id, connection.id, connection.name);
+    workspace.patchSession(target.id, s => ({ ...s, connection: {...(s.connection??connection.config),name:connection.name},extras:{...s.extras,connection_name:connection.name,connection_group:connections.getSnapshot().catalog.groups.find(g=>g.id === connection.group_id)?.name ?? ""} }));
     setExplorerRefresh(n => n + 1);
     requestAnimationFrame(() => focusEditor(workspace.session(target.id)?.focusedBlockId ?? target.focusedBlockId));
   }, []);
@@ -611,9 +617,9 @@ export function App() {
   const entityScope = entityInfo ? blockScope(session, session.blocks.find(block=>block.id===entityInfo.blockId) ?? session.blocks[0]) : focusedScope;
   // Warm the focused scope once on focus/context changes, never on each keystroke.
   useEffect(()=>{
-    if(state.runtimeStatus!=="ready" || editingLocked || preparedSession!==`${profile?.active_id}:${session.id}` || focusedBlock?.language!=="sql" || !(focusedScope.connectionId || session.connection))return;
+    if(state.runtimeStatus!=="ready" || editingLocked || connectionBlocked || preparedSession!==`${profile?.active_id}:${session.id}` || focusedBlock?.language!=="sql" || !(focusedScope.connectionId || session.connection))return;
     void preparation.current.request({sessionId:session.id,...focusedScope,dbType:blockConnectionConfig(session,focusedBlock)?.db_type},focusedBlock.code).catch(failure=>reportMessage(errorText(failure)));
-  },[session.id,session.focusedBlockId,focusedBlock?.language,focusedScope.connectionId,focusedScope.database,focusedScope.schema,state.runtimeStatus,preparedSession,profile?.active_id,editingLocked,preparationRevision,session.connection,catalogState.catalog]);
+  },[session.id,session.focusedBlockId,focusedBlock?.language,focusedScope.connectionId,focusedScope.database,focusedScope.schema,state.runtimeStatus,preparedSession,profile?.active_id,editingLocked,connectionBlocked,preparationRevision,session.connection,catalogState.catalog]);
   const exportScope=exportContext(session,catalogState.catalog.connections);
   const exportConnections=useMemo(()=>catalogState.catalog.connections.map(item=>({id:item.id,name:item.name,db_type:item.config.db_type,database:item.config.database})),[catalogState.catalog]);
   const insertSql=(code:string)=>{
@@ -621,7 +627,7 @@ export function App() {
     workspace.updateBlock(session.id,block.id,{connection_id:exportScope.connectionId,database_name:exportScope.database,schema:exportScope.schema});
     requestAnimationFrame(()=>focusEditor(block.id));
   };
-  const runDisabled = session.busy || state.runtimeStatus !== "ready" || !profile || switchingProfile || Boolean(session.runtimeError);
+  const runDisabled = session.busy || openingConnection || (session.connectionState?.phase==="error"&&focusedBlock?.language==="sql"&&!focusedBlock.connection_id) || state.runtimeStatus !== "ready" || !profile || switchingProfile || Boolean(session.runtimeError);
   return <div className="app-shell">
     <header className="app-header">
       <div className="brand"><img src={logo} alt="" /><span>{translateUi("DataPyn")}</span></div>
@@ -645,8 +651,8 @@ export function App() {
     {recentVisible && <div className="recent-files"><button onClick={()=>{setRecentFiles([]);localStorage.removeItem("datapyn.desktop.recent-files.v1");}}>{translateUi("Limpar recentes")}</button>{recentFiles.map(path=><div key={path}><button title={path} onClick={()=>{run(openFiles([path]));setRecentVisible(false);}}>{path}</button><button title={translateUi("Mostrar na pasta")} onClick={()=>run(revealItemInDir(path))}><FolderOpen size={13}/></button></div>)}</div>}
     <div className="session-bar" role="tablist" aria-label={translateUi("Sessões")}>
       {state.sessions.map((item) => <div onContextMenu={e=>{e.preventDefault();setTabContext({id:item.id,x:e.clientX,y:e.clientY});}} key={item.id} style={{borderTopColor:effectiveConnectionColor(item.savedConnectionId ?? "",catalogState.catalog)}} className={`session-tab ${session.id === item.id ? "active" : ""}`}>
-        {editingTitle === item.id ? <input autoFocus className="tab-title-input" value={titleDraft} onChange={(event) => setTitleDraft(event.target.value)} onBlur={() => { workspace.renameSession(item.id, titleDraft); setEditingTitle(undefined); }} onKeyDown={(event) => { if (event.key === "Enter") { workspace.renameSession(item.id, titleDraft); setEditingTitle(undefined); } if (event.key === "Escape") setEditingTitle(undefined); }} /> : <button role="tab" aria-selected={session.id === item.id} onClick={() => workspace.activate(item.id)} onDoubleClick={() => { setEditingTitle(item.id); setTitleDraft(item.title); }}>
-          {item.busy ? <LoaderCircle size={13} className="spin" /> : <FileCode2 size={13} />}<span>{item.title}{item.modified ? " •" : ""}</span></button>}
+        {editingTitle === item.id ? <input autoFocus className="tab-title-input" value={titleDraft} onChange={(event) => setTitleDraft(event.target.value)} onBlur={() => { workspace.renameSession(item.id, titleDraft); setEditingTitle(undefined); }} onKeyDown={(event) => { if (event.key === "Enter") { workspace.renameSession(item.id, titleDraft); setEditingTitle(undefined); } if (event.key === "Escape") setEditingTitle(undefined); }} /> : <button role="tab" aria-selected={session.id === item.id} aria-busy={connectionPending(item.connectionState)} title={item.connectionState?.error} onClick={() => workspace.activate(item.id)} onDoubleClick={() => { setEditingTitle(item.id); setTitleDraft(item.title); }}>
+          {item.busy || connectionPending(item.connectionState) ? <LoaderCircle size={13} className="spin" aria-label={translateUi("Abrindo conexão")}/> : item.connectionState?.phase==="error" ? <AlertTriangle size={13} className="session-connection-error" aria-label={translateUi("Falha na conexão")}/> : <FileCode2 size={13} />}<span>{item.title}{item.modified ? " •" : ""}</span></button>}
         <IconButton title={`Fechar ${item.title}`} onClick={() => run(closeSession(item.id))}><X size={12} /></IconButton>
       </div>)}
       <IconButton title={translateUi("Nova sessão (Ctrl+N / Ctrl+T)")} onClick={() => workspace.createSession()} className="new-session"><Plus size={17} /></IconButton>
@@ -668,14 +674,24 @@ export function App() {
     {isDesktop() && !profile && <div className="workspace-loading" role="status" aria-live="polite">{profileLoadError || state.runtimeStatus === "unavailable" ? <><span>{profileLoadError || state.message}</span><button className="text-button" onClick={()=>state.runtimeStatus === "unavailable" ? run(workspace.retryRuntime()) : setProfileRetry(n=>n+1)}>{translateUi("Tentar novamente")}</button></> : <><LoaderCircle className="spin" size={22}/><span>{translateUi(state.runtimeStatus === "ready" ? "Restaurando workspace…" : "Iniciando runtime Python…")}</span></>}</div>}
     {state.runtimeStatus === "unavailable" && <div className="runtime-banner"><Activity size={14} /><span>{isDesktop() ? state.message : "Prévia da interface. O runtime Python está disponível no aplicativo desktop."}</span>{isDesktop() && <button className="text-button" onClick={() => run(workspace.retryRuntime())}><RefreshCw size={12} /> {translateUi("Reconectar")}</button>}</div>}
     <main className="workbench">{(!isDesktop() || profile) && <Suspense fallback={<p className="explorer-empty">{translateUi("Carregando painéis…")}</p>}><DockingWorkbench key={profile?.active_id ?? "startup"} initialLayout={dockLayout} locked={editingLocked} onControlsReady={controls=>{docking.current=controls;setDockControls(controls);}} onPanelsChange={dockPanelsChanged} onVisiblePanelsChange={setVisibleDockPanels} onRestoreError={reportMessage} onInitialized={()=>setStartupLayout(profile?.active_id)} onPopoutReady={attachPopoutKeyboard} onCaptureReady={capture=>{captureLayout.current=capture;}} onLayoutChange={setDockLayout} theme={preferences.theme} leftWidth={preferences.leftWidth} rightWidth={preferences.rightWidth} resultHeight={resultHeight} leftVisible={leftVisible} rightVisible={rightVisible} activeBottom={panel} activeRight={rightPanel} resetRevision={dockReset} onActivate={id=>{if(isBottomPanel(id))setPanel(id);if(id === "variables" || id === "pynia")setRightPanel(id);}} panels={{
-      connections:<ConnectionsSidebar activeConnectionId={session.savedConnectionId} onConnect={connectSaved} onDisconnect={() => workspace.disconnect(session.id)} onError={reportMessage} disabled={session.busy || !profile || switchingProfile}/>,
-      explorer:<ObjectExplorer sessionId={session.id} connectionId={focusedScope.connectionId} database={focusedScope.database} schema={focusedScope.schema} dbType={catalogState.catalog.connections.find(item=>item.id===focusedScope.connectionId)?.config.db_type ?? session.connection?.db_type} connected={preparedSession === `${profile?.active_id}:${session.id}` && Boolean(session.connection || focusedBlock?.connection_id || session.savedConnectionId)} refresh={explorerRefresh} disabled={session.busy} onError={reportMessage}
+      connections:<ConnectionsSidebar activeConnectionId={session.savedConnectionId} onConnect={connectSaved} onDisconnect={() => workspace.disconnect(session.id)} onError={reportMessage} disabled={session.busy || openingConnection || !profile || switchingProfile}/>,
+      explorer:<ObjectExplorer sessionId={session.id} connectionId={focusedScope.connectionId} database={focusedScope.database} schema={focusedScope.schema} dbType={catalogState.catalog.connections.find(item=>item.id===focusedScope.connectionId)?.config.db_type ?? session.connection?.db_type} connected={!connectionBlocked && preparedSession === `${profile?.active_id}:${session.id}` && Boolean(session.connection || focusedBlock?.connection_id || session.savedConnectionId)} refresh={explorerRefresh} disabled={session.busy} onError={reportMessage}
           onInsert={(code, language = "sql", newBlock = false) => { if (newBlock) { const block = workspace.addBlock(session.id,language,code,session.focusedBlockId); if (focusedBlock) workspace.updateBlock(session.id,block.id,{connection_id:focusedScope.connectionId,database_name:focusedScope.database,schema:focusedScope.schema}); requestAnimationFrame(()=>focusEditor(block.id)); } else insertInEditor(session.focusedBlockId,code); }}
           onContextChange={context => applyBlockScope(session.id,session.focusedBlockId,context)}/>,
       editor:<div className="editor-area" ref={codeArea}>
+          <SessionConnectionStatus state={session.connectionState??(state.runtimeStatus!=="ready"?{phase:state.runtimeStatus==="connecting"?"preparing":"error",error:state.message}:undefined)}
+            retryLabel={retryConnectionId||state.runtimeStatus!=="ready"?"Tentar novamente":"Editar conexão"}
+            onRetry={session.runtimeError?undefined:()=>run((async()=>{
+              if(state.runtimeStatus!=="ready")await workspace.retryRuntime();
+              const id=retryConnectionId;
+              if(id){const saved=catalogState.catalog.connections.find(c=>c.id===id);await workspace.connectSaved(session.id,id,saved?.name,session.connectionState?.connectionId?session.connectionState.scope:{database:session.database,schema:session.schema});setExplorerRefresh(n=>n+1);}
+              else if(session.connectionState?.phase==="error"&&session.connectionState.name)setConnectionDialog(true);
+              else await workspace.prepareSession(session.id);
+              setPreparedSession(`${profile?.active_id}:${session.id}`);
+            })())}/>
           {session.notice && <div className="session-notice" role="status">{session.notice}</div>}
           <ParameterPanel title={translateUi("Parâmetros compartilhados")} parameters={sharedParameters} enabled={session.extras.shared_parameters_enabled !== false} disabled={session.busy} onEnabled={enabled => workspace.patchSession(session.id,s=>({...s,modified:true,extras:{...s.extras,shared_parameters_enabled:enabled}}))} onChange={parameters => workspace.patchSession(session.id,s=>({...s,modified:true,extras:{...s.extras,shared_parameters:parameters}}))}/>
-          {session.blocks.map((block, index) => <BlockCard scopeMetadata={scopeMetadata} onScopeChange={applyBlockScope} scopeRefresh={explorerRefresh} scopeReady={preparedSession === `${profile?.active_id}:${session.id}`} diagnosticsReady={state.runtimeStatus === "ready"} diagnosticRevision={diagnosticRevisionFor(session, block)} diagnosticContext={diagnosticContext} locked={editingLocked} forceMount={startupActive && requiredEditor === block.id} onEditorReady={startupEditorInitialized} key={block.id} block={block} index={index} count={session.blocks.length} session={session} disabled={runDisabled} preferences={preferences} onFontSizeChange={editorFontSize=>setPreferences(p=>({...p,editorFontSize}))} onPickConnection={() => setConnectionPicker(block.id)} onDownload={()=>run(downloadBlock(block.id))}
+          {session.blocks.map((block, index) => <BlockCard scopeMetadata={scopeMetadata} onScopeChange={applyBlockScope} scopeRefresh={explorerRefresh} scopeReady={!connectionBlocked&&preparedSession === `${profile?.active_id}:${session.id}`} diagnosticsReady={!openingConnection&&state.runtimeStatus === "ready"} diagnosticRevision={diagnosticRevisionFor(session, block)} diagnosticContext={diagnosticContext} locked={editingLocked} forceMount={startupActive && requiredEditor === block.id} onEditorReady={startupEditorInitialized} key={block.id} block={block} index={index} count={session.blocks.length} session={session} disabled={runDisabled} preferences={preferences} onFontSizeChange={editorFontSize=>setPreferences(p=>({...p,editorFontSize}))} onPickConnection={() => setConnectionPicker(block.id)} onDownload={()=>run(downloadBlock(block.id))}
             onRun={() => run(workspace.runBlock(session.id, block.id))} />)}
           <div className="add-block-row"><button title={shortcuts.addBlock} onClick={() => addBlock("sql")}><Plus size={14} /><span className="sql-color">{translateUi("SQL")}</span></button><button title={shortcuts.addBlock} onClick={() => addBlock("python")}><Plus size={14} /><span className="python-color">{translateUi("Python")}</span></button></div>
         </div>,
@@ -746,7 +762,12 @@ const BlockCard = memo(function BlockCard({ block, index, count, session, disabl
   return <article style={{pointerEvents:locked ? "none" : undefined,...(session.maximizedBlockId && session.maximizedBlockId !== block.id ? {display:"none"} : {}),borderLeftColor:effectiveConnectionColor(block.connection_id ?? session.savedConnectionId ?? "",catalog.catalog)}} className={`code-block ${block.language} ${session.focusedBlockId === block.id ? "focused" : ""} ${session.maximizedBlockId === block.id ? "maximized" : ""}`} data-block-id={block.id}
     onDragOver={e=>{if (e.dataTransfer.types.includes("application/x-datapyn-block") || e.dataTransfer.types.includes(CONNECTION_MIME)) e.preventDefault();}}
     onDrop={e=>{e.preventDefault();const source = e.dataTransfer.getData("application/x-datapyn-block");const connection = e.dataTransfer.getData(CONNECTION_MIME);if(source) workspace.reorderBlock(session.id,source,block.id);if(connection && index > 0) workspace.updateBlock(session.id,block.id,{connection_id:connection,database_name:undefined,schema:undefined});}}>
-    <div className="block-header" onClick={()=>workspace.focusBlock(session.id,block.id)}><span draggable={!session.busy} onDragStart={e=>{e.dataTransfer.setData("application/x-datapyn-block",block.id);e.dataTransfer.effectAllowed="move";}}><GripVertical className="block-grip" size={13} /></span><button title={block.collapsed ? "Expandir bloco" : "Recolher bloco"} onClick={()=>workspace.updateBlock(session.id,block.id,{collapsed:!block.collapsed})}>{block.collapsed ? <ChevronRight size={12}/> : <ChevronDown size={12}/>}</button><span className="block-index">{String(index + 1).padStart(2, "0")}</span><select className={`language-select ${block.language}`} aria-label={`Linguagem do bloco ${index + 1}`} value={block.language} disabled={session.busy} onChange={(event) => workspace.updateBlock(session.id, block.id, { language: event.target.value as "sql" | "python" })}><option value="sql">{translateUi("SQL")}</option><option value="python">{translateUi("Python")}</option></select>
+    <div className="block-header" onClick={()=>workspace.focusBlock(session.id,block.id)}>
+      <div className="block-header-controls"><span draggable={!session.busy} onDragStart={e=>{e.dataTransfer.setData("application/x-datapyn-block",block.id);e.dataTransfer.effectAllowed="move";}}><GripVertical className="block-grip" size={13} /></span><button title={block.collapsed ? "Expandir bloco" : "Recolher bloco"} onClick={()=>workspace.updateBlock(session.id,block.id,{collapsed:!block.collapsed})}>{block.collapsed ? <ChevronRight size={12}/> : <ChevronDown size={12}/>}</button>
+        <button className="block-run" disabled={disabled} onClick={onRun} aria-label={translateUi("Executar bloco ou seleção")} title={translateUi("Executar bloco ou seleção")}><Play size={12} fill="currentColor" /></button>
+        <span className="block-index">{String(index + 1).padStart(2, "0")}</span><select className={`language-select ${block.language}`} aria-label={`Linguagem do bloco ${index + 1}`} value={block.language} disabled={session.busy} onChange={(event) => workspace.updateBlock(session.id, block.id, { language: event.target.value as "sql" | "python" })}><option value="sql">{translateUi("SQL")}</option><option value="python">{translateUi("Python")}</option></select>
+      </div>
+      <div className="block-header-details">
       <input className="block-name" value={block.block_name} placeholder={translateUi(block.language === "sql" ? "Nome do resultado (df)" : "Nome do bloco")} aria-label={`Nome do bloco ${index + 1}`} onChange={(event) => workspace.updateBlock(session.id, block.id, { block_name: event.target.value })} />
       {block.language === "sql" && <><button className="block-scope" disabled={session.busy} title={customConnection?.name ?? session.connection?.name ?? translateUi("Conexão da aba")} onClick={onPickConnection}><Database size={12}/><span>{customConnection?.name ?? session.connection?.name ?? translateUi("Conexão da aba")}</span></button>
         <BlockScopePicker sessionId={session.id} connectionId={scope.connectionId} dbType={dialect} database={metadata?.schemaSnapshot?.database ?? scope.database} schema={metadata?.schemaSnapshot?.current_schema ?? scope.schema}
@@ -764,7 +785,7 @@ const BlockCard = memo(function BlockCard({ block, index, count, session, disabl
         {label:translateUi("Maximizar ou restaurar bloco"),onSelect:()=>workspace.maximizeBlock(session.id,block.id)},
         {label:translateUi("Excluir bloco"),separator:true,danger:true,disabled:session.busy,onSelect:()=>{workspace.removeBlock(session.id,block.id);disposeModel(block.id);}},
       ]}/>}
-      <button className="block-run" disabled={disabled} onClick={onRun} title={translateUi("Executar bloco ou seleção")}><Play size={12} fill="currentColor" /></button>
+      </div>
     </div>
     <BlockSyntaxDiagnostics id={block.id} code={block.code} language={block.language} enabled={!block.cell_type || block.cell_type === "code"} ready={diagnosticsReady} focused={session.focusedBlockId === block.id} contextKey={diagnosticKey}
       params={() => { const context = block.language === "python" ? diagnosticContext(session.id) : undefined; return { session_id: session.id, connection_id: scope.connectionId, database: scope.database, schema: scope.schema, db_type: dialect, shared_delimiter: preferences.sharedDelimiter, locale: preferences.locale, global_imports: context?.globalImports, preamble: context?.preamble }; }}

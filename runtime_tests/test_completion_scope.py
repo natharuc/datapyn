@@ -54,6 +54,95 @@ def test_native_schema_getter_does_not_replace_other_driver_context(db_type, sch
     assert {item["label"] for item in result["items"]} == {"amount"}
 
 
+def test_sqlserver_snapshot_keeps_qualified_identity_but_suggests_bare_focused_tables(monkeypatch):
+    class Inspector:
+        def get_schema_names(self):
+            return ["dbo"]
+        def get_table_names(self, *, schema):
+            assert schema == "dbo"
+            return ["Sales"]
+        def get_view_names(self, *, schema):
+            return []
+        def get_columns(self, name, *, schema):
+            assert (schema, name) == ("dbo", "Sales")
+            return [{"name": "ID", "type": "INTEGER"}]
+    connector = SimpleNamespace(db_type="sqlserver", connection_params={"database": "ESIM"}, engine=object(),
+                                execute_query=lambda query: pd.DataFrame({"name": ["ESIM"]}))
+    monkeypatch.setattr("sqlalchemy.inspect", lambda engine: Inspector())
+    snapshot = ObjectExplorer(connector).completion_schema("SELECT s. FROM Sales s")
+    assert snapshot["database"] == "ESIM" and snapshot["current_schema"] == snapshot["schema"] == "dbo"
+    assert snapshot["tables"] == [{"name": "Sales", "schema": "dbo", "catalog": "ESIM", "key": "ESIM.dbo.Sales", "type": "TABLE"}]
+    assert snapshot["columns"]["ESIM.dbo.Sales"][0]["name"] == "ID"
+    for code in ("SELECT * FROM ", "SELECT "):
+        result = dispatch("language.complete", {"language": "sql", "code": code, "line": 1, "column": len(code) + 1}, {"schema": snapshot})
+        assert [item for item in result["items"] if item["kind"] == "table"] == [
+            {"label": "Sales", "kind": "table", "detail": "TABLE - ESIM.dbo.Sales", "category": "table", "insert_text": "[Sales]"},
+        ]
+    result = dispatch("language.complete", {"language": "sql", "code": "SELECT s. FROM Sales s", "line": 1, "column": 10}, {"schema": snapshot})
+    assert {item["label"] for item in result["items"]} == {"ID"}
+
+
+def test_runtime_adapter_retains_sqlserver_metadata_schema_discarded_by_reused_driver(monkeypatch):
+    import src.database.database_connector as production
+    from datapyn_runtime.database import connect
+    class Connector:
+        SUPPORTED_DATABASES = {"sqlserver"}
+        def connect(self, **options):
+            self.db_type = options["db_type"]
+            # This is the reused SQL Server driver's actual public config shape.
+            self.connection_params = {"database": options["database"]}
+            return True
+        def is_connected(self):
+            return True
+    monkeypatch.setattr(production, "DatabaseConnector", Connector)
+    config = {"db_type": "sqlserver", "database": "ESIM", "schema": "reporting"}
+    connector = connect(config)
+    assert connector.connection_params == {"database": "ESIM", "schema": "reporting"}
+    assert ObjectExplorer(connector).context() == {"db_type": "sqlserver", "database": "ESIM", "schema": "reporting"}
+    assert config == {"db_type": "sqlserver", "database": "ESIM", "schema": "reporting"}
+
+
+@pytest.mark.parametrize(("physical", "selected", "expected_default", "expected_focus"), [
+    ("dbo", "", "dbo", "dbo"),
+    ("finance", "", "finance", "finance"),
+    (None, "", "dbo", "dbo"),
+    ("", "", "dbo", "dbo"),
+    ("dbo", "reporting", "dbo", "reporting"),
+    ("finance", "reporting", "finance", "reporting"),
+    (None, "reporting", "dbo", "reporting"),
+])
+def test_sqlserver_login_default_is_separate_from_selected_metadata_schema(physical, selected, expected_default, expected_focus, monkeypatch):
+    class Inspector:
+        def get_schema_names(self):
+            return ["dbo", "finance", "reporting"]
+        def get_table_names(self, *, schema):
+            assert schema == expected_focus
+            return ["Sales"]
+        def get_view_names(self, *, schema):
+            return []
+    queries = []
+    def execute(query):
+        queries.append(query)
+        return pd.DataFrame({"name": ["ESIM"]})
+    config = {"database": "ESIM", **({"schema": selected} if selected else {})}
+    engine = SimpleNamespace(dialect=SimpleNamespace(default_schema_name=physical))
+    connector = SimpleNamespace(db_type="sqlserver", connection_params=config, engine=engine, execute_query=execute)
+    monkeypatch.setattr("sqlalchemy.inspect", lambda engine: Inspector())
+    explorer = ObjectExplorer(connector)
+    snapshot = explorer.completion_schema()
+    assert snapshot["default_schema"] == expected_default
+    assert snapshot["current_schema"] == snapshot["schema"] == expected_focus
+    assert snapshot["tables"][0]["key"] == f"ESIM.{expected_focus}.Sales"
+    code = "SELECT * FROM "
+    result = dispatch("language.complete", {"language": "sql", "code": code, "line": 1, "column": len(code) + 1}, {"schema": snapshot})
+    assert {item["label"] for item in result["items"] if item["kind"] == "table"} == {"Sales"}
+    before = list(queries)
+    for _ in range(10):
+        assert explorer.context()["schema"] == expected_focus
+        assert explorer.sqlserver_default_schema() == expected_default
+    assert queries == before
+
+
 def test_sqlite_current_context_prepares_actual_attached_relations():
     connector = SQLiteConnector(":memory:")
     try:

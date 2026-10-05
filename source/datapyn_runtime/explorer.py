@@ -32,6 +32,13 @@ class ObjectExplorer:
     def db_type(self):
         return self.connector.db_type
 
+    def sqlserver_default_schema(self):
+        # SQLAlchemy initializes this while opening the driver connection.
+        # Reading it is local; never query the server while an editor is typing.
+        dialect = getattr(getattr(self.connector, "engine", None), "dialect", None)
+        schema = getattr(dialect, "default_schema_name", None)
+        return schema.strip() if isinstance(schema, str) and schema.strip() else "dbo"
+
     def context(self):
         config = self.connector.connection_params
         database = config.get("database", "")
@@ -41,7 +48,7 @@ class ObjectExplorer:
         elif self.db_type == "postgresql":
             schema = schema or config.get("postgresql_schema") or "public"
         elif self.db_type == "sqlserver":
-            schema = schema or "dbo"
+            schema = schema or self.sqlserver_default_schema()
         elif self.db_type in {"mysql", "mariadb"}:
             schema = database
         elif self.db_type == "databricks":
@@ -312,6 +319,7 @@ class ObjectExplorer:
         except Exception:
             databases = [context["database"]] if context["database"] else []
         result = {**context, "current_schema": schema, "databases": databases,
+                  **({"default_schema": self.sqlserver_default_schema()} if self.db_type == "sqlserver" else {}),
                   "schemas": schemas,
                   "tables": [{"name": t["name"], "schema": t["schema"], "catalog": "" if t.get("temporary") else catalog, "key": ".".join(part for part in (("" if t.get("temporary") else catalog), t["schema"], t["name"]) if part), "type": t["kind"].upper(), **({"temporary": True} if t.get("temporary") else {})} for t in tables],
                   "columns": {".".join(part for part in (catalog, s, name) if part): columns for (s, name), columns in self.column_cache.items()},

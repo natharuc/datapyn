@@ -32,7 +32,7 @@ export class SessionLanguageContexts {
     let schemaSnapshot=old?.schemaSnapshot,tables=old?.tables ?? [];
     if(p.schema_snapshot){
       const entries=p.schema_snapshot.tables ?? [];
-      schemaSnapshot={db_type:p.schema_snapshot.db_type,database:p.schema_snapshot.database ?? p.database,current_schema:p.schema_snapshot.current_schema ?? p.schema,tables:Object.create(null)};
+      schemaSnapshot={db_type:p.schema_snapshot.db_type,database:p.schema_snapshot.database ?? p.database,current_schema:p.schema_snapshot.current_schema ?? p.schema,default_schema:p.schema_snapshot.default_schema,tables:Object.create(null)};
       tables=[];
       for(const table of entries){
         const name=table.key || [table.schema,table.name].filter(Boolean).join(".");

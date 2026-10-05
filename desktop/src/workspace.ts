@@ -23,6 +23,12 @@ export interface ConnectionConfig {
   databricks_auth_mode?:"oauth"|"token";
 }
 export interface LogLine { id: string; time: string; stream: string; text: string; blockName: string }
+export interface SessionConnectionState {
+  phase: "preparing" | "connecting" | "ready" | "error";
+  name?: string; connectionId?: string; error?: string;
+  scope?: {database?:string;schema?:string};
+}
+interface ConnectionResponse { connection?: ConnectionConfig; config?: ConnectionConfig; database?: string; schema?: string }
 export interface SessionDocument {
   id: string; title: string; blocks: Block[]; focusedBlockId: string;
   results: ResultRef[]; variables: Variable[]; images: Array<{ data: string; mime: string }>;
@@ -32,6 +38,7 @@ export interface SessionDocument {
   savedConnectionId?: string; database?: string; schema?: string; maximizedBlockId?: string;
   periodicSeconds?: number; executionStartedAt?: number; lastDurationMs?: number;
   notice?: string; runtimeError?: string; extras: Record<string, unknown>;
+  connectionState?: SessionConnectionState;
 }
 export interface WorkspaceState {
   sessions: SessionDocument[]; activeId: string; runtimeStatus: "connecting" | "ready" | "unavailable";
@@ -152,13 +159,13 @@ export function applyRuntimeEvent(session: SessionDocument, event: RuntimeEvent)
   if (event.event === "namespace.changed") return {...session,variables:event.payload.variables,results:event.payload.results,resultRevision:session.resultRevision+1};
   if (event.event === "session.error") {
     return { ...session, busy: false, currentExecutionId: undefined, currentBlockId: undefined,
-      results: [], variables: [], images: [], richOutputs:[], connection: undefined, runtimeError: event.payload.error,
+      results: [], variables: [], images: [], richOutputs:[], connection: undefined, connectionState:{...session.connectionState,phase:"error",error:event.payload.error},runtimeError: event.payload.error,
       notice: `Runtime desta sessão indisponível: ${event.payload.error}. Salve a análise, feche esta aba e reabra para criar uma nova sessão.`,
       blocks: session.blocks.map((block) => ["running", "queued", "cancelling"].includes(block.status) ? { ...block, results:undefined, status: "failed", error: event.payload.error } : {...block,results:undefined}),
       logs: appendLog(session, "stderr", event.payload.error + "\n") };
   }
   if (event.event === "session.reset") {
-    return { ...session, results: [], variables: [], images: [], richOutputs:[], connection: undefined,
+    return { ...session, results: [], variables: [], images: [], richOutputs:[], connection: undefined,connectionState:undefined,
       notice: "Runtime da sessão reiniciado. Variáveis e conexão foram descartadas; reconecte antes de executar SQL.",
       blocks: session.blocks.map((block) => ["running", "queued", "cancelling"].includes(block.status) ? { ...block, results:undefined, status: "cancelled" } : {...block,results:undefined}),
       logs: appendLog(session, "system", "Sessão reiniciada: namespace e conexão descartados.\n") };
@@ -210,6 +217,7 @@ export class WorkspaceController {
   private readonly listeners = new Set<() => void>();
   private readonly runtimeSessions = new Set<string>();
   private readonly creatingSessions = new Map<string, Promise<void>>();
+  private readonly connectingSessions = new Map<string, {key:string; task?:Promise<ConnectionResponse>}>();
   private readonly completions = new Map<string, Completion>();
   private initialization?: Promise<void>;
   private runtimeGeneration = 0;
@@ -247,7 +255,7 @@ export class WorkspaceController {
   restoreSnapshot(snapshot: {documents?:NativeDocumentRecord[];activeIndex?:number}) {
     if(this.state.sessions.some(s=>s.busy))throw new Error("Aguarde ou cancele as execuções antes de trocar de workspace.");
     for(const timer of this.periodicTimers.values())clearTimeout(timer);this.periodicTimers.clear();
-    this.runtimeGeneration++;this.runtimeSessions.clear();this.creatingSessions.clear();this.cancelRequests.clear();
+    this.runtimeGeneration++;this.runtimeSessions.clear();this.creatingSessions.clear();this.connectingSessions.clear();this.cancelRequests.clear();
     this.nativeRecords.clear();this.nativeSources.clear();this.editorViews.clear();
     const seenBlocks=new Set<string>(),seenSessions=new Set<string>();
     const sessions=(snapshot.documents ?? []).map(entry=>{
@@ -416,6 +424,7 @@ export class WorkspaceController {
   async closeSession(id: string) {
     if (this.session(id)?.busy) throw new Error("Cancele a execução antes de fechar esta aba.");
     this.stopPeriodic(id);
+    this.connectingSessions.delete(id);
     if (this.runtimeSessions.has(id)) await this.transport.request("session.close", { session_id: id });
     this.runtimeSessions.delete(id);
     let sessions = this.state.sessions.filter((session) => session.id !== id);
@@ -439,18 +448,58 @@ export class WorkspaceController {
     return copy;
   }
   maximizeBlock(sessionId: string, blockId?: string) { this.patchSession(sessionId, s => ({ ...s, maximizedBlockId: s.maximizedBlockId === blockId ? undefined : blockId })); }
-  async connectSaved(sessionId: string, connectionId: string) {
-    if (this.session(sessionId)?.busy) throw new Error("Aguarde a execução para trocar a conexão.");
+  connectSaved(sessionId: string, connectionId: string, name?: string,scope:{database?:string;schema?:string}={}) {
+    return this.establishConnection(sessionId, {key:connectionId,name,connectionId}, {connection_id:connectionId,...(scope.database!==undefined?{database:scope.database}:{}),...(scope.schema!==undefined?{schema:scope.schema}:{})});
+  }
+  private establishConnection(sessionId:string,target:{key:string;name?:string;connectionId?:string},params:Record<string,unknown>,fallback?:ConnectionConfig):Promise<ConnectionResponse> {
+    const session=this.session(sessionId);
+    if(!session)return Promise.reject(new Error("Aba encerrada."));
+    if(session.busy)return Promise.reject(new Error("Aguarde a execução para trocar a conexão."));
+    const pending=this.connectingSessions.get(sessionId);
+    if(pending)return pending.key===target.key ? pending.task! : Promise.reject(new Error("Uma conexão já está em andamento nesta aba."));
+    const generation=this.runtimeGeneration,operation:{key:string;task?:Promise<ConnectionResponse>}={key:target.key};
+    const scope={...(typeof params.database==="string"?{database:params.database}:{}),...(typeof params.schema==="string"?{schema:params.schema}:{})};
+    const targetState={name:target.name,connectionId:target.connectionId,...(Object.keys(scope).length?{scope}:{})};
+    this.connectingSessions.set(sessionId,operation);
+    const current=()=>generation===this.runtimeGeneration&&this.connectingSessions.get(sessionId)===operation&&Boolean(this.session(sessionId));
+    this.patchSession(sessionId,s=>({...s,connectionState:{phase:"preparing",...targetState}}));
+    operation.task=(async()=>{
+      try {
+        await this.ensureSession(sessionId);
+        if(!current())throw new Error("A conexão foi interrompida.");
+        this.patchSession(sessionId,s=>({...s,connectionState:{phase:"connecting",...targetState}}));
+        const response=await this.transport.request<ConnectionResponse>("connection.connect",{session_id:sessionId,...params});
+        if(!current())throw new Error("A conexão foi interrompida.");
+        const config=response.config??response.connection??fallback;
+        const {password:_password,...safeConfig}=config??{};
+        this.patchSession(sessionId,s=>({...s,savedConnectionId:target.connectionId,connection:config?{...safeConfig,database:response.database??config.database,schema:response.schema??config.schema} as ConnectionConfig:undefined,
+          database:response.database??config?.database,schema:response.schema??config?.schema,notice:undefined,
+          connectionState:{...targetState,phase:"ready",name:target.name??config?.name},
+          extras:target.connectionId?s.extras:{...s.extras,connection_name:undefined,connection_group:undefined}}));
+        return response;
+      }catch(error){
+        if(current())this.patchSession(sessionId,s=>({...s,connection:undefined,connectionState:{phase:"error",...targetState,error:errorText(error)}}));
+        throw error;
+      }finally{if(this.connectingSessions.get(sessionId)===operation)this.connectingSessions.delete(sessionId);}
+    })();
+    return operation.task;
+  }
+  async prepareSession(sessionId:string) {
     await this.ensureSession(sessionId);
-    const response = await this.transport.request<{ connection?: ConnectionConfig; config?: ConnectionConfig; database?: string; schema?: string }>("connection.connect", { session_id: sessionId, connection_id: connectionId });
-    this.patchSession(sessionId, s => ({ ...s, savedConnectionId: connectionId, connection: response.config ?? response.connection,
-      database: response.database ?? response.config?.database ?? response.connection?.database, schema: response.schema, notice: undefined }));
-    return response;
+    const pending=this.connectingSessions.get(sessionId);if(pending){await pending.task;return;}
+    const session=this.session(sessionId);
+    if(session?.connectionState?.phase==="error")throw new Error(session.connectionState.error);
+    if(session?.savedConnectionId&&!session.connection){
+      const {database,schema}=session;
+      // Apply restored focus before authentication, not just in the frontend.
+      await this.connectSaved(sessionId,session.savedConnectionId,String(session.extras.connection_name??""),{database,schema});
+    }
   }
   async disconnect(sessionId: string) {
     if (this.session(sessionId)?.busy) throw new Error("Aguarde a execução antes de desconectar.");
+    if(this.connectingSessions.has(sessionId))throw new Error("Aguarde a conexão antes de desconectar.");
     await this.ensureSession(sessionId); await this.transport.request("connection.disconnect", { session_id: sessionId });
-    this.patchSession(sessionId, s => ({ ...s, connection: undefined, savedConnectionId: undefined, database: undefined, schema: undefined,extras:{...s.extras,connection_name:undefined,connection_group:undefined} }));
+    this.patchSession(sessionId, s => ({ ...s, connection: undefined, connectionState:undefined,savedConnectionId: undefined, database: undefined, schema: undefined,extras:{...s.extras,connection_name:undefined,connection_group:undefined} }));
   }
   setContext(sessionId: string, context: { database?: string; schema?: string }, blockId?: string) {
     if (blockId) { this.updateBlock(sessionId, blockId, { database_name: context.database, schema: context.schema }); return; }
@@ -496,27 +545,34 @@ export class WorkspaceController {
   }
   ensureSession(sessionId: string): Promise<void> {
     const pending = this.creatingSessions.get(sessionId); if (pending) return pending;
-    const creating = this.createRuntimeSession(sessionId).finally(() => this.creatingSessions.delete(sessionId));
+    const creating = this.createRuntimeSession(sessionId).finally(() => {if(this.creatingSessions.get(sessionId)===creating)this.creatingSessions.delete(sessionId);});
     this.creatingSessions.set(sessionId, creating);
     return creating;
   }
   private async createRuntimeSession(sessionId: string) {
-    await this.initialize();
-    if (this.state.runtimeStatus !== "ready") throw new Error(this.state.message);
-    if (this.session(sessionId)?.runtimeError) throw new Error(this.session(sessionId)!.notice ?? this.session(sessionId)!.runtimeError);
-    if (this.runtimeSessions.has(sessionId)) return;
-    const generation = this.runtimeGeneration;
-    await this.transport.request("session.create", { session_id: sessionId });
-    if (generation !== this.runtimeGeneration) throw new Error("O runtime Python foi encerrado durante a criação da sessão.");
-    this.runtimeSessions.add(sessionId);
-    if (this.session(sessionId)?.runtimeError) throw new Error(this.session(sessionId)!.notice ?? this.session(sessionId)!.runtimeError);
+    const generation=this.runtimeGeneration,current=()=>generation===this.runtimeGeneration&&Boolean(this.session(sessionId));
+    if(!this.runtimeSessions.has(sessionId)&&!this.connectingSessions.has(sessionId))this.patchSession(sessionId,s=>({...s,connectionState:{phase:"preparing"}}));
+    try {
+      await this.initialize();
+      if(!current())throw new Error("A aba foi encerrada durante a preparação.");
+      if (this.state.runtimeStatus !== "ready") throw new Error(this.state.message);
+      if (this.session(sessionId)?.runtimeError) throw new Error(this.session(sessionId)!.notice ?? this.session(sessionId)!.runtimeError);
+      if (this.runtimeSessions.has(sessionId)) return;
+      await this.transport.request("session.create", { session_id: sessionId });
+      if(!current()){
+        if(generation===this.runtimeGeneration)void this.transport.request("session.close",{session_id:sessionId}).catch(()=>{});
+        throw new Error("A aba foi encerrada durante a preparação.");
+      }
+      this.runtimeSessions.add(sessionId);
+      if (this.session(sessionId)?.runtimeError) throw new Error(this.session(sessionId)!.notice ?? this.session(sessionId)!.runtimeError);
+      if(!this.connectingSessions.has(sessionId))this.patchSession(sessionId,s=>({...s,connectionState:{phase:"ready"}}));
+    }catch(error){
+      if(current()&&!this.connectingSessions.has(sessionId))this.patchSession(sessionId,s=>({...s,connectionState:{phase:"error",error:errorText(error)}}));
+      throw error;
+    }
   }
   async connect(sessionId: string, config: ConnectionConfig) {
-    if (this.session(sessionId)?.busy) throw new Error("Aguarde a execução para trocar a conexão.");
-    await this.ensureSession(sessionId);
-    await this.transport.request("connection.connect", { session_id: sessionId, config });
-    const { password: _password, ...safeConfig } = config;
-    this.patchSession(sessionId, (session) => ({ ...session, connection: safeConfig, savedConnectionId: undefined, database: config.database, schema: config.schema, notice: undefined,extras:{...session.extras,connection_name:undefined,connection_group:undefined} }));
+    await this.establishConnection(sessionId,{key:newId(),name:config.name||config.database||config.db_type},{config},config);
     this.message(`Conectado: ${config.name || config.database || config.db_type}`);
   }
   async schema(sessionId: string): Promise<Record<string, unknown>> {
@@ -550,6 +606,8 @@ export class WorkspaceController {
     const workspaceId = this.workspaceIdentity;
     const session = this.session(sessionId);
     if (session?.runtimeError) throw new Error(session.notice ?? session.runtimeError);
+    if(session?.connectionState?.phase==="preparing"||session?.connectionState?.phase==="connecting")throw new Error("Aguarde a conexão antes de executar.");
+    if(session?.connectionState?.phase==="error"&&queue.some(block=>block.language==="sql"&&!block.connection_id))throw new Error(session.connectionState.error??"A conexão não foi estabelecida.");
     if (this.session(sessionId)?.busy) throw new Error("Esta aba já tem uma execução em andamento.");
     const runnable = queue.filter((block) => block.code.trim() && (!block.cell_type || block.cell_type === "code"));
     if (!runnable.length) { this.message("Escreva código no bloco antes de executar."); return; }
@@ -636,18 +694,19 @@ export class WorkspaceController {
     if (event?.event === "backend.exited") {
       const message = event.payload.message || "O runtime Python foi encerrado.";
       for (const timer of this.periodicTimers.values()) clearTimeout(timer); this.periodicTimers.clear();
-      this.runtimeGeneration++; this.initialization = undefined; this.runtimeSessions.clear();
+      this.runtimeGeneration++; this.initialization = undefined; this.runtimeSessions.clear(); this.creatingSessions.clear(); this.connectingSessions.clear();
       for (const completion of this.completions.values()) completion.reject(new Error(message));
       this.completions.clear();
       this.setState({ ...this.state, runtimeStatus: "unavailable", runtimeInfo: undefined, message,
         sessions: this.state.sessions.map((session) => ({ ...session, busy: false, currentExecutionId: undefined, currentBlockId: undefined,
-          connection: undefined, variables: [], results: [], images: [], richOutputs:[], periodicSeconds:undefined, runtimeError: undefined, notice: "Runtime encerrado. As variáveis e conexões foram descartadas.",
+          connection: undefined, connectionState:{...session.connectionState,...(session.connectionState?.phase==="ready"?{scope:{database:session.database,schema:session.schema}}:{}),phase:"error",error:message},variables: [], results: [], images: [], richOutputs:[], periodicSeconds:undefined, runtimeError: undefined, notice: "Runtime encerrado. As variáveis e conexões foram descartadas.",
           blocks: session.blocks.map((block) => block.status === "running" || block.status === "cancelling" ? { ...block, results:undefined, status: "failed", error: message } : block.status === "queued" ? { ...block, results:undefined, status: "cancelled" } : {...block,results:undefined}) })) });
       return;
     }
     if (!event || !event.payload?.session_id) return;
     this.patchSession(event.payload.session_id, (session) => applyRuntimeEvent(session, event));
     if (event.event === "session.error") {
+      this.connectingSessions.delete(event.payload.session_id);
       this.cancelRequests.add(event.payload.session_id);
       for (const [id, completion] of this.completions) {
         if (completion.sessionId !== event.payload.session_id) continue;
@@ -657,6 +716,7 @@ export class WorkspaceController {
       return;
     }
     if (event.event === "session.reset") {
+      this.connectingSessions.delete(event.payload.session_id);
       this.cancelRequests.add(event.payload.session_id);
       for (const [id, completion] of this.completions) {
         if (completion.sessionId !== event.payload.session_id) continue;

@@ -14,6 +14,14 @@ _DOT = re.compile(r'(?<![\w$#])(' + _NAME + r'(?:\s*\.\s*' + _NAME + r')*)\s*\.\
 
 
 class RuntimeSqlAutoCompleteService(SqlAutoCompleteService):
+    def _sqlserver_default_schema(self):
+        if self._schema_db_type in {"sqlserver", "mssql"}:
+            # This legacy hook filters visible table candidates. The editor's
+            # chosen metadata schema is distinct from the login default schema
+            # used to decide whether inserting an unqualified name is safe.
+            return str(self._schema.get("current_schema") or self._schema.get("default_schema") or "dbo")
+        return ""
+
     @classmethod
     def _split_identifier_parts(cls, value):
         text, parts, current = str(value or "").strip(), [], []

@@ -40,13 +40,13 @@ try {
   }
   const context=(dbType="sqlite",database="main",schema="main",columns=["customer_id","customer_name"])=>({
     sessionId:"test-session",connectionId:"test-connection",database,schema,dbType,variables:[],tables:[`${schema}.customers`],
-    schemaSnapshot:{db_type:dbType,database,current_schema:schema,tables:{[`${schema}.customers`]:{name:"customers",schema,columns:columns.map(name=>({name,type:"TEXT"}))}}},
+    schemaSnapshot:{db_type:dbType,database,current_schema:schema,default_schema:schema,tables:{[`${schema}.customers`]:{name:"customers",schema,columns:columns.map(name=>({name,type:"TEXT"}))}}},
   });
   const configure=value=>page.evaluate(value=>window.completionTest.configure(value),value);
   async function labels(expected){await page.waitForFunction(expected=>expected.every(label=>window.completionTest.labels().includes(label)),expected,{timeout:3000});return page.evaluate(()=>window.completionTest.labels());}
   const value=()=>page.evaluate(()=>window.completionTest.editor().getValue());
 
-  for(const [dbType,quote] of [["sqlserver",name=>`[${name}]`],["mysql",name=>`\`${name}\``],["mariadb",name=>`\`${name}\``],["databricks",name=>`\`${name}\``],["postgresql",name=>`"${name}"`],["sqlite",name=>`"${name}"`]]){
+  for(const [dbType,quote] of [["sqlserver",name=>name],["mysql",name=>name],["mariadb",name=>name],["databricks",name=>name],["postgresql",name=>`"${name}"`],["sqlite",name=>name]]){
     await test(`${dbType}: ordinary typing opens focused table suggestions without a shortcut`,async()=>{
       await configure({code:"SELECT * FROM |",context:context(dbType)});
       await page.keyboard.type("cust",{delay:20});
@@ -75,6 +75,49 @@ try {
       await page.keyboard.press("Tab");assert.equal(await value(),`SELECT c.${quote("customer_id")} FROM customers c`);
     });
   }
+  for(const state of ["loaded","fallback"]){
+    await test(`SQL Server ESIM/dbo: ${state} catalog uses Item labels and plain Tab insertion`,async()=>{
+      const scoped=context("sqlserver","ESIM","dbo");scoped.tables=["ESIM.dbo.Item"];
+      scoped.schemaSnapshot.tables=state==="loaded"?{"ESIM.dbo.Item":{name:"Item",schema:"dbo",catalog:"ESIM",columns:[]}}:{};
+      await configure({code:"SELECT * FROM |",context:scoped});await page.keyboard.type("Ite",{delay:20});
+      const current=await labels(["Item"]);assert(!current.includes("ESIM.dbo.Item"));assert(!current.includes("dbo.Item"));
+      assert.equal(await page.evaluate(()=>[...document.querySelectorAll(".suggest-widget")].find(widget=>widget.checkVisibility())?.querySelector(".monaco-list-row.focused .details-label")?.textContent),"table");
+      await page.keyboard.press("Tab");assert.equal(await value(),"SELECT * FROM Item");
+    });
+  }
+  await test("SQL Server ESIM/dbo: remote-only qualified names become Item before metadata is ready",async()=>{
+    const scoped={...context("sqlserver","ESIM","dbo"),tables:[],schemaSnapshot:undefined};
+    await configure({code:"SELECT * FROM |",context:scoped});const before=await page.evaluate(()=>window.completionTest.calls.length);
+    await page.keyboard.type("Ite",{delay:20});
+    await page.waitForFunction(before=>window.completionTest.calls.slice(before).some(call=>call.method==="language.complete"),before);
+    await page.evaluate(before=>{const p=window.completionTest,index=p.calls.findIndex((call,index)=>index>=before&&call.method==="language.complete");p.reply(index,[{label:"ESIM.dbo.Item",kind:"table",insert_text:"[ESIM].[dbo].[Item]"}]);},before);
+    const current=await labels(["Item"]);assert(!current.includes("ESIM.dbo.Item"));
+    assert.equal(await page.evaluate(()=>[...document.querySelectorAll(".suggest-widget")].find(widget=>widget.checkVisibility())?.querySelector(".monaco-list-row.focused .details-label")?.textContent),"table");
+    await page.keyboard.press("Tab");assert.equal(await value(),"SELECT * FROM Item");
+  });
+  await test("SQL Server: another selected schema retains qualification and an explicitly typed schema is not duplicated",async()=>{
+    const scoped=context("sqlserver","ESIM","reports");scoped.schemaSnapshot.default_schema="dbo";
+    scoped.tables=["ESIM.reports.Item","ESIM.dbo.Item"];
+    scoped.schemaSnapshot.tables={"ESIM.reports.Item":{name:"Item",schema:"reports",catalog:"ESIM",columns:[]},"ESIM.dbo.Item":{name:"Item",schema:"dbo",catalog:"ESIM",columns:[]}};
+    await configure({code:"SELECT * FROM |",context:scoped});await page.keyboard.type("Ite",{delay:20});await labels(["Item","dbo.Item"]);
+    await page.keyboard.press("Tab");assert.equal(await value(),"SELECT * FROM reports.Item");
+    await configure({code:"SELECT * FROM dbo|",context:scoped});await page.keyboard.type(".");
+    const current=await labels(["Item"]);assert(!current.includes("reports.Item"));
+    await page.keyboard.press("Tab");assert.equal(await value(),"SELECT * FROM dbo.Item");
+  });
+  for(const [dbType,open,close] of [["sqlserver","[","]"],["mysql","`","`"],["mariadb","`","`"],["databricks","`","`"],["sqlite",'"','"']]){
+    await test(`${dbType}: Tab preserves an identifier quote explicitly typed by the user`,async()=>{
+      const scoped={...context(dbType),tables:["Item"],schemaSnapshot:undefined};
+      await configure({code:`SELECT * FROM ${open}It|${close}`,context:scoped});await page.keyboard.press("Control+Space");await labels(["Item"]);
+      await page.keyboard.press("Tab");assert.equal(await value(),`SELECT * FROM ${open}Item${close}`);
+    });
+  }
+  for(const [dbType,name,expected] of [["sqlserver","PIVOT","[PIVOT]"],["mysql","WINDOW","`WINDOW`"],["mariadb","WINDOW","`WINDOW`"],["databricks","CURRENT_SCHEMA","`CURRENT_SCHEMA`"],["sqlite","FILTER",'"FILTER"']]){
+    await test(`${dbType}: reserved object names remain executable when accepted with Tab`,async()=>{
+      await configure({code:"SELECT * FROM |",context:{...context(dbType),tables:[name],schemaSnapshot:undefined}});
+      await page.keyboard.type(name.slice(0,3),{delay:20});await labels([name]);await page.keyboard.press("Tab");assert.equal(await value(),`SELECT * FROM ${expected}`);
+    });
+  }
   await test("Databricks table search matches a word inside the name, with prefix matches first",async()=>{
     const scoped=context("databricks","warehouse","finance");
     scoped.tables=["finance.movimentocobranca","finance.gecon_ft_movimentos_premio"];
@@ -85,7 +128,7 @@ try {
     await configure({code:"SELECT * FROM |",context:scoped});
     await page.keyboard.type("movimento",{delay:15});const current=await labels(["movimentocobranca","gecon_ft_movimentos_premio"]);
     assert(current.indexOf("movimentocobranca")<current.indexOf("gecon_ft_movimentos_premio"));
-    await page.keyboard.press("Tab");assert.equal(await value(),"SELECT * FROM `movimentocobranca`");
+    await page.keyboard.press("Tab");assert.equal(await value(),"SELECT * FROM movimentocobranca");
   });
   for(const [qualifier,expected,wrong,schema] of [['"Analytics"',"UpperOrders","lower_orders","Analytics"],["ANALYTICS","lower_orders","UpperOrders","analytics"]]){
     await test(`PostgreSQL: ${qualifier} schema suggestions and remote enrichment preserve exact namespace identity`,async()=>{
@@ -107,9 +150,9 @@ try {
     scoped.tables=[...Array.from({length:1200},(_,index)=>`main.early_${index}`),"main.zebra"];
     scoped.schemaSnapshot.tables={"main.zebra":{name:"zebra",schema:"main",columns:[]}};
     await configure({code:"SELECT *|",context:scoped});
-    await page.keyboard.type(" FROM ",{delay:15});await labels(["main.early_0"]);
+    await page.keyboard.type(" FROM ",{delay:15});await labels(["early_0"]);
     await page.keyboard.type("zeb",{delay:20});await labels(["zebra"]);
-    await page.keyboard.press("Tab");assert.equal(await value(),'SELECT * FROM "zebra"');
+    await page.keyboard.press("Tab");assert.equal(await value(),'SELECT * FROM zebra');
   });
   await test("manual shortcut completion and remote enrichment keep focused names short without duplicate rows",async()=>{
     await configure({code:"SELECT * FROM cust|",context:context("mysql","main","main")});
@@ -119,7 +162,7 @@ try {
     await page.evaluate(before=>{const p=window.completionTest,index=p.calls.findIndex((call,index)=>index>=before&&call.method==="language.complete");p.reply(index,[{label:"main.customers",kind:"table",insert_text:"`main`.`customers`"}]);},before);
     await page.waitForTimeout(80);const current=await labels(["customers"]);
     assert.equal(current.filter(label=>label==="customers").length,1);assert(!current.includes("main.customers"));
-    await page.keyboard.press("Tab");assert.equal(await value(),"SELECT * FROM `customers`");
+    await page.keyboard.press("Tab");assert.equal(await value(),"SELECT * FROM customers");
   });
   await test("a late metadata delivery refreshes automatic letter completion without another key or shortcut",async()=>{
     await configure({code:"SELECT * FROM |",context:{...context(),tables:[],schemaSnapshot:undefined}});
@@ -167,7 +210,7 @@ try {
       scoped.schemaSnapshot.tables["main.pending"]={name:"pending",schema:"main",columns:[]};
       await configure({code:`SELECT | FROM ${source}`,context:scoped});
       await page.keyboard.type("id",{delay:20});const current=await labels(["c.id"]);assert(!current.includes("id"));
-      await page.keyboard.press("Tab");assert.equal(await value(),`SELECT "c"."id" FROM ${source}`);
+      await page.keyboard.press("Tab");assert.equal(await value(),`SELECT c.id FROM ${source}`);
     });
   }
   await test("late metadata replaces No suggestions without another keypress",async()=>{

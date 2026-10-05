@@ -9,6 +9,12 @@ const update=(version:number,connection="a",database="db",schema="public",tables
   schema_snapshot:{db_type:"postgresql",tables:tables.map(name=>({key:`${schema}.${name}`,name,schema})),columns:{[`${schema}.${tables[0]}`]:[{name:"Id",data_type:"integer"}]}}}});
 
 describe("language metadata delivery",()=>{
+  it("preserves the physical default schema independently from the focused SQL Server schema",()=>{
+    const contexts=new SessionLanguageContexts();
+    contexts.accept({event:"language.context_updated",payload:{session_id:"s",connection_id:"esim",database:"ESIM",schema:"sales",version:1,variables:{},
+      schema_snapshot:{db_type:"sqlserver",database:"ESIM",current_schema:"sales",default_schema:"dbo",tables:[{name:"Items",schema:"sales",catalog:"ESIM"}],columns:{}}}});
+    expect(contexts.get("s","esim","ESIM","sales")?.schemaSnapshot).toMatchObject({current_schema:"sales",default_schema:"dbo"});
+  });
   it("routes a block connection without inheriting another connection's database or schema",()=>{
     const session=newSession();session.id="s";session.savedConnectionId="a";session.database="database_a";session.schema="schema_a";
     const block={...newBlock("sql","SELECT o."),connection_id:"b"};session.blocks=[block];

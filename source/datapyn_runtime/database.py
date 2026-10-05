@@ -106,6 +106,10 @@ def connect(config: dict):
         )
         if not connected or not connector.is_connected():
             raise ConnectionError("Database connection could not be established")
+        if db_type == "sqlserver" and config.get("schema"):
+            # SQL Server's reused driver does not retain a selected metadata
+            # schema. Keep this editor focus without altering the login/user.
+            connector.connection_params["schema"] = str(config["schema"])
         return connector
     except BaseException:
         connector.disconnect()
