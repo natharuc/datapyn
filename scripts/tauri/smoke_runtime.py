@@ -11,6 +11,7 @@ import re
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from typing import Callable
@@ -21,6 +22,15 @@ ROOT = Path(__file__).resolve().parents[2]
 class RuntimeClient:
     def __init__(self, executable: str | None, timeout: float):
         env = os.environ.copy()
+        self._workspace = None
+        if not env.get("DATAPYN_RUNTIME_STATE_PATH"):
+            self._workspace = tempfile.TemporaryDirectory(prefix="datapyn-smoke-state-")
+            env.update({
+                "DATAPYN_RUNTIME_STATE_PATH": self._workspace.name,
+                "DATAPYN_WORKSPACE_PATH": self._workspace.name,
+                "DATAPYN_RUNTIME_DATA_DIR": self._workspace.name,
+                "DATAPYN_SNAPSHOT_ROOT": str(Path(self._workspace.name) / "snapshots"),
+            })
         if executable:
             # A frozen smoke must resolve its bundled modules, independently of
             # the checkout's source tree or an existing Python installation.
@@ -130,6 +140,8 @@ class RuntimeClient:
         for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
             if stream and not stream.closed:
                 stream.close()
+        if self._workspace is not None:
+            self._workspace.cleanup()
 
 
 def result_page(client: RuntimeClient, session_id: str, finished: dict) -> dict:

@@ -76,7 +76,7 @@ class PackageService:
         from .process_group import own_process_group
         if self.closed.is_set(): raise RuntimeError("Package service is closing")
         response = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), env=self._env())
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), start_new_session=sys.platform != "win32", env=self._env())
         group = own_process_group(response.pid)
         with self.process_lock:
             self.processes.add(group)

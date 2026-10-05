@@ -94,6 +94,19 @@ smokes após assinatura da aplicação, com os entitlements de carregamento das
 bibliotecas Python. Cada arquivo `.sig` é verificado contra a chave pública
 embutida por `minisign_verify`, antes de poder ser publicado.
 
+A aceitação também verifica o conteúdo do pacote final, sem abrir o aplicativo
+gráfico: no Linux, extrai o DEB, compara o seed com a AppImage assinada, extrai
+essa imagem e executa os quatro smokes contra o runtime extraído; no macOS,
+monta o DMG somente para leitura, copia a aplicação, verifica sua assinatura e
+executa os mesmos smokes nessa cópia. Essa etapa recusa execução fora dos
+runners correspondentes do GitHub. O conteúdo montado é desmontado antes da
+limpeza do workspace temporário.
+No Windows, um runner hospedado instala silenciosamente o NSIS em uma pasta
+temporária, verifica o runtime instalado com os quatro smokes e desinstala o
+aplicativo de teste; a execução exige as variáveis de um runner Windows x64 e
+não é permitida no computador do usuário. A instalação do ODBC de teste ocorre
+somente nesse runner descartável quando o driver está ausente.
+
 A etapa final exige os três manifests da mesma versão e os downloads
 correspondentes, monta `latest.json` e `SHA256SUMS.txt`, e preserva o pacote
 completo para revisão. Primeiro envia os arquivos para um rascunho da release;

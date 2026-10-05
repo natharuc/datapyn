@@ -145,3 +145,27 @@ SQL Server instalado, enquanto o requisito deve ser provido no computador do
 usuário. A verificação offline valida empacotamento e caminhos de inicialização;
 autenticação e execução contra servidores reais exigem credenciais e aceite em
 cada ambiente. Nenhum teste offline afirma ter autenticado em servidores reais.
+
+## Aceite do instalador Windows na CI
+
+`smoke_windows_installation.ps1` executa somente em runners Windows x64 hospedados
+pelo GitHub Actions. Recusa execução local ou em runner próprio, exige `RUNNER_TEMP`
+absoluto e usa uma pasta única com espaços para verificar a semântica de `/D` NSIS.
+O workflow verifica a assinatura criptográfica Tauri antes de executar esse aceite.
+
+O teste instala ODBC quiet no runner efêmero somente quando ausente, usando o MSI
+Microsoft verificado e aceitando seus termos como dependência de teste. Instala o
+NSIS com `/S` para o usuário do runner, verifica a identidade HKCU e executa os
+quatro smokes contra o sidecar instalado. Todo estado Python usa pastas temporárias
+explícitas. Nenhuma janela do DataPyn é aberta. Depois, desinstala silenciosamente e
+confirma a remoção dos executáveis/registro Tauri, a preservação do driver ODBC
+(incluindo hash da DLL) e do registro de instalação do PyQt6.
+
+```powershell
+# Exclusivamente no step Windows hospedado do GitHub Actions, após verificar .sig
+./scripts/tauri/smoke_windows_installation.ps1 -InstallerPath $env:DATAPYN_NSIS_INSTALLER
+```
+
+Os testes locais desse script analisam a sintaxe e exercitam somente a validação
+do ambiente/argumentos, sem executar MSI, setup, uninstaller ou GUI. A interação
+inicial de consentimento/UAC continua sendo validada em aceite manual de VM limpa.

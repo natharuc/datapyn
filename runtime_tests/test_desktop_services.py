@@ -1,5 +1,8 @@
 import importlib
 import json
+import os
+import signal
+import subprocess
 import sys
 import threading
 import time
@@ -61,6 +64,64 @@ def test_package_command_shutdown_terminates_process_instead_of_waiting_for_time
     assert not worker.is_alive()
     assert time.monotonic() - started < 5
     assert errors
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX package commands own a new process session")
+def test_package_command_shutdown_closes_descendants_holding_output_pipes(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATAPYN_RUNTIME_DATA_DIR", str(tmp_path))
+    service = PackageService(lambda _: None)
+    ready = tmp_path / "child-ready"
+    child_code = "import os,sys,time;from pathlib import Path;Path(sys.argv[1]).write_text(str(os.getpid()));time.sleep(120)"
+    parent_code = (
+        "import subprocess,sys,time;"
+        f"subprocess.Popen([sys.executable,'-c',{child_code!r},{str(ready)!r}]);"
+        "time.sleep(120)"
+    )
+    errors = []
+
+    def run():
+        try:
+            service._run([sys.executable, "-c", parent_code])
+        except Exception as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    try:
+        deadline = time.monotonic() + 5
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(.01)
+        assert ready.exists(), "The child must be running before shutdown"
+        service.close()
+        worker.join(timeout=5)
+        # The child inherits the parent's output pipes. Killing only the parent
+        # leaves communicate() blocked until that child exits 120 seconds later.
+        assert not worker.is_alive(), "Package descendants kept output pipes open after shutdown"
+        assert errors
+    finally:
+        service.close()
+        if worker.is_alive() and ready.exists():
+            try:
+                os.kill(int(ready.read_text()), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        worker.join(timeout=5)
+
+
+def test_package_command_creates_posix_session_before_owning_process_group(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATAPYN_RUNTIME_DATA_DIR", str(tmp_path))
+    session_options = []
+    popen = subprocess.Popen
+
+    def capture(*args, **kwargs):
+        session_options.append(kwargs.get("start_new_session"))
+        return popen(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", capture)
+    service = PackageService(lambda _: None)
+    # Keep this process alive until its group has been assigned on Windows too.
+    assert service._run([sys.executable, "-c", "import time;time.sleep(.1);print('ready')"]).strip() == "ready"
+    assert session_options == [sys.platform != "win32"]
 
 
 @pytest.mark.parametrize("name", ["-rrequirements.txt", "pkg;rm", "../package", "https://repo", ""])

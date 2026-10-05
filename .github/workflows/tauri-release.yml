@@ -49,7 +49,7 @@ jobs:
           DATAPYN_RELEASE_PUBLISH: ${{ inputs.publish }}
         run: node scripts/tauri/release.mjs workflow-request
       - name: Release pipeline tests
-        run: node --test scripts/tauri/release.test.mjs scripts/tauri/linux-package.test.mjs scripts/tauri/publish.test.mjs scripts/tauri/windows-prerequisites.test.mjs
+        run: node --test scripts/tauri/release.test.mjs scripts/tauri/linux-package.test.mjs scripts/tauri/publish.test.mjs scripts/tauri/windows-prerequisites.test.mjs scripts/tauri/smoke-installed.test.mjs
 
   build:
     needs: prepare
@@ -118,7 +118,7 @@ jobs:
           npm --prefix desktop ci
       - name: Validate frontend, runtime and native contracts
         run: |
-          node --test scripts/tauri/release.test.mjs scripts/tauri/linux-package.test.mjs scripts/tauri/publish.test.mjs scripts/tauri/windows-prerequisites.test.mjs
+          node --test scripts/tauri/release.test.mjs scripts/tauri/linux-package.test.mjs scripts/tauri/publish.test.mjs scripts/tauri/windows-prerequisites.test.mjs scripts/tauri/smoke-installed.test.mjs
           npm --prefix desktop test
           uv run pytest -c runtime_tests/pytest.ini runtime_tests -q
           cargo fmt --manifest-path desktop/src-tauri/Cargo.toml --check
@@ -158,6 +158,20 @@ jobs:
           DATAPYN_UPDATE_ARTIFACT=$(node --input-type=module -e "import {readFileSync} from 'node:fs';import{resolve}from'node:path';const p=process.env.PLATFORM;const manifest=JSON.parse(readFileSync('build/tauri-distribution/'+p+'/manifest-'+p+'.json'));console.log(resolve('build/tauri-distribution/'+p,decodeURIComponent(manifest.platforms[p].url.split('/').at(-1))));")
           export DATAPYN_UPDATE_ARTIFACT
           cargo test --manifest-path desktop/src-tauri/Cargo.toml --locked --lib updater_channel::tests::verify_distribution_signature -- --ignored
+      - name: Accept Windows installer on the disposable hosted runner
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          $taskInstaller = (Resolve-Path "build/tauri-distribution/windows-x86_64/DataPyn-Tauri-${env:VERSION}-windows-x86_64-setup.exe").Path
+          ./scripts/tauri/smoke_windows_installation.ps1 -InstallerPath $taskInstaller
+      - name: Accept installed Linux/macOS packages without a GUI
+        if: runner.os != 'Windows'
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: node scripts/tauri/smoke-installed.mjs "build/tauri-distribution/$PLATFORM" "$VERSION"
       - name: Inspect Debian package and macOS signature
         env:
           PLATFORM: ${{ matrix.platform }}

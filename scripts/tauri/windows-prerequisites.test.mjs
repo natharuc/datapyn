@@ -61,3 +61,20 @@ test("Windows bootstrap prevents untrusted elevation and preserves installer out
     assert.equal(cases["uac-cancelled"].code, 1223);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
+
+test("installer acceptance refuses user/self-hosted machines and preserves NSIS path argument rules", { skip: process.platform !== "win32" }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "datapyn-installer-guard-"));
+  try {
+    const { stdout } = await promisify(execFile)("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
+      join(repoRoot, "scripts", "tauri", "windows-installation-guard.test.ps1"),
+      "-ScriptPath", join(repoRoot, "scripts", "tauri", "smoke_windows_installation.ps1"), "-TestDirectory", directory], { windowsHide: true });
+    const report = JSON.parse(stdout.trim());
+    assert.equal(report.parsed, true);
+    assert.deepEqual(new Set(report.rejected), new Set(["GITHUB_ACTIONS", "RUNNER_ENVIRONMENT", "RUNNER_OS", "RUNNER_ARCH", "RUNNER_TEMP", "filesystem-root"]));
+    assert.equal(report.install.at(-1), `/D=${join(directory, "DataPyn Tauri with spaces")}`);
+    assert.equal(report.install.at(-1).includes('"'), false);
+    assert.equal(report.uninstall.at(-1), `_?=${join(directory, "DataPyn Tauri with spaces")}`);
+    assert.ok(report.install.includes("/S"));
+    assert.ok(report.uninstall.includes("/S"));
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
