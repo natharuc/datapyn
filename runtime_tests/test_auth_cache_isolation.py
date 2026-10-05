@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -91,3 +92,74 @@ def test_tauri_entra_cache_expands_home_paths(monkeypatch, tmp_path):
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setenv("DATAPYN_WORKSPACE_PATH", "~/profile")
     assert connector._get_sqlserver_entra_cache_name("tenant.database.windows.net") == absolute
+
+
+def test_macos_tauri_cache_isolates_keychain_items_and_cae_without_reading_secrets(monkeypatch, tmp_path):
+    import azure.identity
+    import msal_extensions
+
+    calls = []
+
+    class KeychainPersistence:
+        is_encrypted = True
+
+        def __init__(self, location, service, account):
+            self.location, self.service, self.account = location, service, account
+            calls.append(self)
+
+        def get_location(self):
+            return self.location
+
+        def load(self):
+            pytest.fail("Constructing a cache must not read the user's Keychain")
+
+        def save(self, value):
+            pytest.fail("Constructing a cache must not write the user's Keychain")
+
+    monkeypatch.setattr(msal_extensions, "KeychainPersistence", KeychainPersistence)
+    monkeypatch.setattr(connector, "sys", SimpleNamespace(platform="darwin"))
+    workspace = tmp_path / "first profile"
+    monkeypatch.setenv("DATAPYN_WORKSPACE_PATH", str(workspace))
+    credential = connector._create_sqlserver_mfa_credential("tenant.database.windows.net")
+    try:
+        assert isinstance(credential, azure.identity.InteractiveBrowserCredential)
+        cache = credential._initialize_cache()
+        cae_cache = credential._initialize_cache(is_cae=True)
+        assert credential._cache is cache
+        assert credential._cae_cache is cae_cache
+        assert cache.is_encrypted and cae_cache.is_encrypted
+        assert calls[0].service == calls[1].service == "DataPyn.Tauri.SQLServer"
+        assert calls[0].account != calls[1].account
+        assert calls[0].account.endswith("_nocae") and calls[1].account.endswith("_cae")
+        assert all(Path(call.location).is_relative_to(workspace) for call in calls)
+    finally:
+        credential.close()
+
+    monkeypatch.setenv("DATAPYN_WORKSPACE_PATH", str(tmp_path / "second profile"))
+    second = connector._create_sqlserver_mfa_credential("tenant.database.windows.net")
+    try:
+        second._initialize_cache()
+        assert calls[-1].account not in {calls[0].account, calls[1].account}
+    finally:
+        second.close()
+
+
+@pytest.mark.parametrize("platform, workspace", [("win32", True), ("linux", True), ("darwin", False)])
+def test_platforms_and_legacy_keep_the_original_browser_credential(monkeypatch, tmp_path, platform, workspace):
+    import azure.identity
+
+    monkeypatch.setattr(connector, "sys", SimpleNamespace(platform=platform))
+    if workspace:
+        monkeypatch.setenv("DATAPYN_WORKSPACE_PATH", str(tmp_path))
+    else:
+        monkeypatch.delenv("DATAPYN_WORKSPACE_PATH", raising=False)
+    captured = {}
+    expected = object()
+
+    def credential(**kwargs):
+        captured.update(kwargs)
+        return expected
+
+    monkeypatch.setattr(azure.identity, "InteractiveBrowserCredential", credential)
+    assert connector._create_sqlserver_mfa_credential("tenant.database.windows.net") is expected
+    assert captured["cache_persistence_options"].allow_unencrypted_storage is False

@@ -25,7 +25,8 @@ def smoke(executable=None, timeout=90):
             assert client.request("system.info")["capabilities"]["qt_required"] is False
             client.request("session.create", {"session_id": "distribution"})
             client.event("session.ready", session_id="distribution")
-            code = """import json, importlib, importlib.util, importlib.metadata, sys, pandas as pd
+            code = """import json, importlib, importlib.util, importlib.metadata, os, sys, pandas as pd
+from pathlib import Path
 from datapyn_runtime.distribution import verify_runtime_distribution
 report = verify_runtime_distribution()
 backend_module, backend_class = {
@@ -38,6 +39,19 @@ report['keyring_backend'] = backend_module
 if sys.platform == 'linux':
     import secretstorage, jeepney
     report['keyring_dependencies'] = {name: importlib.metadata.version(name) for name in ('SecretStorage', 'jeepney')}
+if sys.platform == 'darwin':
+    from src.database.database_connector import _create_sqlserver_mfa_credential
+    credential = _create_sqlserver_mfa_credential('offline.example')
+    try:
+        cache = credential._initialize_cache()
+        cae_cache = credential._initialize_cache(is_cae=True)
+        assert cache.is_encrypted and cae_cache.is_encrypted
+        assert cache._persistence._service_name == 'DataPyn.Tauri.SQLServer'
+        assert cache._persistence._account_name != cae_cache._persistence._account_name
+        assert Path(cache._persistence.get_location()).is_relative_to(Path(os.environ['DATAPYN_WORKSPACE_PATH']))
+        report['mfa_keychain_isolated'] = True
+    finally:
+        credential.close()
 # Do not call priority/get_password/set_password or connect to the desktop bus.
 if getattr(sys, 'frozen', False):
     assert importlib.util.find_spec('PyQt6') is None, 'Qt leaked into the desktop runtime'

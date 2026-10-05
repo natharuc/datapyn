@@ -11,6 +11,7 @@ import pyodbc
 import json
 import os
 import struct
+import sys
 import threading
 import time
 from pathlib import Path
@@ -296,6 +297,28 @@ def _create_sqlserver_mfa_credential(host: str, login_hint: str = "", tenant_id:
     if authentication_record is not None:
         kwargs["authentication_record"] = authentication_record
 
+    if sys.platform == "darwin" and os.environ.get("DATAPYN_WORKSPACE_PATH"):
+        # Azure Identity's macOS persistence uses one fixed service/account
+        # pair even when options.name differs. Isolate the actual Keychain item,
+        # not only its signal file, without changing the SDK's global factory.
+        class TauriMacBrowserCredential(InteractiveBrowserCredential):
+            def _initialize_cache(self, is_cae: bool = False):
+                import msal_extensions
+
+                suffix = "cae" if is_cae else "nocae"
+                name = f"{self._cache_options.name}_{suffix}"
+                path = _get_oauth_cache_dir() / f"{name}.keychain"
+                persistence = msal_extensions.KeychainPersistence(
+                    str(path), "DataPyn.Tauri.SQLServer", name,
+                )
+                cache = msal_extensions.PersistedTokenCache(persistence)
+                if is_cae:
+                    self._cae_cache = cache
+                else:
+                    self._cache = cache
+                return cache
+
+        return TauriMacBrowserCredential(**kwargs)
     return InteractiveBrowserCredential(**kwargs)
 
 
