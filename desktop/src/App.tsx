@@ -54,6 +54,7 @@ import {BlockScopePicker} from "./BlockScopePicker";
 import {blockScopeOptions} from "./blockScopeModel";
 import {ScopePreparation} from "./ScopePreparation";
 import {connectionPending,SessionConnectionStatus} from "./SessionConnectionStatus";
+import {useTauriUpdates} from "./useTauriUpdates";
 import type {ExplorerContext} from "./explorer";
 import {exportContext} from "./exportContext";
 import {downloadDirectory} from "./queryDownload";
@@ -207,8 +208,10 @@ export function App() {
   const requiredEditor=profile ? startupEditorId(session.blocks,session.focusedBlockId,session.maximizedBlockId) : undefined;
   const startupActive=useStartupSplash({runtime:state.runtimeStatus,runtimeError:state.message,profileError:profileLoadError || startupFilesError,profile:Boolean(profile),layout:startupLayout === profile?.active_id && windowLayout.ready,editor:!requiredEditor || startupEditors.has(`${profile?.active_id}:${requiredEditor}`),files:startupFilesReady,onRetry:()=>{setProfileLoadError("");setStartupFilesError("");setStartupFilesReady(false);setProfileRetry(n=>n+1);if(state.runtimeStatus === "unavailable")void workspace.retryRuntime();}});
   const startupEditorInitialized=useCallback((id:string)=>{if(!startupActive)return;const key=`${profile?.active_id}:${id}`;setStartupEditors(previous=>previous.has(key) ? previous : new Set([...previous,key]));},[profile?.active_id,startupActive]);
+  const updates=useTauriUpdates(Boolean(profile && !startupActive));
   const [closingWorkspace,setClosingWorkspace]=useState(false);
-  const editingLocked=switchingProfile || closingWorkspace;
+  const editingLocked=switchingProfile || closingWorkspace || updates.state.phase === "installing";
+  useEffect(()=>{workspace.setEditingLocked(editingLocked);},[editingLocked,updates.state.phase]);
   const outputReveals=useRef(new OutputRevealTracker()),outputRevealAllowed=useRef(false);
   outputRevealAllowed.current=Boolean(profile && startupLayout === profile.active_id && !editingLocked);
   const workspaceExtras=useRef<Record<string,unknown>>({}),layoutExtras=useRef<Record<string,unknown>>({});
@@ -627,7 +630,7 @@ export function App() {
     workspace.updateBlock(session.id,block.id,{connection_id:exportScope.connectionId,database_name:exportScope.database,schema:exportScope.schema});
     requestAnimationFrame(()=>focusEditor(block.id));
   };
-  const runDisabled = session.busy || openingConnection || (session.connectionState?.phase==="error"&&focusedBlock?.language==="sql"&&!focusedBlock.connection_id) || state.runtimeStatus !== "ready" || !profile || switchingProfile || Boolean(session.runtimeError);
+  const runDisabled = editingLocked || session.busy || openingConnection || (session.connectionState?.phase==="error"&&focusedBlock?.language==="sql"&&!focusedBlock.connection_id) || state.runtimeStatus !== "ready" || !profile || switchingProfile || Boolean(session.runtimeError);
   return <div className="app-shell">
     <header className="app-header">
       <div className="brand"><img src={logo} alt="" /><span>{translateUi("DataPyn")}</span></div>
@@ -637,6 +640,7 @@ export function App() {
         <button onClick={() => run(saveDocument(true))}>{translateUi("Salvar como")}</button>
         <button onClick={() => setSettingsDialog(true)}>{translateUi("Configurações")}</button>
         <button disabled={!dockControls || editingLocked} aria-haspopup="dialog" aria-expanded={layoutDialog} onClick={()=>setLayoutDialog(true)}>{translateUi("Exibir")}</button>
+        {updates.state.phase === "downloaded" && <button className="app-update-ready" onClick={()=>setUpdateDialog(true)}><RefreshCw size={14}/>{translateUi("Atualização pronta")}</button>}
         <button className="app-notifications" aria-label={translateUi("Notificações")} title={translateUi("Notificações")} onClick={()=>setNotificationHistory(true)}><Bell size={14}/>{notificationState.unread > 0 && <span className="notification-menu-count">{notificationState.unread}</span>}</button>
         <button aria-haspopup="menu" aria-expanded={Boolean(appMenu)} onClick={e=>{const rect=e.currentTarget.getBoundingClientRect();setAppMenu({owner:e.currentTarget.ownerDocument,anchor:{x:rect.left,y:rect.bottom},button:e.currentTarget});}}><MoreHorizontal size={15}/>{translateUi("Mais")}</button>
       </nav>
@@ -735,7 +739,7 @@ export function App() {
     {closingMany && <Modal title={translateUi("Fechar análises")} onClose={()=>setClosingMany(undefined)}><div className="confirm-copy"><p>{closingMany.length} {translateUi("análises. Alterações permanecem no workspace até serem salvas ou descartadas.")}</p><ul>{closingMany.map(id=><li key={id}>{workspace.session(id)?.title}{workspace.session(id)?.modified?" •":""}</li>)}</ul></div><footer className="modal-footer"><button onClick={()=>setClosingMany(undefined)}>{translateUi("Voltar")}</button><button disabled={closingMany.some(id=>workspace.session(id)?.busy)} onClick={()=>run((async()=>{for(const id of closingMany){const target=workspace.session(id);if(target){await workspace.closeSession(id);target.blocks.forEach(b=>disposeModel(b.id));}}setClosingMany(undefined);})())}>{translateUi("Descartar e fechar")}</button><button className="primary-button" disabled={closingMany.some(id=>workspace.session(id)?.busy)} onClick={()=>run((async()=>{for(const id of closingMany){const target=workspace.session(id);if(!target)continue;if(target.modified){await saveDocument(false,id);if(workspace.session(id)?.modified)return;}await workspace.closeSession(id);target.blocks.forEach(b=>disposeModel(b.id));}setClosingMany(undefined);})())}>{translateUi("Salvar e fechar")}</button></footer></Modal>}
     {editingChart && <Modal title={translateUi("Nome do gráfico")} onClose={()=>setEditingChart(undefined)}><div className="confirm-copy"><input autoFocus aria-label={translateUi("Nome do gráfico")} value={editingChart.title} onChange={e=>setEditingChart({...editingChart,title:e.target.value})}/></div><footer className="modal-footer"><button className="primary-button" onClick={()=>{workspace.patchSession(session.id,s=>({...s,modified:true,extras:{...s.extras,charts:charts.map(c=>c.id === editingChart.id?{...c,title:editingChart.title.trim() || c.title,config:{...c.config,title:editingChart.title.trim() || c.title}}:c)}}));setEditingChart(undefined);}}>{translateUi("Salvar")}</button></footer></Modal>}
     {aboutDialog && <Suspense fallback={null}><AboutDialog onClose={()=>setAboutDialog(false)} onMessage={reportMessage}/></Suspense>}
-    {updateDialog && <Suspense fallback={null}><UpdateDialog onClose={()=>setUpdateDialog(false)} beforeInstall={async()=>{const activity=await runtime.request<{busy:boolean}>("system.activity");if(activity.busy)throw new Error(t("Aguarde ou cancele as operações antes de instalar."));await flushWorkspace.current();}}/></Suspense>}
+    {updateDialog && <Suspense fallback={null}><UpdateDialog controller={updates.controller} onClose={()=>setUpdateDialog(false)} beforeInstall={async()=>{workspace.setEditingLocked(true);try{const activity=await runtime.request<{busy:boolean}>("system.activity");if(activity.busy)throw new Error(t("Aguarde ou cancele as operações antes de instalar."));await flushWorkspace.current();}catch(error){workspace.setEditingLocked(false);throw error;}}}/></Suspense>}
     {packageDialog && <Suspense fallback={null}><PackageManagerDialog onClose={()=>setPackageDialog(false)} onError={reportMessage}/></Suspense>}
     {notificationDialog && <Suspense fallback={null}><NotificationsDialog sessionId={session.id} config={session.extras.notification_config as NotificationConfig} context={notificationContext(session)} onDefaults={flags=>setPreferences(p=>({...p,...flags}))} onSave={notification_config=>workspace.patchSession(session.id,s=>({...s,modified:true,extras:{...s.extras,notification_config}}))} onClose={()=>setNotificationDialog(false)}/></Suspense>}
     {workspaceManager && <Suspense fallback={null}><WorkspaceManagerDialog busy={state.sessions.some(s=>s.busy) || switchingProfile} onSelect={selectProfile} onClose={()=>setWorkspaceManager(false)} onMessage={reportMessage}/></Suspense>}

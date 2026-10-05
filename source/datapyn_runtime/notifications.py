@@ -14,6 +14,7 @@ import ssl
 
 from .data_tools import atomic_destination
 from .values import preview, scalar
+from .paths import workspace_root
 
 METHODS = frozenset({"notifications.settings.get", "notifications.settings.set", "notifications.evaluate",
                      "notifications.send", "notifications.test"})
@@ -27,7 +28,7 @@ SECRET_NAMES = frozenset({"telegram_bot_token", "email_password"})
 
 
 def _workspace():
-    return Path(os.environ.get("DATAPYN_WORKSPACE_PATH", str(Path.home() / ".datapyn-tauri-preview"))).expanduser().resolve()
+    return workspace_root()
 
 
 def _settings_path():
@@ -37,7 +38,7 @@ def _settings_path():
 
 
 def _secret_service():
-    return "DataPyn.Tauri.preview.notifications." + hashlib.sha256(str(_workspace()).encode()).hexdigest()[:20]
+    return "DataPyn.Tauri.notifications." + hashlib.sha256(str(_workspace()).encode()).hexdigest()[:20]
 
 
 def secret_get(name):

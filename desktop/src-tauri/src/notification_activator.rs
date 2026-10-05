@@ -20,8 +20,8 @@ use windows::{
     },
 };
 
-/// Unique to the unpackaged DataPyn Tauri preview, shared with shortcut/registry.
-pub(crate) const ACTIVATOR_CLSID: GUID = GUID::from_u128(0x027b5a36_e5be_4159_b565_b95350f368e8);
+/// Unique to the DataPyn Tauri application, shared with shortcut/registry.
+pub(crate) const ACTIVATOR_CLSID: GUID = GUID::from_u128(0x4c4c25cd_7f33_4ea0_a85e_7aa2dd71178c);
 
 type ActivationRouter = Arc<dyn Fn(&str, &str) + Send + Sync>;
 
@@ -154,7 +154,7 @@ mod tests {
         }));
         let callback: INotificationActivationCallback =
             unsafe { factory.CreateInstance(None).unwrap() };
-        let app = HSTRING::from("app.datapyn.desktop.preview");
+        let app = HSTRING::from("app.datapyn.tauri");
         let arguments = HSTRING::from("datapyn-open:0123456789abcdef");
         let unused_input = NOTIFICATION_USER_INPUT_DATA {
             Key: PCWSTR::null(),
@@ -168,7 +168,7 @@ mod tests {
         assert_eq!(
             *captured.lock().unwrap(),
             [(
-                "app.datapyn.desktop.preview".into(),
+                "app.datapyn.tauri".into(),
                 "datapyn-open:0123456789abcdef".into()
             )]
         );
@@ -225,7 +225,7 @@ mod tests {
             route: Arc::new(move |_, _| *count.lock().unwrap() += 1),
         }
         .into();
-        let valid_app = HSTRING::from("app.datapyn.desktop.preview");
+        let valid_app = HSTRING::from("app.datapyn.tauri");
         let valid_args = HSTRING::from("datapyn-open:0123456789abcdef");
         let error = unsafe { callback.Activate(PCWSTR::null(), &valid_args, &[]) }.unwrap_err();
         assert_eq!(error.code(), E_POINTER);
@@ -248,7 +248,7 @@ mod tests {
         .into();
         let error = unsafe {
             callback.Activate(
-                &HSTRING::from("app.datapyn.desktop.preview"),
+                &HSTRING::from("app.datapyn.tauri"),
                 &HSTRING::from("datapyn-open:0123456789abcdef"),
                 &[],
             )

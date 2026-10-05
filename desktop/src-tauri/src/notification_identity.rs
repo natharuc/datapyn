@@ -1,4 +1,4 @@
-//! Current-user identity for the unpackaged preview executable.
+//! Current-user identity for the Tauri executable.
 //!
 //! Win32 toasts require a Start Menu shortcut with System.AppUserModel.ID.
 //! Registry branding alone is insufficient on some Windows installations.
@@ -34,8 +34,8 @@ use windows::{
     },
 };
 
-pub(crate) const APP_ID: &str = "app.datapyn.desktop.preview";
-const SHORTCUT_NAME: &str = "DataPyn Tauri Preview.lnk";
+pub(crate) const APP_ID: &str = "app.datapyn.tauri";
+const SHORTCUT_NAME: &str = "DataPyn Tauri.lnk";
 // PKEY_AppUserModel_ID, documented System.AppUserModel.ID property.
 const APP_USER_MODEL_ID: PROPERTYKEY = PROPERTYKEY {
     fmtid: windows::core::GUID::from_u128(0x9f4c2855_9f79_4b39_a8d0_e1d42de1d5f3),

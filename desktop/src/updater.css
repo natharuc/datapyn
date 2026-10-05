@@ -1,6 +1,6 @@
 .update-dialog { width: min(560px, calc(100vw - 36px)); }
 .update-identity { display: flex; align-items: center; gap: 14px; padding: 22px 24px; border-bottom: 1px solid var(--border); }
-.update-mark { display: grid; place-items: center; width: 54px; height: 54px; color: var(--blue-light); background: color-mix(in srgb, var(--blue) 12%, transparent); border: 1px solid color-mix(in srgb, var(--blue) 30%, transparent); border-radius: 12px; }
+.app-update-ready { gap: 5px; }
 .update-identity strong { font-size: 19px; letter-spacing: -.03em; }
 .update-identity p { color: var(--muted); font-size: 12px; margin: 5px 0 0; }
 .update-version { margin-left: auto; color: var(--muted); font-family: var(--editor-font); font-size: 12px; }

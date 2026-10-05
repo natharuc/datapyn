@@ -1,0 +1,9 @@
+{
+  "version": "18.7.1.1",
+  "architecture": "x64",
+  "filename": "msodbcsql-18.7.1.1-x64.msi",
+  "url": "https://download.microsoft.com/download/d624e1c6-293b-4d6f-91b8-6e515a5d6a77/amd64/1033/msodbcsql.msi",
+  "sha256": "21EF69E4B942F18ACED55FA7C3A8D7263004E113A96690BAC7509645E1B1A310",
+  "publisher": "Microsoft Corporation",
+  "documentation": "https://learn.microsoft.com/en-us/sql/connect/odbc/download-odbc-driver-for-sql-server"
+}

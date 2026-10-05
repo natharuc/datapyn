@@ -13,6 +13,7 @@ import time
 import traceback
 
 from . import database
+from .paths import workspace_root
 from .values import describe_variables, preview, scalar
 from .stdio import isolate_kernel_output
 from .process_group import initialize_kernel_group, exit_kernel_and_children
@@ -156,7 +157,7 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
     isolate_kernel_output()
     os.environ.setdefault("MPLBACKEND", "Agg")
     os.environ.setdefault("DATAPYN_SHARED_PARAMETER_DELIMITER", "{{name}}")
-    os.environ.setdefault("DATAPYN_WORKSPACE_PATH", str(Path.home() / ".datapyn-tauri-preview"))
+    os.environ.setdefault("DATAPYN_WORKSPACE_PATH", str(workspace_root()))
     threading.Thread(target=_watch_parent, name="runtime-parent-watch", daemon=True).start()
     send_lock = threading.Lock()
 

@@ -25,6 +25,7 @@ from .process_group import own_process_group
 from .pynia_mcp import McpBridge
 from .workspace import read_document, write_document
 from .configuration_defaults import load_defaults, normalize_pynia
+from .paths import workspace_root
 
 
 class Conversation:
@@ -56,7 +57,7 @@ class PyniaService:
         self.runtime_query = runtime_query
         self.catalog_provider = catalog
         self.launch_resolver = launch_resolver or resolve_launch
-        self.root = Path(state_path or os.environ.get("DATAPYN_WORKSPACE_PATH") or os.environ.get("DATAPYN_RUNTIME_STATE_PATH") or Path.home() / ".datapyn-tauri-preview") / "pynia"
+        self.root = (Path(state_path) if state_path else workspace_root()) / "pynia"
         self.conversations = {}
         self.pending_tools = {}
         self.lock = threading.RLock()

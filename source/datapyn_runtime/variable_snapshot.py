@@ -13,6 +13,7 @@ import uuid
 
 from .data_tools import atomic_destination, RUNTIME_VARIABLES
 from .values import describe_variables
+from .paths import snapshot_root, workspace_root
 from src.utils.data_formats import PARQUET_COMPRESSION
 
 METHODS = frozenset({"snapshot.settings.get", "snapshot.settings.set", "snapshot.list", "snapshot.save", "snapshot.restore", "snapshot.delete"})
@@ -20,16 +21,12 @@ DEFAULT_SETTINGS = {"enabled": False, "restore_on_startup": True, "max_size_mb":
 
 
 def _workspace():
-    return Path(os.environ.get("DATAPYN_WORKSPACE_PATH", str(Path.home() / ".datapyn-tauri-preview"))).expanduser().resolve()
+    return workspace_root()
 
 
 def _root():
     workspace = hashlib.sha256(str(_workspace()).encode()).hexdigest()[:24]
-    base = os.environ.get("DATAPYN_SNAPSHOT_ROOT")
-    if not base:
-        cache = os.environ.get("LOCALAPPDATA") if os.name == "nt" else os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))
-        base = str(Path(cache or str(Path.home() / ".cache")) / "DataPynTauriPreview" / "session_snapshots")
-    path = (Path(base).expanduser().resolve() / workspace)
+    path = snapshot_root() / workspace
     path.mkdir(parents=True, exist_ok=True)
     return path
 

@@ -1,4 +1,4 @@
-"""Preview workspaces isolate catalogs, drafts and preferences; removal is archival."""
+"""Tauri workspaces isolate catalogs, drafts and preferences; removal is archival."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ import uuid
 
 from .data_tools import atomic_destination
 from .session_store import SessionStore
+from .paths import snapshot_root, state_root
 
 METHODS = frozenset({"workspace.profiles.list", "workspace.profiles.create", "workspace.profiles.rename",
                      "workspace.profiles.clone", "workspace.profiles.delete", "workspace.profiles.restore",
@@ -27,7 +28,7 @@ CONFIG_FILES = ("connections.json", "notifications.json", "snapshot_settings.jso
 
 
 def base_path():
-    path = Path(os.environ.get("DATAPYN_RUNTIME_STATE_PATH") or Path.home() / ".datapyn-tauri-preview").expanduser().resolve()
+    path = state_root()
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -72,7 +73,7 @@ def profile_path(identifier=None):
         base = base_path()
         path = base if profile["id"] == "default" else (base / "profiles" / profile["id"]).resolve()
         if profile["id"] != "default" and path.parent != (base / "profiles").resolve():
-            raise ValueError("Workspace path must remain in the preview directory")
+            raise ValueError("Workspace path must remain in the Tauri directory")
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -224,11 +225,7 @@ def _remap(value, connections, groups):
 
 
 def _snapshot_root(workspace):
-    base = os.environ.get("DATAPYN_SNAPSHOT_ROOT")
-    if not base:
-        cache = os.environ.get("LOCALAPPDATA") if os.name == "nt" else os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))
-        base = str(Path(cache or str(Path.home() / ".cache")) / "DataPynTauriPreview" / "session_snapshots")
-    return Path(base).expanduser().resolve() / hashlib.sha256(str(workspace).encode()).hexdigest()[:24]
+    return snapshot_root() / hashlib.sha256(str(workspace).encode()).hexdigest()[:24]
 
 
 def _clone_snapshots(source, target):
@@ -344,8 +341,8 @@ def clone(params):
             _clone_snapshots(source, target)
         if params.get("include_credentials", False):
             import keyring
-            old_service = "DataPyn.Tauri.preview.notifications." + hashlib.sha256(str(source).encode()).hexdigest()[:20]
-            new_service = "DataPyn.Tauri.preview.notifications." + hashlib.sha256(str(target).encode()).hexdigest()[:20]
+            old_service = "DataPyn.Tauri.notifications." + hashlib.sha256(str(source).encode()).hexdigest()[:20]
+            new_service = "DataPyn.Tauri.notifications." + hashlib.sha256(str(target).encode()).hexdigest()[:20]
             for name in ("telegram_bot_token", "email_password"):
                 value = keyring.get_password(old_service, name)
                 if value:

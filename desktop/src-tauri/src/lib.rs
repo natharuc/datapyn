@@ -4,6 +4,7 @@ mod notification_activator;
 #[cfg(windows)]
 mod notification_identity;
 mod runtime;
+mod updater_channel;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -445,6 +446,38 @@ fn collect_files(args: &[String], cwd: &str) -> Vec<String> {
         .collect()
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn collect_opened_files(urls: &[tauri::Url]) -> Vec<String> {
+    let mut args = vec!["datapyn-desktop".to_string()];
+    args.extend(urls.iter().filter_map(|url| {
+        // Finder supplies percent-encoded file URLs. Never route web/deep-link URLs
+        // to the document loader as filesystem paths.
+        url.to_file_path()
+            .ok()
+            .map(|path| path.to_string_lossy().to_string())
+    }));
+    collect_files(&args, "")
+}
+
+fn dispatch_open_files(app: &tauri::AppHandle, mut files: Vec<String>) {
+    let state = app.state::<SplashLifecycle>();
+    let queued = buffer_startup_files(&state.latest, &app.state::<StartupFiles>().0, &mut files)
+        .unwrap_or(true);
+    if queued {
+        if let Some(window) = app.get_webview_window("splash") {
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+        return;
+    }
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+    let _ = app.emit("datapyn-open-files", files);
+}
+
 #[tauri::command]
 fn startup_files(
     window: tauri::WebviewWindow,
@@ -455,38 +488,43 @@ fn startup_files(
     Ok(std::mem::take(&mut *paths))
 }
 
-fn update_status(config: &Value, current_version: &str) -> Value {
-    let public_key = config.get("pubkey").and_then(Value::as_str).unwrap_or("");
-    let endpoints = config.get("endpoints").and_then(Value::as_array);
-    let available = !public_key.trim().is_empty()
-        && endpoints.is_some_and(|items| {
-            !items.is_empty()
-                && items.iter().all(|value| {
-                    value
-                        .as_str()
-                        .and_then(|url| url.parse::<tauri::Url>().ok())
-                        .is_some_and(|url| {
-                            url.scheme() == "https"
-                                && url.host_str().is_some()
-                                && url.username().is_empty()
-                                && url.password().is_none()
-                        })
-                })
-        });
-    serde_json::json!({"available": available, "current_version": current_version,
-        "channel": "tauri-preview", "reason": if available {None} else {Some("Este build não tem um canal Tauri assinado configurado.")} })
-}
+use updater_channel::update_status;
 
 #[tauri::command]
 fn updater_status(app: tauri::AppHandle) -> Value {
-    update_status(
+    let status = update_status(
         app.config()
             .plugins
             .0
             .get("updater")
             .unwrap_or(&Value::Null),
         &app.package_info().version.to_string(),
-    )
+    );
+    #[cfg(windows)]
+    {
+        if tauri::utils::platform::current_exe()
+            .ok()
+            .and_then(|path| updater_channel::windows_installer_directory(&path))
+            .is_none()
+        {
+            let mut status = status;
+            status["available"] = serde_json::json!(false);
+            status["automatic_download"] = serde_json::json!(false);
+            status["reason"] = serde_json::json!("Não foi possível determinar a pasta desta instalação para atualizar o DataPyn Tauri.");
+            return status;
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if std::env::var_os("APPIMAGE").is_none() {
+            let mut status = status;
+            status["available"] = serde_json::json!(false);
+            status["automatic_download"] = serde_json::json!(false);
+            status["reason"] = serde_json::json!("No Linux, abra o DataPyn pelo AppImage ou pelo launcher do pacote para usar atualizações automáticas.");
+            return status;
+        }
+    }
+    status
 }
 
 #[tauri::command]
@@ -504,31 +542,23 @@ async fn backend_request(
 }
 
 pub fn run() {
+    let updater = tauri_plugin_updater::Builder::new();
+    #[cfg(windows)]
+    let updater = match tauri::utils::platform::current_exe()
+        .ok()
+        .and_then(|path| updater_channel::windows_installer_directory(&path))
+    {
+        Some(directory) => updater.installer_arg(directory),
+        None => updater,
+    };
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
-            let mut files = collect_files(&args, &cwd);
-            let state = app.state::<SplashLifecycle>();
-            let queued =
-                buffer_startup_files(&state.latest, &app.state::<StartupFiles>().0, &mut files)
-                    .unwrap_or(true);
-            if queued {
-                if let Some(window) = app.get_webview_window("splash") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
-                return;
-            }
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.unminimize();
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
-            let _ = app.emit("datapyn-open-files", files);
+            dispatch_open_files(app, collect_files(&args, &cwd));
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(updater.build())
         .plugin(tauri_plugin_process::init())
         .manage(StartupFiles(Mutex::new(collect_files(
             &std::env::args().collect::<Vec<_>>(),
@@ -650,6 +680,15 @@ pub fn run() {
         .expect("Unable to initialize the DataPyn desktop host");
 
     app.run(|app, event| {
+        #[cfg(target_os = "macos")]
+        {
+            if let tauri::RunEvent::Opened { urls } = &event {
+                dispatch_open_files(app, collect_opened_files(urls));
+            }
+            if matches!(&event, tauri::RunEvent::Reopen { .. }) {
+                dispatch_open_files(app, Vec::new());
+            }
+        }
         if let tauri::RunEvent::WindowEvent { label, event: tauri::WindowEvent::CloseRequested { api, .. }, .. } = &event {
             if label == "splash" {
                 api.prevent_close();
@@ -684,12 +723,36 @@ pub fn run() {
 
 #[cfg(test)]
 mod update_tests {
+    use super::updater_channel;
     use super::{
-        buffer_startup_files, local_asset, local_popout, logical_popout_layout,
-        native_popout_label, popout_outer_position, update_status, SplashPhase, SplashSnapshot,
+        buffer_startup_files, collect_opened_files, local_asset, local_popout,
+        logical_popout_layout, native_popout_label, popout_outer_position, update_status,
+        SplashPhase, SplashSnapshot,
     };
     use serde_json::json;
     use std::sync::{Arc, Barrier, Mutex};
+
+    #[test]
+    fn finder_file_urls_decode_unicode_and_spaces_and_ignore_remote_urls() {
+        let path = std::env::temp_dir().join(format!(
+            "datapyn-finder-{}-Análise com espaços.dpw",
+            std::process::id()
+        ));
+        std::fs::write(&path, "{}").unwrap();
+        let local = tauri::Url::from_file_path(&path).unwrap();
+        let remote = "https://example.com/analysis.dpw".parse().unwrap();
+        let missing = tauri::Url::from_file_path(path.with_extension("missing")).unwrap();
+        let files = collect_opened_files(&[local, remote, missing]);
+        let canonical = path.canonicalize().unwrap().to_string_lossy().to_string();
+        assert_eq!(
+            files,
+            vec![canonical
+                .strip_prefix("\\\\?\\")
+                .unwrap_or(&canonical)
+                .to_string()]
+        );
+        std::fs::remove_file(&path).unwrap();
+    }
 
     #[test]
     fn unsigned_or_non_tls_channels_are_unavailable() {
@@ -701,11 +764,11 @@ mod update_tests {
             assert_eq!(update_status(&config, "1.57.0")["available"], false);
         }
         let status = update_status(
-            &json!({"pubkey":"public","endpoints":["https://example.com/tauri-preview/latest.json"]}),
+            &json!({"pubkey":"public","endpoints":[updater_channel::ENDPOINT]}),
             "1.57.0",
         );
         assert_eq!(status["available"], true);
-        assert_eq!(status["channel"], "tauri-preview");
+        assert_eq!(status["channel"], "tauri-stable");
     }
 
     #[test]

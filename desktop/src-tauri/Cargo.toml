@@ -1,10 +1,10 @@
 [package]
 name = "datapyn-desktop"
-version = "1.57.0"
+version = "1.0.0"
 description = "DataPyn desktop with isolated Python session kernels"
 authors = ["DataPyn"]
 edition = "2021"
-rust-version = "1.77.2"
+rust-version = "1.90"
 
 [lib]
 name = "datapyn_desktop_lib"
@@ -24,6 +24,10 @@ tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+
+[dev-dependencies]
+base64 = "0.22"
+minisign-verify = "0.2.5"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }

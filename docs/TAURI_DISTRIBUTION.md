@@ -1,58 +1,108 @@
-# DataPyn Tauri Preview: distribuição e atualizações
+# Distribuição DataPyn Tauri
 
-O aplicativo usa `app.datapyn.desktop.preview` e um canal próprio. Builds normais
-não têm chave nem endpoint de atualização e informam que o atualizador está
-indisponível. O servidor e os instaladores do PyQt não são consultados.
+O Tauri tem instalação, armazenamento, assinatura e canal de atualização próprios.
+A migração permanece em `codex/tauri-migration`. O instalador e updater do PyQt6
+não instalam esta versão.
 
-O diálogo permite verificar, baixar e instalar explicitamente. O download mantém
-os bytes no Rust e envia apenas progresso à interface. Antes da instalação, o
-frontend salva os documentos e o estado do workspace; uma falha no salvamento
-impede a instalação. No Windows, o plugin encerra o aplicativo para executar o
-NSIS. No Linux, o usuário reinicia depois da instalação.
+## Plataformas preservadas
 
-O plugin oficial exige assinatura do artefato e verifica a chave pública embutida.
-Endpoints usam HTTPS; nenhum modo de transporte ou certificado inseguro é
-habilitado. Essa assinatura do updater é diferente do certificado Authenticode do
-Windows. [Documentação do updater](https://v2.tauri.app/plugin/updater/),
-[assinatura Windows](https://v2.tauri.app/distribute/sign/windows/).
+A matriz foi conferida no workflow de releases do PyQt6, incluindo a arquitetura
+real dos runners. O runtime Python é gerado nativamente em cada plataforma.
 
-## Gerar artefatos para revisão
+| Plataforma | PyQt6 | Tauri |
+| --- | --- | --- |
+| Windows x64 | Setup.exe e ZIP | NSIS Setup.exe e ZIP |
+| Linux x64, Ubuntu 22.04+ | DEB e tar.gz | DEB, tar.gz e AppImage |
+| macOS Apple Silicon | DMG | DMG e app.tar.gz para updater |
 
-`npm run desktop:build` continua gerando o build de migração com updater
-desabilitado. Para um build assinado, mantenha uma chave exclusiva deste canal e
-configure no ambiente do processo:
+Python, bibliotecas de análise/exportação e drivers SQL Server, PostgreSQL, MySQL,
+MariaDB e Databricks são embutidos, com as autenticações existentes. SQLite também
+está disponível. O usuário não precisa instalar Python ou Node.js.
+Veja [o contrato dos drivers e pré-requisitos nativos](TAURI_RUNTIME_DISTRIBUTION.md).
 
-- `DATAPYN_TAURI_UPDATER_PUBLIC_KEY`: conteúdo da chave pública do Tauri, nunca um caminho.
-- `DATAPYN_TAURI_UPDATER_ENDPOINT`: URL HTTPS pública do manifesto deste canal.
-- `TAURI_SIGNING_PRIVATE_KEY`: chave privada ou caminho aceito pelo CLI Tauri.
-- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: senha da chave, quando houver.
+O Setup Windows inclui WebView2 offline e o MSI Microsoft ODBC 18 x64, verificado
+por hash fixado e assinatura Microsoft. O instalador verifica ODBC 17/18 x64 antes
+de pedir consentimento e permissão de administrador apenas para esse driver.
+Atualizações com o driver presente não repetem a instalação. O uninstall não
+remove drivers compartilhados nem dados do usuário.
 
-Execute `npm run desktop:build -- --signed --ci --bundles nsis` no Windows, ou
-`--bundles appimage` no Linux. A chave privada fica apenas no ambiente do processo;
-o config adicional contém somente a chave pública e o endpoint. Configuração
-incompleta falha antes do build; não há fallback silencioso para um release sem
-assinatura. O runtime Python congelado é incluído e testado antes do empacotamento.
+No ZIP, mantenha os dois executáveis juntos. WebView2 e ODBC são pré-requisitos do
+portátil; o Setup os prepara. Atualizar o ZIP usa o NSIS na mesma pasta, preservando
+o caminho e registrando a instalação no Windows.
 
-O workflow manual `.github/workflows/tauri-signed.yml` usa as variáveis de repositório
-com os dois nomes `DATAPYN_TAURI_UPDATER_*` acima e os secrets exclusivos
-`DATAPYN_TAURI_SIGNING_PRIVATE_KEY` / `DATAPYN_TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
-Ele gera os instaladores assinados e um `latest.json` com os artefatos e suas
-assinaturas por plataforma. O diretório HTTPS dos artefatos é informado na execução.
-Todos os arquivos ficam como artifacts do workflow para revisão; o workflow não
-publica, instala nem cria uma release.
+No Linux, DEB e tar.gz iniciam um AppImage gerenciado em
+`$XDG_DATA_HOME/datapyn-tauri/installation` (padrão `~/.local/share`). Essa cópia
+gravável recebe updates assinados. Upgrade do DEB não substitui uma versão já
+atualizada. `APPIMAGE_EXTRACT_AND_RUN=1` dispensa FUSE. SQL Server exige o driver
+Microsoft nativo; os demais pré-requisitos estão no documento de runtime.
 
-Depois da revisão, disponibilize os instaladores e o manifesto nos endereços
-configurados. Preserve a chave do canal e incremente a versão Tauri antes de uma
-nova release. O updater mantém a comparação padrão de versões; downgrade não é
-habilitado. Não foi criada chave, configurado endpoint de produção, assinado ou
-publicado instalador nesta migração.
+O macOS recebe `.dpw` pelo Finder, inclusive durante startup. App e sidecar são
+assinados pelo bundler; o entitlement permite carregar extensões Python e pacotes
+do usuário. O pipeline verifica o sidecar novamente depois da assinatura.
 
-## Janelas destacadas
+## Identidade e armazenamento
 
-O bridge nativo aceita `window.open` somente para `/popout.html` do domínio de
-assets Tauri ou da origem exata do servidor de desenvolvimento configurado. URLs
-externas, outros arquivos, credenciais na URL e outras portas são recusados. Cada
-janela recebe um identificador próprio e preserva o contexto relacionado do
-WebView para o portal React do Dockview. Fechar a janela principal destrói as
-janelas destacadas. O gesto e o comportamento entre monitores exigem aceite
-visual no desktop de cada plataforma.
+- Nome: `DataPyn Tauri`; identificador: `app.datapyn.tauri`.
+- Versão independente: `1.0.0`, sem alterar a numeração do PyQt6.
+- Windows: `%LOCALAPPDATA%/app.datapyn.tauri`.
+- macOS: `~/Library/Application Support/app.datapyn.tauri`.
+- Linux: `$XDG_DATA_HOME/app.datapyn.tauri` ou `~/.local/share/app.datapyn.tauri`.
+- Credenciais: `DataPyn.Tauri.Connections` no cofre do sistema; notificações usam
+  um namespace Tauri por workspace.
+- Snapshots: cache Tauri próprio do sistema.
+
+O host fixa esses caminhos e não herda um workspace PyQt6 do shell. Configurações
+continuam compatíveis com o formato PyQt6 por importação explícita. A desinstalação
+não apaga workspaces.
+
+## Atualização automática
+
+Feed único:
+`https://github.com/natharuc/datapyn/releases/download/tauri-stable/latest.json`.
+Instaladores usam tags imutáveis `tauri-vX.Y.Z`. O feed valida canal, versão,
+plataforma e URLs da mesma release; o plugin verifica a assinatura com a chave
+pública embutida.
+
+O app verifica após iniciar e a cada seis horas; falhas têm retry após quinze
+minutos. O download fica em segundo plano no recurso nativo mesmo com o diálogo
+fechado. Ao terminar aparece `Atualização pronta`. A instalação exige ação do
+usuário e salva o workspace. Operações em andamento e falha ao salvar impedem a
+instalação. Sair antes de instalar descarta o download e exige baixá-lo novamente.
+
+As releases Tauri usam `make_latest=false`; o feed `tauri-stable` é prerelease para
+não substituir o `latest` consultado pelo PyQt6. A promoção exige as três
+plataformas e rejeita downgrade, mistura de versões e publicação parcial.
+
+## Build e publicação
+
+```powershell
+uv sync --dev --frozen
+npm --prefix desktop ci
+npm --prefix desktop run desktop:build -- --signed --ci --bundles nsis
+```
+
+Linux: `--bundles appimage`. macOS: `--bundles app,dmg`. O build executa quatro
+smokes no sidecar congelado. O staging produz DEB e portáteis conforme
+[TAURI_RELEASE.md](TAURI_RELEASE.md).
+
+Build assinado exige `TAURI_SIGNING_PRIVATE_KEY` e, se aplicável,
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. A chave pública embutida é o padrão;
+`DATAPYN_TAURI_UPDATER_PUBLIC_KEY` divergente é rejeitada. O endpoint é fixo.
+Build sem `--signed` serve apenas para validação.
+
+Os secrets exclusivos `DATAPYN_TAURI_SIGNING_PRIVATE_KEY` e
+`DATAPYN_TAURI_SIGNING_PRIVATE_KEY_PASSWORD` foram configurados no repositório.
+A cópia local está fora do Git em `%LOCALAPPDATA%/DataPyn-Tauri/signing`, restrita
+ao usuário e SYSTEM. `password.dpapi` só abre no mesmo usuário Windows. Guarde
+chave e senha em backup seguro antes de distribuir: perder a chave impede assinar
+updates aceitos pelos clientes instalados.
+
+Push na branch de migração gera artefatos para revisão e não publica releases.
+Publicação exige tag própria ou despacho explícito, conforme TAURI_RELEASE.md.
+A assinatura do updater é diferente do certificado de editor Windows e da
+notarização Apple. Configure essas credenciais para distribuição com editor
+reconhecido/Gatekeeper; assinatura ad hoc não substitui notarização.
+
+Referências: [updater Tauri](https://v2.tauri.app/plugin/updater/),
+[instalador Windows](https://v2.tauri.app/distribute/windows-installer/),
+[releases GitHub](https://docs.github.com/en/rest/releases/releases#create-a-release).

@@ -44,6 +44,10 @@ def main() -> int:
     if importlib.util.find_spec("PyInstaller") is None:
         parser.error("PyInstaller ausente. Execute uv sync --dev ou use o Python da .venv.")
 
+    sys.path.insert(0, str(ROOT / "source"))
+    from datapyn_runtime.distribution import verify_runtime_distribution
+    verify_runtime_distribution()
+
     output_root = ROOT / "build/tauri-runtime" / target
     env = os.environ.copy()
     env["MPLBACKEND"] = "Agg"
@@ -61,7 +65,7 @@ def main() -> int:
                          "DATAPYN_WORKSPACE_PATH": temporary,
                          "DATAPYN_RUNTIME_DATA_DIR": str(Path(temporary) / "packages"),
                          "DATAPYN_SNAPSHOT_ROOT": str(Path(temporary) / "snapshots")}
-            for script in ("smoke_runtime.py", "smoke_parity.py", "smoke_persistence.py"):
+            for script in ("smoke_runtime.py", "smoke_parity.py", "smoke_persistence.py", "smoke_distribution.py"):
                 subprocess.run([sys.executable, str(ROOT / "scripts/tauri" / script), "--executable", str(built)],
                                cwd=ROOT, env=smoke_env, check=True)
     destination = ROOT / "desktop/src-tauri/binaries" / f"datapyn-runtime-{target}{suffix}"

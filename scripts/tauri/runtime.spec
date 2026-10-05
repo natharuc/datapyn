@@ -2,10 +2,13 @@
 """Headless onefile runtime; no Qt frontend or GUI Matplotlib backend."""
 from pathlib import Path
 import shutil
+import sys
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
 
 ROOT = Path(SPEC).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "source"))
+from datapyn_runtime.distribution import PACKAGED_DISTRIBUTIONS
 
 hiddenimports = [
     "datapyn_runtime",
@@ -51,6 +54,9 @@ for package in ("datapyn_runtime", "sqlglot.dialects", "sqlalchemy.dialects", "m
     hiddenimports += collect_submodules(package)
 
 datas = [(str(path), "src/language") for path in (ROOT / "source/src/language").glob("*.json")]
+for distribution in PACKAGED_DISTRIBUTIONS:
+    datas += copy_metadata(distribution, recursive=True)
+datas = list(dict.fromkeys(datas))
 for executable in ("uv", "ruff"):
     tool_path = shutil.which(executable)
     if tool_path:

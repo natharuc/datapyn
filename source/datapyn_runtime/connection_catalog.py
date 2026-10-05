@@ -1,4 +1,4 @@
-"""Preview-owned connection catalog. Credentials live in the OS keyring only."""
+"""Tauri-owned connection catalog. Credentials live in the OS keyring only."""
 
 from __future__ import annotations
 
@@ -11,12 +11,14 @@ import tempfile
 import threading
 import uuid
 
+from .paths import workspace_root
+
 SECRET_KEYS = {"password", "token", "access_token", "client_secret"}
 DATABASE_TYPES = {"sqlite", "sqlserver", "postgresql", "mysql", "mariadb", "databricks"}
 
 
 class CredentialStore:
-    service = "DataPyn.Tauri.Preview.Connections"
+    service = "DataPyn.Tauri.Connections"
 
     def get(self, identifier):
         import keyring
@@ -66,7 +68,7 @@ def without_secrets(value):
 
 class ConnectionCatalog:
     def __init__(self, path=None, credentials=None):
-        root = Path(os.environ.get("DATAPYN_WORKSPACE_PATH") or os.environ.get("DATAPYN_RUNTIME_STATE_PATH") or Path.home() / ".datapyn-tauri-preview")
+        root = workspace_root()
         self.path = Path(path) if path else root / "connections.json"
         self.credentials = credentials or CredentialStore()
         self._lock = threading.RLock()

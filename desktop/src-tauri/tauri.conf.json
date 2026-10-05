@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "DataPyn Tauri",
-  "version": "1.57.0",
-  "identifier": "app.datapyn.desktop.preview",
+  "version": "1.0.0",
+  "identifier": "app.datapyn.tauri",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -15,7 +15,7 @@
         "label": "main",
         "create": false,
         "visible": false,
-        "title": "DataPyn — Prévia Tauri",
+        "title": "DataPyn",
         "width": 1440,
         "height": 940,
         "minWidth": 960,
@@ -45,9 +45,33 @@
     "active": true,
     "createUpdaterArtifacts": false,
     "targets": "all",
-    "icon": ["../../source/src/assets/datapyn-logo.ico", "icons/256x256.png"]
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "shortDescription": "SQL and Python workspace",
+    "category": "DeveloperTool",
+    "fileAssociations": [
+      {
+        "ext": [
+          "dpw"
+        ],
+        "name": "DataPyn workspace",
+        "description": "SQL and Python workspace",
+        "role": "Editor",
+        "mimeType": "application/x-datapyn-tauri-workspace"
+      }
+    ]
   },
   "plugins": {
-    "updater": { "pubkey": "", "endpoints": [] }
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhBNjI0MUY1M0EyRDVFRUEKUldUcVhpMDY5VUZpaXJDMHI3MnU1dFFXQVZpMzJGaVl4YkVYdVdjQ2d5YWVnN1FCTm9CUVFwcDgK",
+      "endpoints": [
+        "https://github.com/natharuc/datapyn/releases/download/tauri-stable/latest.json"
+      ]
+    }
   }
 }

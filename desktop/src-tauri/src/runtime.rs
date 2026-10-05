@@ -13,7 +13,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tokio::sync::oneshot;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
@@ -197,13 +197,26 @@ struct RuntimeClient {
 
 impl RuntimeClient {
     fn start(app: tauri::AppHandle) -> Result<Self, String> {
-        Self::start_with_events(move |message| {
+        let mut command = runtime_command()?;
+        let state = app
+            .path()
+            .app_local_data_dir()
+            .map_err(|error| error.to_string())?;
+        configure_app_storage(&mut command, &state);
+        Self::start_command(command, move |message| {
             let _ = app.emit("runtime-event", message);
         })
     }
 
+    #[cfg(test)]
     fn start_with_events(emit: impl Fn(Value) + Send + 'static) -> Result<Self, String> {
-        let mut command = runtime_command()?;
+        Self::start_command(runtime_command()?, emit)
+    }
+
+    fn start_command(
+        mut command: Command,
+        emit: impl Fn(Value) + Send + 'static,
+    ) -> Result<Self, String> {
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -460,8 +473,44 @@ fn runtime_command() -> Result<Command, String> {
             );
         }
         let mut command = Command::new(runtime);
+        command.env_remove("PYTHONHOME").env_remove("PYTHONPATH");
         command.env("PYTHONUTF8", "1");
         Ok(command)
+    }
+}
+
+fn configure_app_storage(command: &mut Command, state: &std::path::Path) {
+    // Never inherit a PyQt workspace or a development profile from the shell.
+    // The broker selects individual Tauri profiles underneath this directory.
+    command
+        .env("DATAPYN_RUNTIME_STATE_PATH", state)
+        .env("DATAPYN_RUNTIME_DATA_DIR", state)
+        .env_remove("DATAPYN_WORKSPACE_PATH")
+        .env_remove("DATAPYN_SNAPSHOT_ROOT")
+        .env("DATAPYN_TAURI_VERSION", env!("CARGO_PKG_VERSION"));
+}
+
+#[cfg(test)]
+mod storage_tests {
+    use super::*;
+
+    #[test]
+    fn app_storage_does_not_inherit_other_products_or_profiles() {
+        let mut command = Command::new("runtime");
+        command.env("DATAPYN_WORKSPACE_PATH", "legacy-workspace");
+        command.env("DATAPYN_SNAPSHOT_ROOT", "legacy-cache");
+        configure_app_storage(&mut command, std::path::Path::new("tauri-data"));
+        let values: std::collections::HashMap<_, _> = command.get_envs().collect();
+        assert_eq!(values[std::ffi::OsStr::new("DATAPYN_WORKSPACE_PATH")], None);
+        assert_eq!(values[std::ffi::OsStr::new("DATAPYN_SNAPSHOT_ROOT")], None);
+        assert_eq!(
+            values[std::ffi::OsStr::new("DATAPYN_RUNTIME_STATE_PATH")],
+            Some(std::ffi::OsStr::new("tauri-data"))
+        );
+        assert_eq!(
+            values[std::ffi::OsStr::new("DATAPYN_TAURI_VERSION")],
+            Some(std::ffi::OsStr::new(env!("CARGO_PKG_VERSION")))
+        );
     }
 }
 

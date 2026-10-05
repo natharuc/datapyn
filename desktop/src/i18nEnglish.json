@@ -492,5 +492,13 @@
   "Falha na conexão":"Connection failed",
   "Falha ao abrir a conexão":"Unable to open the connection",
   "Preparando sessão…":"Preparing session…",
-  "Conectando e autenticando…":"Connecting and authenticating…"
+  "Conectando e autenticando…":"Connecting and authenticating…",
+  "Canal estável":"Stable channel",
+  "Novas versões são verificadas e baixadas automaticamente.":"New versions are checked and downloaded automatically.",
+  "O download continua em segundo plano ao fechar esta janela.":"The download continues in the background when you close this window.",
+  "Atualização pronta":"Update ready",
+  "Este build não tem uma chave de atualização Tauri configurada.":"This build has no Tauri update key configured.",
+  "Este build não tem o canal exclusivo do DataPyn Tauri configurado.":"This build has no isolated DataPyn Tauri update channel configured.",
+  "No Linux, abra o DataPyn pelo AppImage ou pelo launcher do pacote para usar atualizações automáticas.":"On Linux, open DataPyn through the AppImage or package launcher to use automatic updates.",
+  "Não foi possível determinar a pasta desta instalação para atualizar o DataPyn Tauri.":"Unable to determine this installation's folder for the DataPyn Tauri update."
 }

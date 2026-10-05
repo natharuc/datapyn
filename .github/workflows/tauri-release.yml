@@ -1,0 +1,212 @@
+name: DataPyn Tauri - isolated release
+
+on:
+  push:
+    branches:
+      - "codex/tauri-migration"
+    tags:
+      - "tauri-v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing independent Tauri tag (tauri-vX.Y.Z)"
+        required: true
+        default: "tauri-v1.0.0"
+        type: string
+      publish:
+        description: "Publish all platform installers and advance only the tauri-stable updater feed"
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+# Serialize promotions; an older successful build must never replace a newer feed.
+concurrency:
+  group: datapyn-tauri-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+      commit: ${{ steps.release.outputs.commit }}
+      publish: ${{ steps.release.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Verify isolated version and source
+        id: release
+        env:
+          DATAPYN_RELEASE_TAG: ${{ inputs.release_tag }}
+          DATAPYN_RELEASE_PUBLISH: ${{ inputs.publish }}
+        run: node scripts/tauri/release.mjs workflow-request
+      - name: Release pipeline tests
+        run: node --test scripts/tauri/release.test.mjs scripts/tauri/linux-package.test.mjs scripts/tauri/publish.test.mjs scripts/tauri/windows-prerequisites.test.mjs
+
+  build:
+    needs: prepare
+    name: Tauri (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows-x86_64
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+          - os: ubuntu-22.04
+            platform: linux-x86_64
+            target: x86_64-unknown-linux-gnu
+            bundles: appimage
+          - os: macos-14
+            platform: darwin-aarch64
+            target: aarch64-apple-darwin
+            bundles: app,dmg
+    defaults:
+      run:
+        shell: bash
+    env:
+      DATAPYN_TAURI_UPDATER_PUBLIC_KEY: ${{ vars.DATAPYN_TAURI_UPDATER_PUBLIC_KEY }}
+      DATAPYN_TAURI_UPDATER_ENDPOINT: https://github.com/natharuc/datapyn/releases/download/tauri-stable/latest.json
+      APPIMAGE_EXTRACT_AND_RUN: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: ${{ runner.os == 'macOS' && 'arm64' || 'x64' }}
+      - uses: astral-sh/setup-uv@v3
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "desktop/src-tauri -> target"
+      - name: Verify dedicated updater signing key
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.DATAPYN_TAURI_SIGNING_PRIVATE_KEY }}
+        run: node --input-type=module -e "import {signedConfiguration} from './scripts/tauri/release.mjs'; signedConfiguration(process.env);"
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf unixodbc-dev libmariadb-dev
+      - name: macOS database prerequisites
+        if: runner.os == 'macOS'
+        run: brew install unixodbc
+      - name: Install dependencies
+        run: |
+          uv sync --dev --frozen
+          npm --prefix desktop ci
+      - name: Validate frontend, runtime and native contracts
+        run: |
+          node --test scripts/tauri/release.test.mjs scripts/tauri/linux-package.test.mjs scripts/tauri/publish.test.mjs scripts/tauri/windows-prerequisites.test.mjs
+          npm --prefix desktop test
+          uv run pytest -c runtime_tests/pytest.ini runtime_tests -q
+          cargo fmt --manifest-path desktop/src-tauri/Cargo.toml --check
+          cargo test --manifest-path desktop/src-tauri/Cargo.toml --locked --lib
+      - name: Build signed installers and frozen runtime
+        working-directory: desktop
+        env:
+          TARGET: ${{ matrix.target }}
+          BUNDLES: ${{ matrix.bundles }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.DATAPYN_TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.DATAPYN_TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.DATAPYN_TAURI_APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.DATAPYN_TAURI_APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ vars.DATAPYN_TAURI_APPLE_SIGNING_IDENTITY || '-' }}
+          APPLE_ID: ${{ secrets.DATAPYN_TAURI_APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.DATAPYN_TAURI_APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ vars.DATAPYN_TAURI_APPLE_TEAM_ID }}
+        run: npm run desktop:build -- --signed --ci --target "$TARGET" --bundles "$BUNDLES"
+      - name: Smoke macOS sidecar after hardened-runtime signing
+        if: runner.os == 'macOS'
+        run: |
+          SIDECAR="desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/DataPyn Tauri.app/Contents/MacOS/datapyn-runtime"
+          uv run python scripts/tauri/smoke_runtime.py --executable "$SIDECAR"
+          uv run python scripts/tauri/smoke_parity.py --executable "$SIDECAR"
+          uv run python scripts/tauri/smoke_persistence.py --executable "$SIDECAR"
+          uv run python scripts/tauri/smoke_distribution.py --executable "$SIDECAR"
+      - name: Stage isolated installers, portable archives and platform manifest
+        env:
+          TARGET: ${{ matrix.target }}
+          PLATFORM: ${{ matrix.platform }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: node scripts/tauri/release.mjs stage "desktop/src-tauri/target/$TARGET/release/bundle" "$PLATFORM" "$VERSION" "build/tauri-distribution/$PLATFORM" "desktop/src-tauri/target/$TARGET/release"
+      - name: Verify real updater signatures with the embedded public key
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          DATAPYN_UPDATE_ARTIFACT=$(node --input-type=module -e "import {readFileSync} from 'node:fs';import{resolve}from'node:path';const p=process.env.PLATFORM;const manifest=JSON.parse(readFileSync('build/tauri-distribution/'+p+'/manifest-'+p+'.json'));console.log(resolve('build/tauri-distribution/'+p,decodeURIComponent(manifest.platforms[p].url.split('/').at(-1))));")
+          export DATAPYN_UPDATE_ARTIFACT
+          cargo test --manifest-path desktop/src-tauri/Cargo.toml --locked --lib updater_channel::tests::verify_distribution_signature -- --ignored
+      - name: Inspect Debian package and macOS signature
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          if [ "$PLATFORM" = "linux-x86_64" ]; then
+            dpkg-deb --info build/tauri-distribution/linux-x86_64/*.deb
+            dpkg-deb --contents build/tauri-distribution/linux-x86_64/*.deb
+          elif [ "$PLATFORM" = "darwin-aarch64" ]; then
+            codesign --verify --deep --strict "desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/DataPyn Tauri.app"
+          fi
+      - name: Preserve all signed platform artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: datapyn-tauri-release-${{ matrix.platform }}
+          path: build/tauri-distribution/${{ matrix.platform }}/
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    needs: [prepare, build]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: datapyn-tauri-release-*
+          path: incoming
+      - name: Require complete platform release and generate checksums
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: node scripts/tauri/release.mjs combine incoming build/tauri-release "$VERSION"
+      - name: Preserve complete distribution for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: datapyn-tauri-complete-release
+          path: build/tauri-release/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish version and promote only the Tauri feed
+        if: needs.prepare.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.DATAPYN_TAURI_RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.prepare.outputs.commit }}
+        run: node scripts/tauri/publish.mjs build/tauri-release "$RELEASE_TAG" "$RELEASE_COMMIT"

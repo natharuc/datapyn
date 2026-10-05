@@ -846,7 +846,7 @@ mod tests {
 
     #[test]
     fn com_activation_accepts_only_exact_identity_and_bounded_opaque_notice_id() {
-        let app_id = "app.datapyn.desktop.preview";
+        let app_id = "app.datapyn.tauri";
         let id = "0123456789abcdef";
         assert_eq!(
             native_activation_id(app_id, app_id, &format!("datapyn-open:{id}")),
