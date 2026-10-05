@@ -14,7 +14,7 @@ const server=await createServer({root,cacheDir:"node_modules/.vite-completion-te
   name:"completion-fixture",
   configureServer(server){server.middlewares.use(route,async(_request,response)=>{
     response.setHeader("Content-Type","text/html");
-    response.end(await server.transformIndexHtml(route,'<!doctype html><html><body><div id="root" style="width:720px;height:250px;contain:paint;transform:translateZ(0)"></div><script type="module" src="/tests/completion.fixture.tsx"></script></body></html>'));
+    response.end(await server.transformIndexHtml(route,'<!doctype html><html><head><script src="/webview-context-menu.js"></script></head><body><div id="root" style="width:720px;height:250px;contain:paint;transform:translateZ(0)"></div><script type="module" src="/tests/completion.fixture.tsx"></script></body></html>'));
   });},
 }],server:{host:"127.0.0.1",port:0,strictPort:false}});
 let browser;
@@ -24,6 +24,8 @@ await server.listen();
 try {
   browser=await chromium.launch({headless:true});
   const page=await browser.newPage({viewport:{width:1000,height:700}});
+  // Tauri embeds this script in every frame before the HTML loads it again.
+  await page.addInitScript({path:resolve(root,"public/webview-context-menu.js")});
   page.setDefaultTimeout(5000);
   const browserErrors=[];page.on("pageerror",error=>browserErrors.push(error.message));
   await page.goto(`http://127.0.0.1:${server.httpServer.address().port}${route}`);
@@ -45,6 +47,52 @@ try {
   const configure=value=>page.evaluate(value=>window.completionTest.configure(value),value);
   async function labels(expected){await page.waitForFunction(expected=>expected.every(label=>window.completionTest.labels().includes(label)),expected,{timeout:3000});return page.evaluate(()=>window.completionTest.labels());}
   const value=()=>page.evaluate(()=>window.completionTest.editor().getValue());
+
+  await test("browser context menus are cancelled on blank, header, dialog and keyboard targets without consuming custom handlers",async()=>{
+    await configure({code:"SELECT |",context:context(),picker:true});
+    const result=await page.evaluate(()=>{
+      const dialog=document.createElement("dialog");dialog.innerHTML='<input aria-label="Dialog context-menu target">';document.body.append(dialog);dialog.show();
+      const button=document.createElement("button");button.id="custom-context-menu-target";button.textContent="Custom context-menu target";document.body.append(button);
+      const observed=[];
+      button.addEventListener("contextmenu",event=>{
+        observed.push({cancelled:event.defaultPrevented,button:event.button});button.dataset.observed=JSON.stringify(observed);event.stopPropagation();
+      });
+      const targets=[document.body,document.querySelector(".block-header"),dialog.querySelector("input")];
+      const cancelled=targets.map(target=>{
+        const event=new MouseEvent("contextmenu",{bubbles:true,cancelable:true,button:2});target.dispatchEvent(event);return event.defaultPrevented;
+      });
+      dialog.remove();return cancelled;
+    });
+    assert.deepEqual(result,[true,true,true]);
+    try {
+      const target=page.locator("#custom-context-menu-target");
+      await target.click({button:"right"});await target.focus();await page.keyboard.press("Shift+F10");
+      await page.waitForFunction(()=>JSON.parse(document.getElementById("custom-context-menu-target").dataset.observed??"[]").length===2);
+      assert.deepEqual(await target.evaluate(node=>JSON.parse(node.dataset.observed)),[{cancelled:true,button:2},{cancelled:true,button:-1}]);
+    } finally {await page.evaluate(()=>document.getElementById("custom-context-menu-target")?.remove());}
+  });
+  await test("native initialization cancels context menus in child documents even when their target stops propagation",async()=>{
+    await page.evaluate(async()=>{
+      const frame=document.createElement("iframe");frame.id="context-menu-child";frame.srcdoc='<button id="target">Child target</button>';
+      const loaded=new Promise(resolve=>frame.addEventListener("load",resolve,{once:true}));document.body.append(frame);await loaded;
+    });
+    try {
+      const frame=page.frames().find(frame=>frame.parentFrame()===page.mainFrame());assert(frame,"Child document loaded");
+      assert.deepEqual(await frame.evaluate(()=>{
+        const target=document.getElementById("target"),observed=[];
+        target.addEventListener("contextmenu",event=>{observed.push(event.defaultPrevented);event.stopPropagation();});
+        const event=new MouseEvent("contextmenu",{bubbles:true,cancelable:true,button:2});target.dispatchEvent(event);
+        return {cancelled:event.defaultPrevented,observed};
+      }),{cancelled:true,observed:[true]});
+    } finally {await page.evaluate(()=>document.getElementById("context-menu-child")?.remove());}
+  });
+  await test("the global browser guard preserves the actual Monaco right-click menu",async()=>{
+    await configure({code:"SELECT customer_id| FROM customers",context:context()});
+    await page.locator(".monaco-editor .view-lines").click({button:"right",position:{x:70,y:10}});
+    await page.locator(".monaco-menu .action-item").first().waitFor({state:"visible"});
+    assert(await page.locator(".monaco-menu").isVisible());
+    await page.keyboard.press("Escape");assert.equal(await page.locator(".monaco-menu").count(),0);
+  });
 
   for(const [dbType,quote] of [["sqlserver",name=>name],["mysql",name=>name],["mariadb",name=>name],["databricks",name=>name],["postgresql",name=>`"${name}"`],["sqlite",name=>name]]){
     await test(`${dbType}: ordinary typing opens focused table suggestions without a shortcut`,async()=>{

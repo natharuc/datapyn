@@ -17,6 +17,8 @@ use std::{
 };
 use tauri::{Emitter, Manager, State};
 
+const WEBVIEW_CONTEXT_MENU_SCRIPT: &str = include_str!("../../public/webview-context-menu.js");
+
 #[derive(Default)]
 struct StartupFiles(Mutex<Vec<String>>);
 
@@ -213,7 +215,7 @@ fn close_popout(
 }
 
 /// Called immediately after building each window, on Tauri's native UI thread.
-fn disable_browser_accelerators(window: &tauri::WebviewWindow) -> Result<(), String> {
+fn disable_browser_actions(window: &tauri::WebviewWindow) -> Result<(), String> {
     #[cfg(windows)]
     {
         use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
@@ -222,25 +224,32 @@ fn disable_browser_accelerators(window: &tauri::WebviewWindow) -> Result<(), Str
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         window
             .with_webview(move |webview| {
-                // WebView2 intercepts F5/Ctrl+R before DOM preventDefault. Disable
-                // browser actions while retaining DOM key events and text editing.
+                // Disable WebView2's built-in menu, including over frames. Page
+                // contextmenu events remain available to DataPyn's custom menus.
+                // WebView2 also intercepts F5/Ctrl+R before DOM preventDefault;
+                // keep DOM key events and text editing while disabling those actions.
                 // SAFETY: Tauri runs this closure on the controller's COM/UI thread.
                 let result = unsafe {
-                    (|| -> windows_core::Result<bool> {
-                        let settings = webview
-                            .controller()
-                            .CoreWebView2()?
-                            .Settings()?
-                            .cast::<ICoreWebView2Settings3>()?;
+                    (|| -> windows_core::Result<(bool, bool)> {
+                        let settings = webview.controller().CoreWebView2()?.Settings()?;
+                        settings.SetAreDefaultContextMenusEnabled(false)?;
+                        let mut context_menus_enabled = windows_core::BOOL(1);
+                        settings.AreDefaultContextMenusEnabled(&mut context_menus_enabled)?;
+                        let settings = settings.cast::<ICoreWebView2Settings3>()?;
                         settings.SetAreBrowserAcceleratorKeysEnabled(false)?;
-                        let mut enabled = windows_core::BOOL(1);
-                        settings.AreBrowserAcceleratorKeysEnabled(&mut enabled)?;
-                        Ok(enabled.as_bool())
+                        let mut accelerators_enabled = windows_core::BOOL(1);
+                        settings.AreBrowserAcceleratorKeysEnabled(&mut accelerators_enabled)?;
+                        Ok((
+                            context_menus_enabled.as_bool(),
+                            accelerators_enabled.as_bool(),
+                        ))
                     })()
                 }
                 .map_err(|error| error.to_string())
-                .and_then(|enabled| {
-                    if enabled {
+                .and_then(|(context_menus_enabled, accelerators_enabled)| {
+                    if context_menus_enabled {
+                        Err("WebView2 did not disable default context menus".into())
+                    } else if accelerators_enabled {
                         Err("WebView2 did not disable browser accelerator keys".into())
                     } else {
                         Ok(())
@@ -253,7 +262,7 @@ fn disable_browser_accelerators(window: &tauri::WebviewWindow) -> Result<(), Str
         // blocking wait if this function is accidentally moved to another thread.
         receiver
             .try_recv()
-            .map_err(|_| "Native shortcut setup must run on the UI thread".to_string())?
+            .map_err(|_| "Native browser setup must run on the UI thread".to_string())?
     }
     #[cfg(not(windows))]
     {
@@ -589,12 +598,13 @@ pub fn run() {
                 .find(|config| config.label == "splash")
                 .ok_or("Splash window configuration is unavailable")?;
             let splash = tauri::WebviewWindowBuilder::from_config(app, splash_config)?
+                .initialization_script_for_all_frames(WEBVIEW_CONTEXT_MENU_SCRIPT)
                 .on_navigation({
                     let origin = origin.clone();
                     move |url| local_asset(url, "/splash.html", origin.as_ref())
                 })
                 .build()?;
-            disable_browser_accelerators(&splash).map_err(std::io::Error::other)?;
+            disable_browser_actions(&splash).map_err(std::io::Error::other)?;
             let config = app
                 .config()
                 .app
@@ -604,6 +614,7 @@ pub fn run() {
                 .ok_or("Main window configuration is unavailable")?;
             let main = tauri::WebviewWindowBuilder::from_config(app, config)?
                 .visible(false)
+                .initialization_script_for_all_frames(WEBVIEW_CONTEXT_MENU_SCRIPT)
                 .on_new_window(move |url, features| {
                     if !local_popout(&url, origin.as_ref()) {
                         return tauri::webview::NewWindowResponse::Deny;
@@ -620,6 +631,7 @@ pub fn run() {
                         tauri::WebviewUrl::External("about:blank".parse().unwrap()),
                     )
                     .window_features(features)
+                    .initialization_script_for_all_frames(WEBVIEW_CONTEXT_MENU_SCRIPT)
                     .initialization_script(label_script)
                     .on_navigation({
                         let origin = origin.clone();
@@ -634,7 +646,7 @@ pub fn run() {
                     .build()
                     {
                         Ok(window) => {
-                            if let Err(error) = disable_browser_accelerators(&window) {
+                            if let Err(error) = disable_browser_actions(&window) {
                                 let _ = window.close();
                                 let _ = handle.emit("datapyn-popout-error", error);
                                 return tauri::webview::NewWindowResponse::Deny;
@@ -656,7 +668,7 @@ pub fn run() {
                     }
                 })
                 .build()?;
-            disable_browser_accelerators(&main).map_err(std::io::Error::other)?;
+            disable_browser_actions(&main).map_err(std::io::Error::other)?;
             // A closed preview process cannot route old immutable toast targets.
             app.state::<execution_notifications::NativeNotifications>().initialize(app.handle());
             Ok(())
