@@ -55,6 +55,19 @@ fn wide_path(path: &Path) -> HSTRING {
     HSTRING::from_wide(&path.as_os_str().encode_wide().collect::<Vec<_>>())
 }
 
+fn same_executable_path(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+    // Shell links can return different casing or a DOS 8.3 path. Resolve both
+    // existing files through Windows instead of repeatedly rewriting a valid
+    // shortcut because their textual paths differ.
+    match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
 unsafe fn read_app_id(link: &IShellLinkW) -> Result<String, NativeFailure> {
     let store: IPropertyStore = link
         .cast()
@@ -112,7 +125,9 @@ fn install_shortcut(path: &Path, executable: &Path) -> Result<bool, NativeFailur
             .position(|item| *item == 0)
             .unwrap_or(target.len());
         let target = std::path::PathBuf::from(std::ffi::OsString::from_wide(&target[..end]));
-        if target == executable && read_activator_clsid(&link).ok() == Some(ACTIVATOR_CLSID) {
+        if same_executable_path(&target, executable)
+            && read_activator_clsid(&link).ok() == Some(ACTIVATOR_CLSID)
+        {
             return Ok(false);
         }
     }
@@ -246,7 +261,7 @@ pub(crate) fn ensure(app: &tauri::AppHandle) -> Result<String, NativeFailure> {
     if app.config().identifier != APP_ID {
         return Err(failure(
             "Identity.Validate",
-            "Registration is restricted to the DataPyn preview identifier",
+            "Registration is restricted to the DataPyn Tauri identifier",
         ));
     }
     let identity_dir = app
@@ -385,6 +400,11 @@ mod tests {
         assert_eq!(read_activator_clsid(&link).unwrap(), ACTIVATOR_CLSID);
         let moved_executable = directory.join("datapyn-portable.exe");
         std::fs::copy(&executable, &moved_executable).unwrap();
+        assert!(same_executable_path(
+            &moved_executable,
+            &directory.join("DATAPYN-PORTABLE.EXE")
+        ));
+        assert!(!same_executable_path(&moved_executable, &executable));
         assert!(install_shortcut(&shortcut, &moved_executable).unwrap());
         assert!(!install_shortcut(&shortcut, &moved_executable).unwrap());
         // A corrupt/unrelated preexisting file cannot be silently overwritten.

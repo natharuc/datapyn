@@ -13,7 +13,7 @@ real dos runners. O runtime Python é gerado nativamente em cada plataforma.
 | --- | --- | --- |
 | Windows x64 | Setup.exe e ZIP | NSIS Setup.exe e ZIP |
 | Linux x64, Ubuntu 22.04+ | DEB e tar.gz | DEB, tar.gz e AppImage |
-| macOS Apple Silicon | DMG | DMG e app.tar.gz para updater |
+| macOS 14+, Apple Silicon | DMG | DMG e app.tar.gz para updater |
 
 Python, bibliotecas de análise/exportação e drivers SQL Server, PostgreSQL, MySQL,
 MariaDB e Databricks são embutidos, com as autenticações existentes. SQLite também

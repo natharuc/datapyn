@@ -15,7 +15,7 @@ A referência de compatibilidade é a distribuição publicada por
 | --- | --- | --- |
 | Windows | x64 | Setup `.exe`, ZIP portátil |
 | Linux | x64, build Ubuntu 22.04 | `.deb`, `.tar.gz` portátil |
-| macOS | Apple Silicon arm64, build macOS 14 | `.dmg` |
+| macOS | Apple Silicon arm64, macOS 14+ | `.dmg` |
 
 O runtime precisa ser compilado nativamente para cada arquitetura; PyInstaller
 não permite gerar o sidecar macOS/Linux em uma máquina Windows. `build_runtime.py`
