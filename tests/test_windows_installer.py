@@ -18,6 +18,7 @@ from src.services.windows_installer import (
     _updater_runs_from_install_dir,
     compare_versions,
     detect_existing_installation,
+    fetch_latest_release,
     find_windows_zip_asset,
     install_from_zip,
     is_newer_version,
@@ -48,6 +49,40 @@ class TestReleaseAssets:
         found = find_windows_zip_asset(assets)
         assert found is not None
         assert found.name.endswith("-windows.zip")
+
+    def test_fetch_latest_release_picks_unversioned_setup(self):
+        payload = {
+            "tag_name": "v1.61.0",
+            "body": "",
+            "assets": [
+                {
+                    "name": "DataPyn-1.61.0-windows.zip",
+                    "browser_download_url": "https://example.invalid/DataPyn-1.61.0-windows.zip",
+                    "size": 10,
+                },
+                {
+                    "name": "DataPyn-Setup.exe",
+                    "browser_download_url": "https://example.invalid/DataPyn-Setup.exe",
+                    "size": 5,
+                },
+            ],
+        }
+
+        class _Response:
+            def read(self) -> bytes:
+                return json.dumps(payload).encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args: object) -> bool:
+                return False
+
+        with patch("src.services.windows_installer.urlopen", return_value=_Response()):
+            release = fetch_latest_release()
+
+        assert release.setup_asset is not None
+        assert release.setup_asset.name == "DataPyn-Setup.exe"
 
 
 class TestZipInstall:

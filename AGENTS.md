@@ -67,3 +67,8 @@ The retained PyQt source and scripts support maintenance on historical reference
 ### External services (optional)
 
 Live databases, GitHub Copilot (`gh` auth), and GitHub Releases (auto-update) are **not** required for the default test suite. No in-repo database container is provided.
+
+## tlc-spec-lean
+
+profile: standard
+budget: 150k

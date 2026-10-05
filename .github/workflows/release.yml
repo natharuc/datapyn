@@ -202,13 +202,9 @@ jobs:
       - name: Build | Generate DataPyn-Setup.exe
         run: uv run pyinstaller installer/datapyn_setup.spec --clean
 
-      - name: Build | Rename setup executable
+      - name: Build | Place DataPyn-Setup.exe
         shell: pwsh
-        run: |
-          $version = "${{ needs.release.outputs.version }}"
-          Move-Item -Force "dist\DataPyn-Setup.exe" "DataPyn-Setup-${version}.exe"
-          Copy-Item "DataPyn-Setup-${version}.exe" "DataPyn-Setup.exe"
-          Write-Host "Setup executables ready"
+        run: Move-Item -Force "dist\DataPyn-Setup.exe" "DataPyn-Setup.exe"
 
       - name: Publish | Upload artifacts to GitHub Release
         uses: softprops/action-gh-release@v2
@@ -216,7 +212,6 @@ jobs:
           tag_name: ${{ needs.release.outputs.tag }}
           files: |
             DataPyn-${{ needs.release.outputs.version }}-windows.zip
-            DataPyn-Setup-${{ needs.release.outputs.version }}.exe
             DataPyn-Setup.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -285,9 +280,39 @@ jobs:
             libnspr4 \
             libgbm1 \
             libasound2 \
+            fuse3 \
+            libarchive-tools \
+            rpm \
+            zstd \
             ruby \
             ruby-dev \
             build-essential
+
+      - name: Setup | Install pinned Type 2 AppImage toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          source scripts/linux/appimage-toolchain.env
+          test "${APPIMAGE_ARCHITECTURE}" = "x86_64"
+          test "${APPIMAGE_RUNTIME_KIND}" = "type2"
+          test "${APPIMAGETOOL_VERSION}" != "continuous"
+          test "${APPIMAGE_RUNTIME_VERSION}" != "continuous"
+          tool_path="${RUNNER_TEMP}/appimagetool-x86_64.AppImage"
+          runtime_path="${RUNNER_TEMP}/runtime-x86_64"
+          curl --fail --location --retry 3 --output "${tool_path}" "${APPIMAGETOOL_URL}"
+          printf '%s  %s\n' "${APPIMAGETOOL_SHA256}" "${tool_path}" | sha256sum --check --status
+          curl --fail --location --retry 3 --output "${runtime_path}" "${APPIMAGE_RUNTIME_URL}"
+          printf '%s  %s\n' "${APPIMAGE_RUNTIME_SHA256}" "${runtime_path}" | sha256sum --check --status
+          chmod 755 "${tool_path}" "${runtime_path}"
+          echo "DATAPYN_APPIMAGE_TOOL=${tool_path}" >> "${GITHUB_ENV}"
+          echo "DATAPYN_APPIMAGE_RUNTIME=${runtime_path}" >> "${GITHUB_ENV}"
+
+      - name: Verify | Require FUSE3 AppImage environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -x "$(command -v fusermount3)"
+          bash scripts/linux/package.sh --validate-fuse3-environment
 
       - name: Setup | Install project dependencies
         run: uv sync --dev
@@ -298,20 +323,58 @@ jobs:
       - name: Build | Generate Linux binary with PyInstaller
         run: uv run pyinstaller scripts/datapyn.spec --clean
 
-      - name: Build | Package .deb and tar.gz
+      - name: Build | Package complete Linux release set
+        env:
+          DATAPYN_RELEASE_TAG: ${{ needs.release.outputs.tag }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          DATAPYN_PACMAN_COMMAND: ${{ github.workspace }}/scripts/linux/pacman-in-arch-container.sh
         run: |
-          chmod +x scripts/linux/package.sh scripts/linux/datapyn-wrapper.sh scripts/linux/postinst.sh scripts/linux/prerm.sh
+          chmod +x scripts/linux/package.sh scripts/linux/release_metadata.py scripts/linux/datapyn-wrapper.sh scripts/linux/datapyn-appimage-apprun.sh scripts/linux/postinst.sh scripts/linux/prerm.sh scripts/linux/pacman-in-arch-container.sh
           bash scripts/linux/package.sh "${{ needs.release.outputs.version }}"
+
+      - name: Verify | Gate complete Linux release metadata
+        env:
+          DATAPYN_RELEASE_TAG: ${{ needs.release.outputs.tag }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          bash scripts/linux/package.sh --validate-release \
+            "${{ needs.release.outputs.version }}" "${{ needs.release.outputs.tag }}"
+
+      - name: Verify | Run AppImage FUSE3 smoke tests
+        env:
+          DATAPYN_APPIMAGE_VERSION: ${{ needs.release.outputs.version }}
+        run: bash scripts/linux/run_fuse3_smoke_container.sh "$DATAPYN_APPIMAGE_VERSION"
+
+      - name: Verify | Run AppImage extract-and-run fallback on host
+        env:
+          DATAPYN_APPIMAGE_SMOKE_ARTIFACT: ${{ github.workspace }}/DataPyn-${{ needs.release.outputs.version }}-x86_64.AppImage
+          QTWEBENGINE_DISABLE_SANDBOX: "1"
+          QTWEBENGINE_CHROMIUM_FLAGS: "--no-sandbox"
+        run: uv run pytest tests/test_linux_appimage.py -m integration -k extract_and_run -q
+
+      - name: Verify | Resolve Linux release asset list
+        id: release_assets
+        run: |
+          {
+            echo 'files<<EOF'
+            bash scripts/linux/package.sh --print-release-assets "${{ needs.release.outputs.version }}"
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Verify | Summarize Linux release assets
+        env:
+          LINUX_RELEASE_ASSETS: ${{ steps.release_assets.outputs.files }}
+        run: |
+          echo "=== Linux release assets ready for ${{ needs.release.outputs.tag }} ==="
+          while IFS= read -r asset; do
+            [[ -z "$asset" ]] || ls -lh -- "$asset"
+          done <<< "$LINUX_RELEASE_ASSETS"
 
       - name: Publish | Upload Linux installers to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.release.outputs.tag }}
-          files: |
-            datapyn_${{ needs.release.outputs.version }}_amd64.deb
-            datapyn_amd64.deb
-            DataPyn-${{ needs.release.outputs.version }}-linux-x86_64.tar.gz
-            DataPyn-linux-x86_64.tar.gz
+          files: ${{ steps.release_assets.outputs.files }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -361,7 +424,5 @@ jobs:
           tag_name: ${{ needs.release.outputs.tag }}
           files: |
             DataPyn-${{ needs.release.outputs.version }}-macos-arm64.dmg
-            DataPyn-macos-arm64.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-

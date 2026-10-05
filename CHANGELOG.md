@@ -2,6 +2,160 @@
 
 <!-- version list -->
 
+## v1.60.2 (2026-09-17)
+
+### Bug Fixes
+
+- **installer**: Drop bundled libstdc++ from linux payload
+  ([`1855005`](https://github.com/natharuc/datapyn/commit/1855005a2965127153f3d01521a53821d4804f0a))
+
+- **installer**: Publish a single unversioned windows setup
+  ([`09d94ba`](https://github.com/natharuc/datapyn/commit/09d94bacd5908a63970c8aefbaeb663441fd0eb5))
+
+- **installer**: Publish linux assets under versioned names only
+  ([`6b0d2ad`](https://github.com/natharuc/datapyn/commit/6b0d2ad43970613e070df283bca71c088af72f54))
+
+- **installer**: Publish macos dmg under a versioned name only
+  ([`71f7db8`](https://github.com/natharuc/datapyn/commit/71f7db894edb6f67fa910e063939c4c690f5c54a))
+
+- **linux**: Use the host C++ runtime and publish versioned assets only
+  ([`ccff008`](https://github.com/natharuc/datapyn/commit/ccff008f891dcfb2455a7642ce792e45d4c15f10))
+
+- **linux-installers**: Clean rejected release outputs
+  ([`c9e9031`](https://github.com/natharuc/datapyn/commit/c9e903190f57763b23d2e3c774144bac362569a7))
+
+- **packaging**: Remove stale release aliases
+  ([`80db0c1`](https://github.com/natharuc/datapyn/commit/80db0c1a922e221dbd272651954d2b12296a6cc6))
+
+### Documentation
+
+- **spec**: Record linux installer boundary handoff
+  ([`1392301`](https://github.com/natharuc/datapyn/commit/1392301f40a2cc1e483dbda6207a40b9c7839ee8))
+
+- **spec**: Record linux installer verification findings
+  ([`1dbc5fb`](https://github.com/natharuc/datapyn/commit/1dbc5fb626095d29f2d1151c6ba2a109924c03c1))
+
+- **spec**: Record linux installers verification
+  ([`e7b358c`](https://github.com/natharuc/datapyn/commit/e7b358cb9959fad6a9a67dadd1487a8c96334199))
+
+- **spec**: Record packaging fix handoff
+  ([`0031638`](https://github.com/natharuc/datapyn/commit/00316385bddf36faf05ee3ee9ef8d15db99e5a62))
+
+- **specs**: Add linux installer checks and apply plan review
+  ([`76e83c4`](https://github.com/natharuc/datapyn/commit/76e83c49fbd9fddf241abab8d93f2a0106fb7320))
+
+- **specs**: Plan linux installer runtime and versioned-only assets
+  ([`b6b4b11`](https://github.com/natharuc/datapyn/commit/b6b4b11d85f2c47312294742f0f2762ed72f3189))
+
+- **specs**: Record linux installer checks approval
+  ([`ee07590`](https://github.com/natharuc/datapyn/commit/ee075902c56e36e2c34e4c09e0fe1add9be268d9))
+
+- **specs**: Record linux installer fix handoff
+  ([`7f14b02`](https://github.com/natharuc/datapyn/commit/7f14b0245c13d21b28a1a6987bdd5fc149bbb8cc))
+
+- **specs**: Record linux installers re-verification findings
+  ([`85d83a9`](https://github.com/natharuc/datapyn/commit/85d83a9f49d59fc40ef12a48bd9ab3a84066664d))
+
+- **specs**: Record linux installers verification findings
+  ([`f78ed79`](https://github.com/natharuc/datapyn/commit/f78ed7975a2392d2425de58dbb1a01310cbc0504))
+
+- **specs**: Record linux-installers build handoff
+  ([`5082e8a`](https://github.com/natharuc/datapyn/commit/5082e8ab266f4d85c44660869e143c569ce00b7b))
+
+### Heuristic
+
+- Merge pull request #162 from natharuc/fix/linux-app
+  ([`ccff008`](https://github.com/natharuc/datapyn/commit/ccff008f891dcfb2455a7642ce792e45d4c15f10))
+
+### Testing
+
+- **linux-installers**: Cover package version boundaries
+  ([`92ec965`](https://github.com/natharuc/datapyn/commit/92ec9655ffb13c53ae01aa839d4a0790f352a227))
+
+
+## v1.60.1 (2026-09-09)
+
+### Bug Fixes
+
+- **ci**: Harden Linux package validation
+  ([`2c7fc61`](https://github.com/natharuc/datapyn/commit/2c7fc615bd9bb37767b343fa5bf92a0d00552054))
+
+### Heuristic
+
+- Merge pull request #161 from natharuc/feat/linux-distribution-installers
+  ([`2c7fc61`](https://github.com/natharuc/datapyn/commit/2c7fc615bd9bb37767b343fa5bf92a0d00552054))
+
+- Merge remote-tracking branch 'origin/main' into feat/linux-distribution-installers
+  ([`c91fa3a`](https://github.com/natharuc/datapyn/commit/c91fa3afed0d8e50ab056b7fb016776622d48766))
+
+
+## v1.60.0 (2026-09-09)
+
+### Features
+
+- **release**: Add Linux distribution installers
+  ([`eb8bd55`](https://github.com/natharuc/datapyn/commit/eb8bd55c6a6e37c276d223d4151a86b057b7aebc))
+
+### Heuristic
+
+- Merge pull request #160 from natharuc/feat/linux-distribution-installers
+  ([`eb8bd55`](https://github.com/natharuc/datapyn/commit/eb8bd55c6a6e37c276d223d4151a86b057b7aebc))
+
+- Merge remote-tracking branch 'origin/main' into feat/linux-distribution-installers
+  ([`9adf604`](https://github.com/natharuc/datapyn/commit/9adf604def6d4e0bf96333825320c77128e70c14))
+
+
+## v1.59.0 (2026-09-08)
+
+### Documentation
+
+- **linux**: Document distribution installers
+  ([`048d97a`](https://github.com/natharuc/datapyn/commit/048d97ab0b1de1f254b6bb5db97e36bbaaeccf1f))
+
+### Features
+
+- **release**: Add FUSE3 AppImage packaging
+  ([`8966ae4`](https://github.com/natharuc/datapyn/commit/8966ae4a2c28855ce0048d1ca8858d0ee8883b68))
+
+- **release**: Add native Linux package outputs
+  ([`70a8e30`](https://github.com/natharuc/datapyn/commit/70a8e308edc974dff38bca93d9f9c56ff5a4871b))
+
+- **release**: Gate complete Linux artifact publication
+  ([`b4cd1e1`](https://github.com/natharuc/datapyn/commit/b4cd1e177c058a8e5126927f46bf1cba9143f379))
+
+- **release**: Publish complete Linux artifact set
+  ([`0bebc98`](https://github.com/natharuc/datapyn/commit/0bebc98ebdc5096d3c90a2eb7b7087699d6381f1))
+
+### Heuristic
+
+- Merge pull request #159 from natharuc/feat/linux-distribution-installers
+  ([`0bebc98`](https://github.com/natharuc/datapyn/commit/0bebc98ebdc5096d3c90a2eb7b7087699d6381f1))
+
+
+## v1.58.0 (2026-09-05)
+
+### Bug Fixes
+
+- **database**: Keep PostgreSQL connect hooks off mocked engines
+  ([`abca707`](https://github.com/natharuc/datapyn/commit/abca707f009ba06dbc56373ddccc335375f7238e))
+
+- **database**: Register pool checkout hooks on mocked engines
+  ([`479b2e8`](https://github.com/natharuc/datapyn/commit/479b2e82cbe67fd3c007094792e450b0ccdbdab5))
+
+### Features
+
+- **database**: Improve PostgreSQL schema UX and quote identifiers
+  ([`7db01fe`](https://github.com/natharuc/datapyn/commit/7db01fecf2bdc8ae7a9045e76da9124f18ab37ba))
+
+- **database**: Improve PostgreSQL schema UX and quote identifiers
+  ([`9d55a6b`](https://github.com/natharuc/datapyn/commit/9d55a6b463f26ad3d0c666243f20dbd04143b467))
+
+### Heuristic
+
+- Merge pull request #158 from natharuc/feat/postgresql-schema-ux
+  ([`7db01fe`](https://github.com/natharuc/datapyn/commit/7db01fecf2bdc8ae7a9045e76da9124f18ab37ba))
+
+
 ## v1.57.0 (2026-09-02)
 
 ### Bug Fixes

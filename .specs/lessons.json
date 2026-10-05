@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "promote_threshold": 2,
+  "window_days": 45,
+  "quarantine_threshold": 2,
+  "next_id": 2,
+  "lessons": [
+    {
+      "id": "L-001",
+      "key": "gate_fail::assert missing and malformed version errors for every linux packaging command mode at its shell boundary",
+      "text": "Assert missing and malformed version errors for every Linux packaging command mode at its shell boundary.",
+      "signal": "gate_fail",
+      "scope": "scripts/linux/package.sh",
+      "status": "candidate",
+      "features": [
+        "linux-installers"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        ".specs/features/linux-installers/verification.md:70 (scripts/linux/package.sh)"
+      ],
+      "created": "2026-09-17T02:33:55Z",
+      "last_seen": "2026-09-17T02:33:55Z"
+    }
+  ]
+}
