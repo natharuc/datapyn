@@ -62,6 +62,11 @@ dev = [
 
 [tool.uv]
 native-tls = true
+constraint-dependencies = [
+    # Fixed JWT and HTTP client releases; retain upstream compatibility bounds.
+    "pyjwt>=2.15.1",
+    "urllib3>=2.8.0",
+]
 override-dependencies = [
     "msgpack>=1.2.1",
     "click>=8.3.3",
@@ -70,6 +75,9 @@ override-dependencies = [
     "gitpython>=3.1.55",
     "pip>=26.2",
     "thrift>=0.24.0",
+    # Databricks still caps OAuthLib below its fixed release. OAuthLib 4 changes
+    # server endpoints; the OAuth client APIs used by Databricks are preserved.
+    "oauthlib>=4.0.0,<5",
 ]
 
 

@@ -252,7 +252,7 @@ def _read_sqlserver_auth_record(host: str):
 
         return AuthenticationRecord.deserialize(record_path.read_text(encoding="utf-8"))
     except Exception as exc:
-        logger.warning(f"Failed to read SQL Server auth record: {exc}")
+        logger.warning("Failed to read SQL Server auth record (%s)", type(exc).__name__)
         return None
 
 
@@ -262,7 +262,7 @@ def _write_sqlserver_auth_record(host: str, authentication_record) -> None:
     try:
         record_path.write_text(authentication_record.serialize(), encoding="utf-8")
     except Exception as exc:
-        logger.warning(f"Failed to persist SQL Server auth record: {exc}")
+        logger.warning("Failed to persist SQL Server auth record (%s)", type(exc).__name__)
 
 
 def _is_azure_sql_host(host: str) -> bool:
@@ -474,9 +474,9 @@ class DatabricksOAuthTokenCache:
                 "refresh_token": token.refresh_token,
             }
             self._file_path.write_text(json.dumps(data), encoding="utf-8")
-            logger.debug(f"OAuth token persisted to {self._file_path}")
+            logger.debug("Databricks OAuth token cache persisted")
         except Exception as e:
-            logger.warning(f"Failed to persist OAuth token: {e}")
+            logger.warning("Failed to persist OAuth token (%s)", type(e).__name__)
     
     def read(self, hostname: str):
         """Read the cached OAuth token from disk."""
@@ -490,7 +490,7 @@ class DatabricksOAuthTokenCache:
                     refresh_token=data.get("refresh_token", ""),
                 )
         except Exception as e:
-            logger.warning(f"Failed to read cached OAuth token: {e}")
+            logger.warning("Failed to read cached OAuth token (%s)", type(e).__name__)
         return None
 
 
@@ -613,7 +613,7 @@ class DatabaseConnector:
                     cache_path = _get_oauth_token_cache_path(host)
                     if cache_path.exists():
                         cache_path.unlink()
-                        logger.info(f"Deleted stale OAuth cache: {cache_path}")
+                        logger.info("Deleted stale Databricks OAuth cache")
                     self.engine.dispose()
                     self.engine = create_engine(
                         connection_string,
@@ -708,7 +708,7 @@ class DatabaseConnector:
                                 self.connection_params["databricks_schema"] = current_sch
                                 logger.info(f"Databricks current context: catalog='{current_cat}', schema='{current_sch}'")
                     except Exception as e:
-                        logger.warning(f"Could not query Databricks current catalog/schema: {e}")
+                        logger.warning("Could not query Databricks current catalog/schema (%s)", type(e).__name__)
                         self.connection_params["databricks_catalog"] = ""
                         self.connection_params["databricks_schema"] = "default"
 
@@ -731,7 +731,11 @@ class DatabaseConnector:
             return True
 
         except Exception as e:
-            logger.error(f"Database connection error: {_safe_exception_text(e)}")
+            # Driver/SDK error messages can contain connection strings or tokens.
+            logger.error(
+                "Database connection error (%s; host=%s; database=%s): %s",
+                db_type, host, database, type(e).__name__,
+            )
             raise
 
     def _get_available_odbc_driver(self) -> str:
@@ -907,7 +911,7 @@ class DatabaseConnector:
                 oauth_cache = DatabricksOAuthTokenCache(cache_path)
                 connect_args["auth_type"] = "databricks-oauth"
                 connect_args["experimental_oauth_persistence"] = oauth_cache
-                logger.info(f"Using OAuth with token cache at: {cache_path}")
+                logger.info("Using Databricks OAuth authentication with a persistent token cache")
             
             # Add query parameters
             params = []
