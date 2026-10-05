@@ -116,14 +116,28 @@ A etapa final exige os três manifests da mesma versão e os downloads
 correspondentes, monta `latest.json` e `SHA256SUMS.txt`, e preserva o pacote
 completo para revisão. Primeiro envia os arquivos para um rascunho da release;
 somente após o upload publica a versão e promove `tauri-stable/latest.json`.
-Falhas de build/upload mantêm o feed anterior. Uma versão publicada não pode
-ser sobrescrita; uma promoção antiga não pode diminuir a versão do feed.
+O novo manifesto é enviado com nome de candidato próprio, sem `--clobber`, e
+seus bytes, tamanho e SHA-256 são conferidos na API do GitHub e contra o
+manifesto da release de versão. Falhas no build ou nesse upload preservam o
+feed anterior. A promoção renomeia o manifesto anterior para um backup e o
+candidato para `latest.json`; os backups permanecem na release do canal.
+O GitHub não oferece troca atômica de assets: pode existir uma breve janela
+sem `latest.json` entre os dois renames. Se o segundo falhar, o publicador
+tenta restaurar o anterior. Se também perder a conexão nesse rollback, os
+bytes verificados continuam retidos; repetir o job recupera o candidato ou
+backup. Feeds de publicadores antigos sem esses assets são recuperados do
+manifesto da release Tauri publicada mais nova. Essa recuperação nunca usa
+`releases/latest`, recusa digests inválidos e não permite publicar uma versão
+inferior à encontrada. Uma versão publicada não pode ser sobrescrita.
 Se a versão foi publicada e a promoção do feed falhou por rede, use **Re-run
 failed jobs** para reutilizar os artifacts já compilados. O manifesto e os
 checksums são determinísticos para esses artifacts. O publicador só retoma o
 feed depois de conferir os nomes, tamanhos e digests SHA-256 de todos os assets
 da release já publicada, inclusive manifest e assinaturas. Não reenvia nem
-edita a versão. Uma promoção já completa retorna sem fazer novas escritas.
+edita a versão. Respostas perdidas são reconciliadas com o estado remoto;
+uma promoção já completa retorna sem fazer novas escritas. Clientes que
+encontrarem o feed indisponível durante a troca repetem a consulta em quinze
+minutos, sem interromper o trabalho ou instalar arquivos sem assinatura.
 
 O ZIP Windows deve ser extraído em uma pasta gravável pelo usuário. A primeira
 atualização usa o NSIS assinado nessa mesma pasta e passa a registrar a
