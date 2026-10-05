@@ -219,7 +219,17 @@ def normalize_sqlserver_auth_mode(auth_mode: str = "", use_windows_auth: bool = 
 
 
 def _get_sqlserver_entra_cache_name(host: str) -> str:
-    """Build a stable cache name for SQL Server Entra tokens."""
+    """Keep Tauri's encrypted MSAL cache separate from legacy and other profiles."""
+    explicit_workspace = os.environ.get("DATAPYN_WORKSPACE_PATH")
+    if explicit_workspace:
+        import hashlib
+
+        workspace = os.path.normcase(str(Path(explicit_workspace).expanduser().resolve()))
+        workspace_key = hashlib.sha256(workspace.encode("utf-8")).hexdigest()[:24]
+        host_key = hashlib.sha256(str(host).strip().casefold().encode("utf-8")).hexdigest()[:24]
+        return f"datapyn_tauri_sqlserver_{workspace_key}_{host_key}"
+    # The PyQt application has no explicit headless workspace. Preserve its
+    # existing MSAL name so this distribution never migrates or replaces it.
     safe_host = host.replace(".", "_").replace(":", "_").replace("/", "_")
     return f"datapyn_sqlserver_{safe_host}"
 
