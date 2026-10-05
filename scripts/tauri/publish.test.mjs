@@ -4,12 +4,12 @@ import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { test } from "node:test";
 import { completeRelease, temporaryRelease } from "./release-fixtures.mjs";
-import { publishRelease, verifyPublishedFiles } from "./publish.mjs";
+import { githubRequest, publishRelease, runUploadProcess, verifyPublishedFiles } from "./publish.mjs";
 import { fileSha256 } from "./release.mjs";
 
 const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 const candidateName = fixture => `latest-candidate-v${fixture.manifest.version}-${fileSha256(join(fixture.directory, "latest.json"))}.json`;
-const published = fixture => ({ id: 9 + Number(fixture.manifest.version.split(".")[0]), tag_name: `tauri-v${fixture.manifest.version}`, draft: false, immutable: true, assets: readdirSync(fixture.directory).map(name => ({ name, size: statSync(join(fixture.directory, name)).size, digest: `sha256:${fileSha256(join(fixture.directory, name))}`, bytes: readFileSync(join(fixture.directory, name)) })) });
+const published = fixture => ({ id: 9 + Number(fixture.manifest.version.split(".")[0]), tag_name: `tauri-v${fixture.manifest.version}`, target_commitish: "a".repeat(40), draft: false, immutable: true, assets: readdirSync(fixture.directory).map(name => ({ name, size: statSync(join(fixture.directory, name)).size, digest: `sha256:${fileSha256(join(fixture.directory, name))}`, bytes: readFileSync(join(fixture.directory, name)) })) });
 const activeFeed = (fixture, extras = []) => ({ id: 20, tag_name: "tauri-stable", draft: false, prerelease: true, assets: [{ name: "latest.json", bytes: readFileSync(join(fixture.directory, "latest.json")) }, ...extras] });
 
 function githubMock(options = {}) {
@@ -59,11 +59,12 @@ function githubMock(options = {}) {
       const path = url.replace("https://api.github.com/repos/natharuc/datapyn/", "");
       if (call.method === "GET" && path.startsWith("releases/tags/")) {
         const release = releases.get(path.slice("releases/tags/".length));
+        if (options.hiddenDraftTags && release?.draft) return json({}, 404);
         return json(release ?? {}, release ? 200 : 404);
       }
       if (call.method === "GET" && path.startsWith("releases?")) {
         const page = Number(new URL(url).searchParams.get("page"));
-        const versions = [...releases.values()].filter(release => !release.draft);
+        const versions = [...releases.values()];
         return json(versions.slice((page - 1) * 100, page * 100));
       }
       const assetMatch = /^releases\/assets\/(\d+)$/.exec(path);
@@ -97,7 +98,7 @@ function githubMock(options = {}) {
   return mock;
 }
 
-const options = (fixture, mock) => ({ directory: fixture.directory, tag: `tauri-v${fixture.manifest.version}`, commit: "a".repeat(40), token: "private-token", request: mock.request, upload: mock.upload });
+const options = (fixture, mock) => ({ directory: fixture.directory, tag: `tauri-v${fixture.manifest.version}`, commit: "a".repeat(40), token: "private-token", request: mock.request, upload: mock.upload, retryWait: async () => {} });
 const mutations = mock => mock.calls.filter(call => ["POST", "PATCH", "DELETE"].includes(call.method));
 const active = mock => mock.feed()?.assets.find(asset => asset.name === "latest.json");
 const previousRelease = t => completeRelease(join(temporaryRelease(t), "previous"), "0.9.0");
@@ -292,7 +293,178 @@ test("lost API rename responses are reconciled instead of undoing an already suc
   mock.faults.rename = () => "after";
   await publishRelease(options(fixture, mock));
   assert.equal(JSON.parse(active(mock).bytes).version, "1.0.0");
-  assert.equal(mock.calls.filter(call => call.method === "PATCH" && call.url.includes("/assets/")).length, 2);
+  const renames = mock.calls.filter(call => call.method === "PATCH" && call.url.includes("/assets/"));
+  assert.equal(new Set(renames.map(call => `${call.url}:${call.body.name}`)).size, 2);
+});
+
+test("large upload subprocesses leave the parent event loop responsive and report failures", async () => {
+  let finished = false;
+  const child = runUploadProcess(process.execPath, ["--eval", "setTimeout(() => {}, 250)"]).then(() => { finished = true; });
+  await new Promise(resolve => setTimeout(resolve, 25));
+  assert.equal(finished, false, "A synchronous uploader would block this timer until the child finished");
+  await child;
+  await assert.rejects(runUploadProcess(process.execPath, ["--eval", "process.exit(9)"]), /exit 9/);
+  await assert.rejects(runUploadProcess("datapyn-missing-upload-command", []), /ENOENT/);
+});
+
+test("transient network failures retry read-only and idempotent requests with the same fields", async () => {
+  for (const method of ["GET", "PATCH"]) {
+    const calls = [], waits = [];
+    const body = method === "PATCH" ? { draft: false, make_latest: "false" } : undefined;
+    const result = await githubRequest({
+      method, path: "releases/20", body, token: "test-token",
+      wait: async value => waits.push(value),
+      request: async (url, init) => {
+        calls.push({ url, method: init.method, body: init.body });
+        if (calls.length === 1) throw new TypeError("fetch failed", { cause: Object.assign(new Error("closed socket"), { code: "UND_ERR_SOCKET" }) });
+        return new Response(JSON.stringify({ id: 20 }));
+      },
+    });
+    assert.deepEqual(result, { id: 20 });
+    assert.deepEqual(calls[0], calls[1]);
+    assert.deepEqual(waits, [250]);
+  }
+});
+
+test("failed network requests stop after a bounded retry budget with operation and safe cause context", async () => {
+  let calls = 0;
+  await assert.rejects(githubRequest({
+    method: "GET", path: "releases/20", token: "private-token", wait: async () => {},
+    request: async () => {
+      calls++;
+      throw new TypeError("fetch failed private-token", { cause: Object.assign(new Error("closed socket"), { code: "ECONNRESET" }) });
+    },
+  }), error => {
+    assert.match(error.message, /GitHub GET releases\/20 failed after 3 attempts/);
+    assert.match(error.message, /ECONNRESET/);
+    assert.equal(error.message.includes("private-token"), false);
+    return true;
+  });
+  assert.equal(calls, 3);
+});
+
+test("resource creation never retries an uncertain POST and authorization failures never retry", async () => {
+  for (const [method, response] of [["POST", undefined], ["POST", 503], ["GET", 403], ["PATCH", 422]]) {
+    let calls = 0, waits = 0;
+    await assert.rejects(githubRequest({
+      method, path: "releases", token: "test-token", wait: async () => { waits++; },
+      request: async () => {
+        calls++;
+        if (response) return new Response(null, { status: response });
+        throw new TypeError("fetch failed");
+      },
+    }));
+    assert.equal(calls, 1);
+    assert.equal(waits, 0);
+  }
+});
+
+test("temporary HTTP failures and interrupted manifest bodies are retried before digest validation", async () => {
+  let calls = 0;
+  const bytes = await githubRequest({
+    method: "GET", path: "releases/assets/42", token: "test-token", wait: async () => {},
+    decode: async response => Buffer.from(await response.arrayBuffer()),
+    request: async () => {
+      calls++;
+      if (calls === 1) return new Response(null, { status: 503 });
+      if (calls === 2) return new Response(new ReadableStream({ start(controller) { controller.error(new TypeError("interrupted response body")); } }));
+      return new Response("verified manifest bytes");
+    },
+  });
+  assert.equal(bytes.toString(), "verified manifest bytes");
+  assert.equal(calls, 3);
+});
+
+test("a complete draft without a Git tag resumes by release ID without another POST or upload", async t => {
+  const fixture = completeRelease(temporaryRelease(t)), previous = previousRelease(t);
+  const draft = { ...published(fixture), draft: true, immutable: false };
+  const mock = githubMock({ existing: draft, hiddenDraftTags: true, feed: activeFeed(previous), versions: [published(previous)] });
+  await publishRelease(options(fixture, mock));
+  assert.equal(mock.releases.get("tauri-v1.0.0").draft, false);
+  assert.equal(mock.calls.filter(call => call.upload === "tauri-v1.0.0").length, 0);
+  assert.equal(mock.calls.filter(call => call.method === "POST").length, 0);
+  assert.ok(mock.calls.some(call => call.method === "PATCH" && call.url.endsWith(`/releases/${draft.id}`) && call.body.draft === false));
+  assert.equal(JSON.parse(active(mock).bytes).version, "1.0.0");
+});
+
+test("a partial untagged draft resumes uploading to the existing release instead of creating a duplicate", async t => {
+  const fixture = completeRelease(temporaryRelease(t)), previous = previousRelease(t);
+  const draft = { ...published(fixture), draft: true, immutable: false };
+  draft.assets.pop();
+  const mock = githubMock({ existing: draft, hiddenDraftTags: true, feed: activeFeed(previous), versions: [published(previous)] });
+  await publishRelease(options(fixture, mock));
+  assert.equal(mock.calls.filter(call => call.method === "POST").length, 0);
+  assert.equal(mock.calls.filter(call => call.upload === "tauri-v1.0.0").length, 1);
+  assert.equal(mock.releases.get("tauri-v1.0.0").id, draft.id);
+});
+
+test("duplicate untagged drafts stop before uploads or mutations", async t => {
+  const fixture = completeRelease(temporaryRelease(t)), previous = previousRelease(t);
+  const draft = { ...published(fixture), draft: true, immutable: false };
+  const mock = githubMock({ existing: draft, hiddenDraftTags: true, feed: activeFeed(previous), versions: [published(previous)] });
+  const request = async (url, init) => {
+    const response = await mock.request(url, init);
+    if (!url.includes("releases?")) return response;
+    const releases = await response.json();
+    return new Response(JSON.stringify([...releases, { ...draft, id: 999, assets: [] }]));
+  };
+  await assert.rejects(publishRelease({ ...options(fixture, mock), request }), /Multiple releases/);
+  assert.equal(mutations(mock).length, 0);
+  assert.equal(mock.calls.filter(call => call.upload).length, 0);
+});
+
+test("a recovered draft must target the exact validated commit before any upload or publication", async t => {
+  const fixture = completeRelease(temporaryRelease(t)), previous = previousRelease(t);
+  for (const target_commitish of ["b".repeat(40), "main", undefined]) {
+    const draft = { ...published(fixture), draft: true, immutable: false, target_commitish };
+    const mock = githubMock({ existing: draft, hiddenDraftTags: true, feed: activeFeed(previous), versions: [published(previous)] });
+    await assert.rejects(publishRelease(options(fixture, mock)), /different or unverified source commit/);
+    assert.equal(mutations(mock).length, 0);
+    assert.equal(mock.calls.filter(call => call.upload).length, 0);
+  }
+});
+
+test("a draft with extra or duplicate asset names is rejected before upload or publication", async t => {
+  const fixture = completeRelease(temporaryRelease(t)), previous = previousRelease(t);
+  for (const mode of ["extra", "duplicate"]) {
+    const draft = { ...published(fixture), draft: true, immutable: false };
+    draft.assets.push(mode === "extra" ? { name: "unexpected.txt", bytes: Buffer.from("unexpected") } : { ...draft.assets[0] });
+    const mock = githubMock({ existing: draft, hiddenDraftTags: true, feed: activeFeed(previous), versions: [published(previous)] });
+    await assert.rejects(publishRelease(options(fixture, mock)), /unexpected or duplicate assets/);
+    assert.equal(mutations(mock).length, 0);
+    assert.equal(mock.calls.filter(call => call.upload).length, 0);
+    assert.equal(mock.releases.get("tauri-v1.0.0").draft, true);
+  }
+});
+
+test("incomplete or tampered uploads remain private drafts and never advance the feed", async t => {
+  const fixture = completeRelease(temporaryRelease(t)), previous = previousRelease(t);
+  for (const mode of ["incomplete", "digest", "source", "extra"]) {
+    const mock = githubMock({ feed: activeFeed(previous), versions: [published(previous)] });
+    mock.faults.upload = call => {
+      if (!call.upload.startsWith("tauri-v")) return;
+      if (mode === "digest") return "tamper";
+      if (mode === "source") mock.releases.get(call.upload).target_commitish = "b".repeat(40);
+      if (mode === "extra") mock.releases.get(call.upload).assets.push({ name: "unexpected.txt", size: 1, digest: `sha256:${hash(Buffer.from("x"))}` });
+    };
+    const upload = (tag, files, settings) => mock.upload(tag, mode === "incomplete" ? files.slice(0, -1) : files, settings);
+    await assert.rejects(publishRelease({ ...options(fixture, mock), upload }), /different or unverifiable assets|draft source/);
+    assert.equal(mock.releases.get("tauri-v1.0.0").draft, true);
+    assert.equal(mock.calls.filter(call => call.method === "PATCH" && call.body.draft === false).length, 0);
+    assert.equal(mock.calls.filter(call => call.upload === "tauri-stable").length, 0);
+    assert.equal(JSON.parse(active(mock).bytes).version, "0.9.0");
+  }
+});
+
+test("an untagged feed draft resumes the same feed ID without creating another channel", async t => {
+  const fixture = completeRelease(temporaryRelease(t));
+  const mock = githubMock({ existing: published(fixture), hiddenDraftTags: true, feed: { id: 20, draft: true, assets: [] } });
+  await publishRelease(options(fixture, mock));
+  assert.equal(mock.feed().id, 20);
+  assert.equal(mock.feed().draft, false);
+  assert.equal(mock.calls.filter(call => call.method === "POST").length, 0);
+  assert.equal(mock.calls.filter(call => call.upload === "tauri-v1.0.0").length, 0);
+  assert.equal(JSON.parse(active(mock).bytes).version, "1.0.0");
 });
 
 test("lost candidate upload response resumes from server digest proof without deleting or replacing bytes", async t => {

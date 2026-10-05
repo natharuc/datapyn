@@ -1,9 +1,10 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { setTimeout as delay } from "node:timers/promises";
 import { compareVersions, fileSha256, RELEASE_CHANNEL, RELEASE_REPOSITORY, releaseVersion, validateManifest } from "./release.mjs";
 
 export function verifyPublishedFiles(directory) {
@@ -33,6 +34,46 @@ const sha256 = bytes => createHash("sha256").update(bytes).digest("hex");
 const transactionName = /^(?:latest-candidate|latest-backup)-v(\d+\.\d+\.\d+)-([a-f\d]{64})(?:-\d+)?\.json$/;
 const maximumManifestSize = 256 * 1024;
 
+export function runUploadProcess(command, args, env = process.env) {
+  return new Promise((resolveProcess, reject) => {
+    // Keep fetch sockets and timers responsive while gh sends large installers.
+    const child = spawn(command, args, { shell: false, windowsHide: true, stdio: "inherit", env });
+    child.once("error", reject);
+    child.once("close", (code, signal) => code === 0 ? resolveProcess() : reject(new Error(`Upload process failed: ${signal ? `signal ${signal}` : `exit ${code}`}.`)));
+  });
+}
+
+export async function githubRequest({ method, path, body, allowMissing = false, accept = "application/vnd.github+json", token, repository = RELEASE_REPOSITORY, request = fetch, wait = delay, decode = response => response.status === 204 ? undefined : response.json() }) {
+  // GET is read-only. These PATCHes assign fixed release/asset fields and are
+  // idempotent; POST creates resources and must never be retried blindly.
+  const attempts = ["GET", "PATCH"].includes(method) ? 3 : 1;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    let failure;
+    try {
+      const response = await request(`https://api.github.com/repos/${repository}/${path}`, { method, signal: AbortSignal.timeout(30_000), headers: { Accept: accept, Authorization: `Bearer ${token}`, "X-GitHub-Api-Version": "2026-03-10", "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}) });
+      if (response.status === 404 && allowMissing) {
+        await response.body?.cancel().catch(() => undefined);
+        return undefined;
+      }
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
+        failure = new Error(`HTTP ${response.status}.`);
+        if (![408, 429, 500, 502, 503, 504].includes(response.status)) throw Object.assign(failure, { noRetry: true });
+        throw failure;
+      }
+      return await decode(response);
+    } catch (error) {
+      failure = error;
+      if (attempt === attempts || error.noRetry || error instanceof SyntaxError) {
+        const code = error.cause?.code ?? error.code;
+        const message = String(error.message).split(token).join("[redacted]");
+        throw new Error(`GitHub ${method} ${path} failed after ${attempt} attempt${attempt === 1 ? "" : "s"}: ${message}${code ? ` (${code})` : ""}`, { cause: error });
+      }
+    }
+    await wait(250 * 2 ** (attempt - 1));
+  }
+}
+
 export function verifyExistingAssets(release, directory) {
   const names = readdirSync(directory).sort();
   const assets = release.assets ?? [];
@@ -41,29 +82,38 @@ export function verifyExistingAssets(release, directory) {
     const path = join(directory, name);
     return asset && asset.size === statSync(path).size && asset.digest === `sha256:${fileSha256(path)}`;
   });
-  if (!matches) throw new Error("This Tauri version has already been published with different or unverifiable assets. Published artifacts cannot be replaced.");
+  if (!matches) throw new Error(release.draft ? "The Tauri draft has different or unverifiable assets and cannot be published." : "This Tauri version has already been published with different or unverifiable assets. Published artifacts cannot be replaced.");
 }
 
-export async function publishRelease({ directory, tag, commit, token, repository = RELEASE_REPOSITORY, request = fetch, upload }) {
+export async function publishRelease({ directory, tag, commit, token, repository = RELEASE_REPOSITORY, request = fetch, upload, retryWait = delay }) {
   const version = releaseVersion(tag);
   const manifest = verifyPublishedFiles(directory);
   if (repository !== RELEASE_REPOSITORY || manifest.version !== version || !/^[a-f\d]{40}$/.test(commit ?? "") || !token) throw new Error("Only a matching tagged Tauri release can be published to the dedicated repository.");
-  const apiResponse = async (method, path, body, allowMissing = false, accept = "application/vnd.github+json") => {
-    const response = await request(`https://api.github.com/repos/${repository}/${path}`, { method, signal: AbortSignal.timeout(30_000), headers: { Accept: accept, Authorization: `Bearer ${token}`, "X-GitHub-Api-Version": "2026-03-10", "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}) });
-    if (response.status === 404 && allowMissing) return undefined;
-    if (!response.ok) throw new Error(`GitHub ${method} ${path} failed: HTTP ${response.status}.`);
-    return response;
-  };
-  const api = async (...args) => { const response = await apiResponse(...args); return !response || response.status === 204 ? undefined : response.json(); };
+  const api = (method, path, body, allowMissing = false, accept = "application/vnd.github+json", decode) => githubRequest({ method, path, body, allowMissing, accept, decode, token, repository, request, wait: retryWait });
   const versionReleases = new Map();
   const versionRelease = async (releaseTag, refresh = false) => {
-    if (refresh || !versionReleases.has(releaseTag)) versionReleases.set(releaseTag, await api("GET", `releases/tags/${releaseTag}`, undefined, true));
+    if (refresh || !versionReleases.has(releaseTag)) {
+      let release = await api("GET", `releases/tags/${releaseTag}`, undefined, true);
+      if (!release) {
+        // GitHub may return 404 for a draft whose tag is created only when it
+        // becomes public. Recover that draft by ID instead of creating another.
+        for (let page = 1; ; page++) {
+          const releases = await api("GET", `releases?per_page=100&page=${page}`);
+          if (!Array.isArray(releases)) throw new Error("Could not list Tauri releases to recover an unpublished draft.");
+          for (const candidate of releases) if (candidate.tag_name === releaseTag) {
+            if (release) throw new Error("Multiple releases use this Tauri tag; publication was stopped.");
+            release = candidate;
+          }
+          if (releases.length < 100) break;
+        }
+      }
+      versionReleases.set(releaseTag, release);
+    }
     return versionReleases.get(releaseTag);
   };
   const readManifest = async asset => {
     if (!Number.isSafeInteger(asset?.id) || !Number.isSafeInteger(asset.size) || asset.size <= 0 || asset.size > maximumManifestSize || !/^sha256:[a-f\d]{64}$/.test(asset.digest ?? "")) throw new Error("The feed manifest asset has missing or unverifiable metadata.");
-    const response = await apiResponse("GET", `releases/assets/${asset.id}`, undefined, false, "application/octet-stream");
-    const bytes = Buffer.from(await response.arrayBuffer());
+    const bytes = await api("GET", `releases/assets/${asset.id}`, undefined, false, "application/octet-stream", async response => Buffer.from(await response.arrayBuffer()));
     const hash = sha256(bytes);
     if (bytes.length !== asset.size || `sha256:${hash}` !== asset.digest) throw new Error("The remote feed manifest does not match its SHA-256 digest.");
     const document = validateManifest(JSON.parse(bytes.toString("utf8")), { complete: true });
@@ -78,7 +128,7 @@ export async function publishRelease({ directory, tag, commit, token, repository
     if (!release || release.draft || publishedManifest?.size !== retained.bytes.length || publishedManifest?.digest !== `sha256:${retained.hash}`) throw new Error("The retained feed manifest does not match its published immutable Tauri version.");
     return retained;
   };
-  const existingFeed = await api("GET", `releases/tags/${RELEASE_CHANNEL}`, undefined, true);
+  const existingFeed = await versionRelease(RELEASE_CHANNEL);
   if (existingFeed?.immutable) throw new Error("The tauri-stable feed must remain mutable; immutable releases cannot refresh latest.json.");
   // A previous interrupted rename can leave only a verified candidate or backup.
   // Older --clobber publishers left neither; recover from the highest published
@@ -130,13 +180,29 @@ export async function publishRelease({ directory, tag, commit, token, repository
     if (feedAlreadyCurrent && active && !existingFeed.draft) return { version, tag, channel: RELEASE_CHANNEL, alreadyCurrent: true };
   } else if (feedAlreadyCurrent) throw new Error("The current feed points to a missing or unpublished Tauri version release.");
   const body = `${manifest.notes}\n\nInstalação independente do DataPyn PyQt6. Os artefatos e o canal de atualização desta release pertencem somente ao DataPyn Tauri.\n\n- Windows x86_64: instalador NSIS e ZIP portátil.\n- Linux x86_64: DEB, AppImage e tar.gz portátil.\n- macOS Apple Silicon: DMG e aplicação para o atualizador.\n\nConfira SHA256SUMS.txt para verificar os downloads.\n`;
-  const uploadAssets = upload ?? ((releaseTag, paths, { clobber = true } = {}) => {
-    const result = spawnSync("gh", ["release", "upload", releaseTag, ...paths, "--repo", repository, ...(clobber ? ["--clobber"] : [])], { shell: false, windowsHide: true, stdio: "inherit", env: { ...process.env, GH_TOKEN: token } });
-    if (result.error || result.status !== 0) throw new Error(`GitHub artifact upload failed for ${releaseTag}.`);
+  const uploadAssets = upload ?? (async (releaseTag, paths, { clobber = true } = {}) => {
+    try { await runUploadProcess("gh", ["release", "upload", releaseTag, ...paths, "--repo", repository, ...(clobber ? ["--clobber"] : [])], { ...process.env, GH_TOKEN: token }); }
+    catch (error) { throw new Error(`GitHub artifact upload failed for ${releaseTag}: ${error.message}`, { cause: error }); }
   });
   if (!existing || existing.draft) {
+    if (existing && existing.target_commitish !== commit) throw new Error("The existing Tauri draft targets a different or unverified source commit; publication was stopped.");
+    if (existing) {
+      const expected = new Set(readdirSync(directory));
+      const names = Array.isArray(existing.assets) ? existing.assets.map(asset => asset.name) : [];
+      if (!Array.isArray(existing.assets) || new Set(names).size !== names.length || names.some(name => !expected.has(name))) throw new Error("The existing Tauri draft contains unexpected or duplicate assets; publication was stopped.");
+    }
     const release = existing ?? await api("POST", "releases", { tag_name: tag, target_commitish: commit, name: `DataPyn Tauri ${version}`, body, draft: true, prerelease: false, make_latest: "false" });
-    await uploadAssets(tag, readdirSync(directory).sort().map(name => join(directory, name)));
+    let complete = false;
+    if (existing) {
+      try { verifyExistingAssets(existing, directory); complete = true; }
+      catch { /* A partial draft can resume its upload; public releases cannot. */ }
+    }
+    if (!complete) await uploadAssets(tag, readdirSync(directory).sort().map(name => join(directory, name)));
+    // Validate fresh server metadata before making the version public. A
+    // partial, altered or extra upload must stay a recoverable private draft.
+    const verifiedDraft = await api("GET", `releases/${release.id}`);
+    if (verifiedDraft?.id !== release.id || verifiedDraft.tag_name !== tag || verifiedDraft.draft !== true || verifiedDraft.target_commitish !== commit) throw new Error("The Tauri draft source or publication state changed; publication was stopped.");
+    verifyExistingAssets(verifiedDraft, directory);
     await api("PATCH", `releases/${release.id}`, { draft: false, body, make_latest: "false" });
     const published = await versionRelease(tag, true);
     if (!published || published.draft) throw new Error("The version release was not published; feed promotion was stopped.");
