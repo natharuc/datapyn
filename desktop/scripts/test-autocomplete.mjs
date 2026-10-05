@@ -47,12 +47,91 @@ try {
   const value=()=>page.evaluate(()=>window.completionTest.editor().getValue());
 
   for(const [dbType,quote] of [["sqlserver",name=>`[${name}]`],["mysql",name=>`\`${name}\``],["mariadb",name=>`\`${name}\``],["databricks",name=>`\`${name}\``],["postgresql",name=>`"${name}"`],["sqlite",name=>`"${name}"`]]){
+    await test(`${dbType}: ordinary typing opens focused table suggestions without a shortcut`,async()=>{
+      await configure({code:"SELECT * FROM |",context:context(dbType)});
+      await page.keyboard.type("cust",{delay:20});
+      const current=await labels(["customers"]);assert(!current.includes("main.customers"));
+      await page.keyboard.press("Tab");assert.equal(await value(),`SELECT * FROM ${quote("customers")}`);
+    });
+    await test(`${dbType}: WHERE letters automatically suggest unqualified bound fields`,async()=>{
+      await configure({code:"SELECT * FROM customers WHERE |",context:context(dbType)});
+      await page.keyboard.type("customer_n",{delay:15});await labels(["customer_name"]);
+      await page.keyboard.press("Tab");assert.equal(await value(),`SELECT * FROM customers WHERE ${quote("customer_name")}`);
+    });
+    await test(`${dbType}: JOIN typing and delayed inference retain aliases for ambiguous fields`,async()=>{
+      const scoped=context(dbType,"main","main",["id","customer_name"]);
+      scoped.tables.push("main.orders");scoped.schemaSnapshot.tables["main.orders"]={name:"orders",schema:"main",columns:[{name:"id",type:"INTEGER"}]};
+      await configure({code:"SELECT | FROM customers c JOIN orders o ON c.id=o.id",context:scoped});
+      const before=await page.evaluate(()=>window.completionTest.calls.length);
+      await page.keyboard.type("i",{delay:20});const current=await labels(["c.id","o.id"]);assert(!current.includes("id"));
+      await page.waitForFunction(before=>window.completionTest.calls.slice(before).some(call=>call.method==="language.complete"),before);
+      await page.evaluate(before=>{const p=window.completionTest,index=p.calls.findIndex((call,index)=>index>=before&&call.method==="language.complete");p.reply(index,[{label:"id",kind:"column",insert_text:"id"}]);},before);
+      await page.waitForTimeout(70);assert(!(await labels(["c.id","o.id"])).includes("id"));
+      await page.keyboard.press("Tab");assert.equal(await value(),`SELECT ${quote("c")}.${quote("id")} FROM customers c JOIN orders o ON c.id=o.id`);
+    });
     await test(`${dbType}: automatic alias fields appear and Tab inserts a valid identifier while IPC is held`,async()=>{
       await configure({code:"SELECT c| FROM customers c",context:context(dbType)});
       await page.keyboard.type(".");await labels(["customer_id","customer_name"]);
       await page.keyboard.press("Tab");assert.equal(await value(),`SELECT c.${quote("customer_id")} FROM customers c`);
     });
   }
+  await test("Databricks table search matches a word inside the name, with prefix matches first",async()=>{
+    const scoped=context("databricks","warehouse","finance");
+    scoped.tables=["finance.movimentocobranca","finance.gecon_ft_movimentos_premio"];
+    scoped.schemaSnapshot.tables={
+      "finance.movimentocobranca":{name:"movimentocobranca",schema:"finance",catalog:"warehouse",columns:[]},
+      "finance.gecon_ft_movimentos_premio":{name:"gecon_ft_movimentos_premio",schema:"finance",catalog:"warehouse",columns:[]},
+    };
+    await configure({code:"SELECT * FROM |",context:scoped});
+    await page.keyboard.type("movimento",{delay:15});const current=await labels(["movimentocobranca","gecon_ft_movimentos_premio"]);
+    assert(current.indexOf("movimentocobranca")<current.indexOf("gecon_ft_movimentos_premio"));
+    await page.keyboard.press("Tab");assert.equal(await value(),"SELECT * FROM `movimentocobranca`");
+  });
+  for(const [qualifier,expected,wrong,schema] of [['"Analytics"',"UpperOrders","lower_orders","Analytics"],["ANALYTICS","lower_orders","UpperOrders","analytics"]]){
+    await test(`PostgreSQL: ${qualifier} schema suggestions and remote enrichment preserve exact namespace identity`,async()=>{
+      const scoped=context("postgresql","warehouse","analytics");
+      scoped.tables=["Analytics.UpperOrders","analytics.lower_orders","Analytics.shared","analytics.shared"];
+      scoped.schemaSnapshot.tables={"Analytics.UpperOrders":{name:"UpperOrders",schema:"Analytics",columns:[]},"analytics.lower_orders":{name:"lower_orders",schema:"analytics",columns:[]},"Analytics.shared":{name:"shared",schema:"Analytics",columns:[]},"analytics.shared":{name:"shared",schema:"analytics",columns:[]}};
+      await configure({code:`SELECT * FROM ${qualifier}|`,context:scoped});
+      const before=await page.evaluate(()=>window.completionTest.calls.length);await page.keyboard.type(".");
+      const current=await labels([expected,"shared"]);assert(!current.includes(wrong));
+      await page.waitForFunction(before=>window.completionTest.calls.slice(before).some(call=>call.method==="language.complete"),before);
+      await page.evaluate(({before,schema,wrong})=>{const p=window.completionTest,index=p.calls.findIndex((call,index)=>index>=before&&call.method==="language.complete");p.reply(index,[{label:`${schema==="Analytics"?"analytics":"Analytics"}.${wrong}`,kind:"table"},{label:"shared",kind:"table"}]);},{before,schema,wrong});
+      await page.waitForTimeout(60);const enriched=await labels([expected,"shared"]);assert(!enriched.includes(wrong));
+      await page.keyboard.type(expected.slice(0,2),{delay:20});await labels([expected]);
+      await page.keyboard.press("Tab");assert.equal(await value(),`SELECT * FROM ${qualifier}."${expected}"`);
+    });
+  }
+  await test("SQL keyword spaces open tables automatically and further letters reach objects beyond the first 500",async()=>{
+    const scoped=context();
+    scoped.tables=[...Array.from({length:1200},(_,index)=>`main.early_${index}`),"main.zebra"];
+    scoped.schemaSnapshot.tables={"main.zebra":{name:"zebra",schema:"main",columns:[]}};
+    await configure({code:"SELECT *|",context:scoped});
+    await page.keyboard.type(" FROM ",{delay:15});await labels(["main.early_0"]);
+    await page.keyboard.type("zeb",{delay:20});await labels(["zebra"]);
+    await page.keyboard.press("Tab");assert.equal(await value(),'SELECT * FROM "zebra"');
+  });
+  await test("manual shortcut completion and remote enrichment keep focused names short without duplicate rows",async()=>{
+    await configure({code:"SELECT * FROM cust|",context:context("mysql","main","main")});
+    const before=await page.evaluate(()=>window.completionTest.calls.length);
+    await page.evaluate(()=>window.completionTest.force());await labels(["customers"]);
+    await page.waitForFunction(before=>window.completionTest.calls.slice(before).some(call=>call.method==="language.complete"),before);
+    await page.evaluate(before=>{const p=window.completionTest,index=p.calls.findIndex((call,index)=>index>=before&&call.method==="language.complete");p.reply(index,[{label:"main.customers",kind:"table",insert_text:"`main`.`customers`"}]);},before);
+    await page.waitForTimeout(80);const current=await labels(["customers"]);
+    assert.equal(current.filter(label=>label==="customers").length,1);assert(!current.includes("main.customers"));
+    await page.keyboard.press("Tab");assert.equal(await value(),"SELECT * FROM `customers`");
+  });
+  await test("a late metadata delivery refreshes automatic letter completion without another key or shortcut",async()=>{
+    await configure({code:"SELECT * FROM |",context:{...context(),tables:[],schemaSnapshot:undefined}});
+    await page.keyboard.type("cust",{delay:15});await page.waitForTimeout(60);
+    assert(!await page.evaluate(()=>window.completionTest.labels().includes("customers")));
+    await page.evaluate(next=>window.completionTest.context(next),context());await labels(["customers"]);
+  });
+  await test("Python ordinary letter typing suggests dataframe variables before remote inference",async()=>{
+    await configure({code:"|",language:"python",context:{...context(),variables:[{name:"df_customers",type:"DataFrame",columns:["id"]}]}});
+    await page.keyboard.type("df_c",{delay:20});await labels(["df_customers"]);
+    await page.keyboard.press("Tab");assert.equal(await value(),"df_customers");
+  });
   await test("Ctrl+Space suggests unqualified SELECT fields from FROM to the right of the cursor",async()=>{
     await configure({code:"SELECT | FROM customers c",context:context()});
     await page.keyboard.press("Control+Space");await labels(["customer_id","customer_name"]);
@@ -82,6 +161,15 @@ try {
     await configure({code:"SELECT o| FROM customers c JOIN orders o ON c.customer_id = o.order_id",context:joined});
     await page.keyboard.type(".");const current=await labels(["order_id"]);assert(!current.includes("customer_name"));
   });
+  for(const source of ["customers c JOIN (SELECT 1 AS id) d ON 1=1","customers c JOIN pending p ON 1=1"]){
+    await test(`SQL joins qualify known fields while the other source is not yet inferred: ${source}`,async()=>{
+      const scoped=context("sqlite","main","main",["id"]);
+      scoped.schemaSnapshot.tables["main.pending"]={name:"pending",schema:"main",columns:[]};
+      await configure({code:`SELECT | FROM ${source}`,context:scoped});
+      await page.keyboard.type("id",{delay:20});const current=await labels(["c.id"]);assert(!current.includes("id"));
+      await page.keyboard.press("Tab");assert.equal(await value(),`SELECT "c"."id" FROM ${source}`);
+    });
+  }
   await test("late metadata replaces No suggestions without another keypress",async()=>{
     const cold={...context(),tables:[],schemaSnapshot:undefined};
     await configure({code:"SELECT c.| FROM customers c",context:cold});

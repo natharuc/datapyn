@@ -1,3 +1,72 @@
-.pynia-panel{display:flex;flex-direction:column;min-height:0;height:100%;font-size:12px;background:#0e1522}.pynia-header{display:flex;align-items:center;gap:7px;padding:8px 10px;border-bottom:1px solid #243249;background:#121a2b}.pynia-header strong{font-size:12px}.pynia-header small{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#8395b1;font-size:10px}.pynia-header .icon-button{width:25px;height:25px}.pynia-error{color:#ed9292;font-size:11px;line-height:1.5;max-height:90px;overflow:auto;padding:9px;margin:0;white-space:pre-wrap}.pynia-messages{flex:1;min-height:80px;overflow:auto;padding:10px;scrollbar-gutter:stable}.pynia-message{margin:4px 0 16px;min-width:0}.pynia-message.user{background:#18253b;padding:9px;border-radius:6px;margin-left:18px}.pynia-message-role{font-size:10px;font-weight:500;color:#8b9ab2;margin-bottom:4px}.pynia-markdown{line-height:1.6;overflow-wrap:anywhere;color:#d6e0ef}.pynia-markdown p{margin:7px 0}.pynia-markdown pre{max-width:100%;overflow:auto;background:#090f1b;border:1px solid #243249;padding:9px;border-radius:4px}.pynia-markdown code{font:12px/1.5 'Cascadia Code','Ubuntu Mono',Consolas,monospace}.pynia-markdown table{display:block;overflow:auto;border-collapse:collapse;font-size:11px;max-width:100%}.pynia-markdown th,.pynia-markdown td{padding:5px 7px;border:1px solid #27354b}.pynia-markdown img{max-width:100%;height:auto}.pynia-markdown a{color:#96b5ff}.pynia-markdown blockquote{margin:8px 0;padding-left:10px;border-left:2px solid #4c6ba1;color:#a4b3c9}.pynia-picker{padding:20px 12px;flex:1;overflow:auto}.pynia-picker>p{color:#a4b3c9;margin-bottom:15px}.pynia-picker>div{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:14px}.pynia-picker>div>button{background:#141e30;border:1px solid #27354b;border-radius:6px;display:flex;align-items:center;flex-direction:column;gap:8px;padding:14px 8px;color:#d6e0ef}.pynia-picker small{font-size:10px;color:#8b9ab2}.pynia-empty{padding:28px 12px;text-align:center;color:#8092ae}.pynia-empty p{color:#a4b3c9;line-height:1.6}.pynia-empty small{font-size:10px;line-height:1.5}.pynia-composer{padding:9px;border-top:1px solid #243249;background:#121a2b}.pynia-composer textarea{display:block;width:100%;box-sizing:border-box;resize:vertical;min-height:68px;max-height:240px;padding:8px;background:#0e1522;color:#d6e0ef;border:1px solid #27354b;border-radius:5px;outline:none;font:12px/1.5 inherit}.pynia-composer textarea:focus{border-color:#6183bd}.pynia-composer-controls{display:flex;align-items:center;gap:5px;margin-top:6px}.pynia-composer-controls>span{flex:1}.pynia-send{width:27px;height:27px;border:0;border-radius:5px;background:#3369ff;color:white;display:flex;align-items:center;justify-content:center}.pynia-send:disabled{opacity:.4}.pynia-config{display:flex;align-items:center;gap:4px;font-size:9px;color:#8b9ab2;min-width:0}.pynia-config select{max-width:95px;padding:3px;font-size:10px;background:#182338;color:#b9c9df;border:1px solid #27354b;border-radius:3px}.pynia-attachments{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:7px}.pynia-attachments>div,.pynia-attachments.saved span{display:flex;align-items:center;gap:4px;background:#243249;border-radius:3px;padding:4px;font-size:10px;max-width:160px}.pynia-attachments img{height:24px;width:24px;object-fit:cover}.pynia-attachments span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pynia-attachments button{display:flex;background:none;border:0;padding:0;color:#a4b3c9}.pynia-code-actions>div{display:flex;gap:8px;align-items:center;margin-top:5px;color:#8092ae;font-size:9px}.pynia-code-actions button{display:flex;align-items:center;gap:4px;background:transparent;border:1px solid #27354b;border-radius:3px;color:#a4b3c9;padding:3px 6px;font:inherit}.pynia-history{background:transparent;border:0;color:#96b5ff;padding:7px;font-size:11px}.pynia-activity{font-size:10px;line-height:1.5;color:#8b9ab2;background:#131e30;border:1px solid #203049;border-radius:4px;padding:7px;margin:8px 0}.pynia-activity summary{cursor:pointer}.pynia-activity pre{white-space:pre-wrap;max-height:250px;overflow:auto;font:10px/1.5 inherit}.pynia-tool{display:flex;align-items:center;gap:5px;margin-top:6px;flex-wrap:wrap}.pynia-tool small{color:#ed9292;flex-basis:100%}.pynia-working{display:flex;gap:6px;font-size:10px;color:#8b9ab2}.pynia-permission{padding:10px;background:#2b2732;border-block:1px solid #75603e;font-size:11px;max-height:220px;overflow:auto}.pynia-permission pre{white-space:pre-wrap;max-height:100px;overflow:auto;font-size:10px}.pynia-permission label{display:flex;flex-direction:column;gap:4px;margin:8px 0}.pynia-permission input{background:#0e1522;color:#d6e0ef;border:1px solid #27354b;padding:6px}.pynia-permission>div{display:flex;gap:7px;margin-top:8px;flex-wrap:wrap}.pynia-permission button{background:#243249;border:1px solid #5e6983;color:#d6e0ef;border-radius:4px;font:inherit;padding:6px}.pynia-agent-settings{width:min(680px,90vw)!important;max-height:85vh;display:flex;flex-direction:column}.pynia-agent-list{padding:0 16px;overflow:auto}.pynia-agent-list section{border:1px solid #27354b;border-radius:5px;padding:12px;margin-bottom:9px}.pynia-agent-list header{display:flex;align-items:center;gap:8px}.pynia-agent-list header small{margin-left:auto;color:#8b9ab2;font-size:10px}.pynia-agent-list p{font-size:11px;color:#a4b3c9;line-height:1.5}.pynia-agent-list section>div{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.pynia-agent-settings .modal-header h2{flex:1}
+.pynia-panel{display:flex;flex-direction:column;min-height:0;height:100%;font-size:12px;background:var(--panel);color:var(--text)}
+.pynia-header{display:flex;align-items:center;gap:7px;padding:8px 10px;border-bottom:1px solid var(--border);background:var(--panel)}
+.pynia-header strong{font-size:12px}
+.pynia-header small{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:10px}
+.pynia-header .icon-button{width:25px;height:25px}
+.pynia-error{color:var(--danger);font-size:11px;line-height:1.5;max-height:90px;overflow:auto;padding:9px;margin:0;white-space:pre-wrap}
+.pynia-messages{flex:1;min-height:80px;overflow:auto;padding:10px;scrollbar-gutter:stable}
+.pynia-message{margin:4px 0 16px;min-width:0}
+.pynia-message.user{background:var(--card);padding:9px;border-radius:6px;margin-left:18px}
+.pynia-message-role{font-size:10px;font-weight:500;color:var(--muted);margin-bottom:4px}
+.pynia-markdown{line-height:1.6;overflow-wrap:anywhere;color:var(--text)}
+.pynia-markdown p{margin:7px 0}
+.pynia-markdown pre{max-width:100%;overflow:auto;background:var(--input);border:1px solid var(--border);padding:9px;border-radius:4px}
+.pynia-markdown code{font:12px/1.5 'Cascadia Code','Ubuntu Mono',Consolas,monospace}
+.pynia-markdown table{display:block;overflow:auto;border-collapse:collapse;font-size:11px;max-width:100%}
+.pynia-markdown th,.pynia-markdown td{padding:5px 7px;border:1px solid var(--border)}
+.pynia-markdown img{max-width:100%;height:auto}
+.pynia-markdown a{color:var(--blue-light)}
+.pynia-markdown blockquote{margin:8px 0;padding-left:10px;border-left:2px solid var(--blue);color:var(--muted)}
+.pynia-picker{padding:20px 12px;flex:1;overflow:auto}
+.pynia-picker>p{color:var(--muted);margin-bottom:15px}
+.pynia-picker>div{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:14px}
+.pynia-picker>div>button{background:var(--card);border:1px solid var(--border);border-radius:6px;display:flex;align-items:center;flex-direction:column;gap:8px;padding:14px 8px;color:var(--text)}
+.pynia-picker small{font-size:10px;color:var(--muted)}
+.pynia-empty{padding:28px 12px;text-align:center;color:var(--dim)}
+.pynia-empty p{color:var(--muted);line-height:1.6}
+.pynia-empty small{font-size:10px;line-height:1.5}
+.pynia-composer{padding:9px;border-top:1px solid var(--border);background:var(--panel)}
+.pynia-composer textarea{display:block;width:100%;box-sizing:border-box;resize:vertical;min-height:68px;max-height:240px;padding:8px;background:var(--input);color:var(--text);border:1px solid var(--border);border-radius:5px;outline:none;font-family:inherit;font-size:12px;line-height:1.5}
+.pynia-composer textarea:focus{border-color:var(--focus)}
+.pynia-composer textarea::placeholder{color:var(--dim);opacity:1}
+.pynia-composer-controls{display:flex;align-items:center;gap:5px;margin-top:6px}
+.pynia-composer-controls>span{flex:1}
+.pynia-send{width:27px;height:27px;border:0;border-radius:5px;background:var(--blue);color:var(--on-accent);display:flex;align-items:center;justify-content:center}
+.pynia-send:disabled{opacity:.4}
+.pynia-config{display:flex;align-items:center;gap:4px;font-size:9px;color:var(--muted);min-width:0}
+.pynia-config select{max-width:95px;padding:3px;font-size:10px;background:var(--input);color:var(--text);border:1px solid var(--border);border-radius:3px}
+.pynia-attachments{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:7px}
+.pynia-attachments>div,.pynia-attachments.saved span{display:flex;align-items:center;gap:4px;background:var(--border);border-radius:3px;padding:4px;font-size:10px;max-width:160px}
+.pynia-attachments img{height:24px;width:24px;object-fit:cover}
+.pynia-attachments span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pynia-attachments button{display:flex;background:none;border:0;padding:0;color:var(--muted)}
+.pynia-code-actions>div{display:flex;gap:8px;align-items:center;margin-top:5px;color:var(--dim);font-size:9px}
+.pynia-code-actions button{display:flex;align-items:center;gap:4px;background:transparent;border:1px solid var(--border);border-radius:3px;color:var(--muted);padding:3px 6px;font:inherit}
+.pynia-history{background:transparent;border:0;color:var(--blue-light);padding:7px;font-size:11px}
+.pynia-activity{font-size:10px;line-height:1.5;color:var(--muted);background:var(--card);border:1px solid var(--border-muted);border-radius:4px;padding:7px;margin:8px 0}
+.pynia-activity summary{cursor:pointer}
+.pynia-activity pre{white-space:pre-wrap;max-height:250px;overflow:auto;font-family:inherit;font-size:10px;line-height:1.5}
+.pynia-tool{display:flex;align-items:center;gap:5px;margin-top:6px;flex-wrap:wrap}
+.pynia-tool small{color:var(--danger);flex-basis:100%}
+.pynia-working{display:flex;gap:6px;font-size:10px;color:var(--muted)}
+.pynia-permission{padding:10px;background:color-mix(in srgb,var(--warning) 10%,var(--panel));border-block:1px solid var(--warning);font-size:11px;max-height:220px;overflow:auto}
+.pynia-permission pre{white-space:pre-wrap;max-height:100px;overflow:auto;font-size:10px}
+.pynia-permission label{display:flex;flex-direction:column;gap:4px;margin:8px 0}
+.pynia-permission input{background:var(--input);color:var(--text);border:1px solid var(--border);padding:6px}
+.pynia-permission>div{display:flex;gap:7px;margin-top:8px;flex-wrap:wrap}
+.pynia-permission button{background:var(--border);border:1px solid var(--border);color:var(--text);border-radius:4px;font:inherit;padding:6px}
+.pynia-agent-settings{width:min(680px,90vw)!important;max-height:85vh;display:flex;flex-direction:column}
+.pynia-agent-list{padding:0 16px;overflow:auto}
+.pynia-agent-list section{border:1px solid var(--border);border-radius:5px;padding:12px;margin-bottom:9px}
+.pynia-agent-list header{display:flex;align-items:center;gap:8px}
+.pynia-agent-list header small{margin-left:auto;color:var(--muted);font-size:10px}
+.pynia-agent-list p{font-size:11px;color:var(--muted);line-height:1.5}
+.pynia-agent-list section>div{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.pynia-agent-settings .modal-header h2{flex:1}
 
-.pynia-install-output{max-height:180px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:8px;font:10px/1.5 'Ubuntu Mono',Consolas,monospace;background:#090f1b;border:1px solid #27354b;border-radius:4px}
+
+.pynia-install-output{max-height:180px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:8px;font:10px/1.5 'Ubuntu Mono',Consolas,monospace;background:var(--input);border:1px solid var(--border);border-radius:4px}
+
+.pynia-picker strong{display:flex;align-items:center;gap:5px}
+.pynia-picker>div>button:hover:not(:disabled){background:var(--hover)}
+.pynia-send:hover:not(:disabled){background:var(--blue-hover)}

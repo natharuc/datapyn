@@ -26,7 +26,7 @@ import { syntaxDiagnostics } from "./syntaxDiagnostics";
 export { selectedCode, focusEditor, editorAction, getRegisteredEditor, formatEditor, forceAutocomplete, transformEditorSelection, insertInEditor, replaceEditorCode, disposeModel, setCompletionContext } from "./editorRegistry";
 export type { EditorPreferences } from "./editorRegistry";
 import { InlineRequestGate, LanguageRequestGate, languageParams, mergeCompletions, type LanguageCompletion } from "./editorLanguage";
-import { completionSite, completionInsertion, escapePythonString, filterCompletions, localCompletions, pythonSymbols } from "./editorCompletions";
+import { completionSite, completionInsertion, contextualCompletions, escapePythonString, filterCompletions, localCompletions, pythonSymbols } from "./editorCompletions";
 import { useOwnerDocumentRevision } from "./useOwnerDocument";
 
 (globalThis as typeof globalThis & { MonacoEnvironment: monaco.Environment }).MonacoEnvironment = { getWorker: () => new EditorWorker() };
@@ -78,7 +78,7 @@ for (const language of ["sql", "python"]) monaco.languages.registerCompletionIte
       () => ({ ...languageParams(context, { language: language as Language, code: model.getValue(), line: position.lineNumber, column: position.column }), block_id: id }), valid,
       () => { if (valid() && record?.completionNavigation === navigation) triggerLocalSuggestions(id); }, manual ? 0 : 120);
     const contextualRemote = site.stringColumn ? remote.filter(entry => ["field", "column"].includes(entry.kind ?? "")) : site.member ? remote.filter(entry => !["keyword", "snippet", ...(language === "sql" ? ["variable"] : [])].includes(entry.kind ?? "")) : remote;
-    const items = mergeCompletions(filterCompletions(contextualRemote, site.prefix, language as Language), entries, language as Language);
+    const items = mergeCompletions(filterCompletions(contextualCompletions(contextualRemote,site,context,language as Language,entries), site.prefix, language as Language), entries, language as Language);
     return { incomplete: true, suggestions: items.map((entry) => {
       const startColumn = entry.start_column ?? site.startColumn, endColumn = entry.end_column ?? site.endColumn;
       const insert = { startLineNumber: position.lineNumber, endLineNumber: position.lineNumber, startColumn, endColumn: position.column };
@@ -150,7 +150,8 @@ export const MonacoBlock = memo(function MonacoBlock({ id, code, language, heigh
       padding: { top: 12, bottom: 12 }, smoothScrolling: false,
       scrollbar: { verticalScrollbarSize: 9, horizontalScrollbarSize: 9 },
       bracketPairColorization: { enabled: true }, tabSize: 4,
-      mouseWheelZoom:true, wordBasedSuggestions:"off", suggest: { insertMode: "replace" },
+      mouseWheelZoom:true, wordBasedSuggestions:"off", quickSuggestions:{other:true,comments:false,strings:false},quickSuggestionsDelay:35,
+      suggestOnTriggerCharacters:true,suggest: { insertMode: "replace",matchOnWordStartOnly:false,showIcons:true },
       fixedOverflowWidgets: true, overflowWidgetsDomNode: overflowHost,
     }); } catch (error) { overflowHost.remove(); throw error; }
     const editorNode = editor.getDomNode();

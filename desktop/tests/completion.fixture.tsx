@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import * as monaco from "monaco-editor/editor/editor.api.js";
 import { MonacoBlock } from "../src/MonacoBlock";
-import { models, setCompletionContext, triggerLocalSuggestions } from "../src/editorRegistry";
+import { models, setCompletionContext, triggerLocalSuggestions,forceAutocomplete } from "../src/editorRegistry";
 import { runtime, type Language, type RuntimeTransport } from "../src/runtime";
 import type { CompletionContext, LanguageCompletion } from "../src/editorLanguage";
 import type { EditorPreferences } from "../src/editorRegistry";
@@ -79,6 +79,7 @@ const test = {
     }};
   },
   suggest(){triggerLocalSuggestions("completion-test");},
+  force(){forceAutocomplete("completion-test");},
   reply(index:number,items:LanguageCompletion[]){const call=calls[index];if(!call.resolve)throw new Error("Not a completion request");call.resolved=true;call.resolve({items});},
   labels(){
     return [...document.querySelectorAll<HTMLElement>(".suggest-widget .monaco-list-row")].filter(row=>row.checkVisibility()).map(row=>row.querySelector(".label-name")?.textContent??"");

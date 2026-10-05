@@ -7,7 +7,7 @@
 .block-scope-trigger svg{flex:none;color:var(--muted)}
 .block-scope-label{color:var(--muted);flex:none}
 .block-scope-value{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.block-scope-popover{position:fixed;z-index:10050;width:310px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);overflow:auto;background:var(--panel);border:1px solid var(--border);border-radius:4px;box-shadow:0 4px 14px #0003;color:var(--text);font:inherit;font-size:12px}
+.block-scope-popover{position:fixed;z-index:10050;width:310px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);overflow:auto;background:var(--panel);border:1px solid var(--border);border-radius:4px;box-shadow:0 4px 14px var(--shadow-color);color:var(--text);font:inherit;font-size:12px}
 .block-scope-search{display:flex;align-items:center;gap:7px;padding:8px;border-bottom:1px solid var(--border)}
 .block-scope-search>svg{flex:none;color:var(--muted)}
 .block-scope-search input{min-width:0;flex:1;width:0;padding:3px 0;background:transparent;border:none;outline:none;color:var(--text);font:inherit;font-size:12px}

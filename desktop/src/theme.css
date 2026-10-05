@@ -1,0 +1,64 @@
+/* Shared workbench colors. Components use semantic tokens in both themes. */
+:root {
+  color-scheme: dark;
+  --bg: #1b1d20;
+  --panel: #222529;
+  --card: #292c31;
+  --input: #1e2024;
+  --hover: #33373e;
+  --selected: #303b49;
+  --border: #43474e;
+  --border-muted: #34373d;
+  --text: #dedfe3;
+  --muted: #a7abb3;
+  --dim: #979da6;
+  --blue: #527495;
+  --blue-light: #abc6df;
+  --blue-hover: #66869f;
+  --on-accent: #fff;
+  --focus: #abc6df;
+  --success: #97bea5;
+  --danger: #efa0a1;
+  --warning: #d1b281;
+  --sql: #c2ac86;
+  --python: #9eafc2;
+  --overlay: #070b12bf;
+  --shadow-color: #0005;
+  --shadow-strong: #0008;
+  --surface: var(--panel);
+  --background: var(--bg);
+  --foreground: var(--text);
+  --fg: var(--text);
+  --text-muted: var(--muted);
+  --accent: var(--blue);
+  --accent-soft: var(--selected);
+  --green: var(--success);
+  --red: var(--danger);
+}
+
+:root[data-theme=light] {
+  color-scheme: light;
+  --bg: #f4f6fa;
+  --panel: #fff;
+  --card: #edf1f7;
+  --input: #fff;
+  --hover: #e5ebf3;
+  --selected: #e4edf7;
+  --border: #bac5d3;
+  --border-muted: #d8e0eb;
+  --text: #29313a;
+  --muted: #536174;
+  --dim: #5f6b7b;
+  --blue: #416888;
+  --blue-light: #2e5f8e;
+  --blue-hover: #345b7d;
+  --focus: #416888;
+  --success: #237447;
+  --danger: #a83038;
+  --warning: #805619;
+  --sql: #755319;
+  --python: #355d80;
+  --overlay: #1b253966;
+  --shadow-color: #1b25391f;
+  --shadow-strong: #1b253933;
+}

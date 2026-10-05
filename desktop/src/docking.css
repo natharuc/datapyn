@@ -1,4 +1,27 @@
-.datapyn-dock {height:100%;width:100%;--dv-background-color:var(--bg);--dv-group-view-background-color:var(--panel);--dv-tabs-and-actions-container-height:30px;--dv-activegroup-visiblepanel-tab-background-color:var(--panel);--dv-activegroup-visiblepanel-tab-color:var(--blue-light);--dv-tab-font-size:11px;--dv-separator-border:var(--border);--dv-sash-color:#6b819988;}
+.datapyn-dock {
+  height:100%;width:100%;--dv-background-color:var(--bg);
+  --dv-group-view-background-color:var(--panel);
+  --dv-tabs-and-actions-container-height:30px;
+  --dv-tabs-and-actions-container-background-color:var(--card);
+  --dv-activegroup-visiblepanel-tab-background-color:var(--panel);
+  --dv-activegroup-hiddenpanel-tab-background-color:var(--card);
+  --dv-inactivegroup-visiblepanel-tab-background-color:var(--panel);
+  --dv-inactivegroup-hiddenpanel-tab-background-color:var(--card);
+  --dv-activegroup-visiblepanel-tab-color:var(--blue-light);
+  --dv-activegroup-hiddenpanel-tab-color:var(--muted);
+  --dv-inactivegroup-visiblepanel-tab-color:var(--text);
+  --dv-inactivegroup-hiddenpanel-tab-color:var(--muted);
+  --dv-tab-font-size:11px;--dv-separator-border:var(--border);
+  --dv-tab-divider-color:var(--border-muted);
+  --dv-paneview-header-border-color:var(--border-muted);
+  --dv-paneview-active-outline-color:var(--focus);
+  --dv-sash-color:var(--border-muted);--dv-active-sash-color:var(--focus);
+  --dv-icon-hover-background-color:var(--hover);
+  --dv-tabs-container-scrollbar-color:var(--muted);
+  --dv-scrollbar-background-color:var(--border);
+  --dv-floating-border:1px solid var(--border);
+  --dv-floating-titlebar-background-color:var(--card);
+}
 .dock-content {height:100%;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;background:var(--panel);}
 .dock-editor>.editor-area {height:100%;min-height:0;}
 /* Monaco menus escape dock paint clipping while remaining below app modals. */
@@ -11,13 +34,13 @@
 .dock-content .entity-info-content {overflow:auto;padding:16px;}
 .dock-content .results-resizer {display:none;}
 .entity-info {width:min(850px,92vw);}.entity-info-content{padding:16px;overflow:auto;max-height:75vh;}.entity-info-content table{width:100%;border-collapse:collapse;}.entity-info-content td,.entity-info-content th{padding:7px;border-bottom:1px solid var(--border);text-align:left;}.entity-info-content pre{white-space:pre-wrap;overflow-wrap:anywhere;}
-.tab-context {position:fixed;z-index:600;background:var(--panel);border:1px solid var(--border);box-shadow:0 8px 32px #0005;min-width:180px;padding:4px;display:flex;flex-direction:column;}.tab-context button {text-align:left;padding:8px;}
+.tab-context {position:fixed;z-index:600;background:var(--panel);border:1px solid var(--border);box-shadow:0 8px 32px var(--shadow-color);min-width:180px;padding:4px;display:flex;flex-direction:column;}.tab-context button {text-align:left;padding:8px;}
 .dock-group-actions {display:flex;align-items:center;gap:2px;padding-right:4px;}.dock-group-actions button {display:grid;place-items:center;width:23px;height:23px;}
-.datapyn-dock {--dv-drag-over-background-color:#6b819924;--dv-drag-over-border:1px solid var(--blue);--dv-dnd-compass-color:var(--blue);--dv-context-menu-background-color:var(--panel);--dv-context-menu-color:var(--text);--dv-floating-box-shadow:0 12px 32px #0005;}
+.datapyn-dock {--dv-drag-over-background-color:color-mix(in srgb,var(--blue) 14%,transparent);--dv-drag-over-border:1px solid var(--blue);--dv-dnd-compass-color:var(--blue);--dv-dnd-compass-cell-color:var(--selected);--dv-dnd-compass-edge-cell-color:var(--card);--dv-dnd-compass-active-cell-color:var(--hover);--dv-context-menu-background-color:var(--panel);--dv-context-menu-color:var(--text);--dv-floating-box-shadow:0 12px 32px var(--shadow-color);}
 .datapyn-dock .dv-tab {cursor:grab;touch-action:none;}
 .datapyn-dock .dv-tab.dv-tab-dragging {cursor:grabbing;}
 .datapyn-dock .dv-default-tab-content {user-select:none;}
-.dock-group-actions button:hover:not(:disabled) {color:var(--blue-light);background:#6b819920;}
+.dock-group-actions button:hover:not(:disabled) {color:var(--blue-light);background:var(--border-muted);}
 .dock-group-actions button:focus-visible {outline:2px solid var(--blue-light);outline-offset:-2px;}
 .dock-group-actions button:disabled {opacity:.3;}
 .dock-pyniaOutput>.pynia-output-panel {height:100%;min-height:0;flex:1;}

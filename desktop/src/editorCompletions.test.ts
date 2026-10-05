@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { completionInsertion, completionSite, filterCompletions, localCompletions, pythonSymbols } from "./editorCompletions";
+import { completionInsertion, completionSite, contextualCompletions, filterCompletions, localCompletions, pythonSymbols } from "./editorCompletions";
 import { dataframeMembers } from "./dataframeMembers";
 import { mergeCompletions } from "./editorLanguage";
 import type { CompletionContext } from "./editorLanguage";
@@ -76,6 +76,108 @@ describe("completion ranges and insertion", () => {
 });
 
 describe("instant local completion scope", () => {
+  it.each([["sqlserver","[customers]"],["mysql","`customers`"],["mariadb","`customers`"],["databricks","`customers`"],["postgresql",'"customers"'],["sqlite",'"customers"']])("shows and inserts a short table name in the focused %s namespace",(dbType,expected)=>{
+    const database="warehouse",schema=["mysql","mariadb"].includes(dbType)?database:"main",key=`${schema}.customers`;
+    const scoped:CompletionContext={variables:[],tables:[key],dbType,database,schema:["mysql","mariadb"].includes(dbType)?undefined:schema,
+      schemaSnapshot:{db_type:dbType,database,current_schema:schema,tables:{[key]:{name:"customers",schema,columns:[]}}}};
+    expect(localCompletions("sql",site("sql","FROM cust|"),scoped,"FROM cust")).toEqual([expect.objectContaining({label:"customers",insert_text:expected,detail:key})]);
+  });
+  it("normalizes remote table enrichment to the same focused label and insertion",()=>{
+    const remote=[{label:"main.sales",kind:"table",insert_text:'"main"."sales"',documentation:"Sales table"}];
+    const local=localCompletions("sql",site("sql","FROM sa|"),context,"FROM sa");
+    const normalized=contextualCompletions(remote,site("sql","FROM sa|"),context,"sql");
+    expect(normalized[0]).toMatchObject({label:"sales",insert_text:'"sales"',documentation:"Sales table",detail:"main.sales"});
+    expect(mergeCompletions(normalized,local,"sql")).toHaveLength(1);
+  });
+  it.each([["sqlserver","[c].[id]"],["mysql","`c`.`id`"],["mariadb","`c`.`id`"],["databricks","`c`.`id`"],["postgresql",'"c"."id"'],["sqlite",'"c"."id"']])("qualifies ambiguous %s JOIN fields without suggesting an invalid bare column",(dbType,insertion)=>{
+    const scoped:CompletionContext={variables:[],tables:[],schema:"main",dbType,schemaSnapshot:{tables:{
+      "main.customers":{name:"customers",schema:"main",columns:[{name:"id"},{name:"customer_name"}]},
+      "main.orders":{name:"orders",schema:"main",columns:[{name:"id"},{name:"order_total"}]},
+    }}};
+    const query=site("sql","SELECT i|"),source="SELECT i FROM customers c JOIN orders o ON c.id=o.id";
+    const local=localCompletions("sql",query,scoped,"SELECT i",[],source);
+    expect(local.filter(item=>item.kind==="column").map(item=>item.label)).toEqual(["c.id","o.id"]);
+    expect(local[0].insert_text).toBe(insertion);
+    const enriched=contextualCompletions([{label:"id",kind:"column",insert_text:"id",documentation:"Identifier"}],query,scoped,"sql",local);
+    expect(mergeCompletions(enriched,local,"sql").filter(item=>item.kind==="column").map(item=>item.label)).toEqual(["c.id","o.id"]);
+    expect(localCompletions("sql",site("sql","SELECT customer_n|"),scoped,"SELECT customer_n",[],source.replace("SELECT i","SELECT customer_n"))[0].label).toBe("customer_name");
+  });
+  it("qualifies known columns when a derived table or CTE has an inferred output",()=>{
+    const scoped:CompletionContext={variables:[],tables:[],dbType:"sqlite",schema:"main",schemaSnapshot:{tables:{"main.sales":{name:"sales",schema:"main",columns:[{name:"shared"}]}}}};
+    for(const source of ["SELECT shared FROM sales s JOIN (SELECT 1 AS shared) d ON 1=1","WITH d AS (SELECT 1 AS shared) SELECT shared FROM sales s JOIN d ON 1=1"]){
+      const before=source.slice(0,source.indexOf("shared FROM")+6),query=site("sql","SELECT shared|");
+      const items=localCompletions("sql",query,scoped,before,[],source,before.length);
+      expect(items.filter(item=>item.kind==="column")).toEqual([expect.objectContaining({label:"s.shared",filterText:"shared",insert_text:'"s"."shared"'})]);
+      expect(contextualCompletions([{label:"shared",kind:"column"}],query,scoped,"sql",items)[0]).toMatchObject({label:"s.shared",insert_text:'"s"."shared"'});
+    }
+  });
+  it("qualifies known columns until every JOIN table has loaded columns, then keeps unique names short",()=>{
+    for(const columns of [undefined,[]]){
+      const scoped:CompletionContext={variables:[],tables:[],dbType:"sqlite",schema:"main",schemaSnapshot:{tables:{
+        "main.sales":{name:"sales",schema:"main",columns:[{name:"shared"}]},"main.pending":{name:"pending",schema:"main",columns},
+      }}};
+      const source="SELECT shared FROM sales s JOIN pending p ON 1=1",query=site("sql","SELECT shared|");
+      expect(localCompletions("sql",query,scoped,"SELECT shared",[],source).filter(item=>item.kind==="column")).toEqual([expect.objectContaining({label:"s.shared",insert_text:'"s"."shared"'})]);
+      const ready:CompletionContext={...scoped,schemaSnapshot:{tables:{...scoped.schemaSnapshot!.tables,"main.pending":{name:"pending",schema:"main",columns:[{name:"other"}]}}}};
+      expect(localCompletions("sql",query,ready,"SELECT shared",[],source).filter(item=>item.kind==="column")).toEqual([expect.objectContaining({label:"shared",insert_text:'"shared"'})]);
+    }
+  });
+  it("keeps explicit qualifier tails and out-of-scope schema/catalog names",()=>{
+    const scoped:CompletionContext={variables:[],tables:[],dbType:"databricks",database:"warehouse",schema:"finance",schemaSnapshot:{tables:{
+      "warehouse.finance.orders":{name:"orders",schema:"finance",catalog:"warehouse",columns:[]},
+      "warehouse.reports.orders":{name:"orders",schema:"reports",catalog:"warehouse",columns:[]},
+      "archive.finance.orders":{name:"orders",schema:"finance",catalog:"archive",columns:[]},
+    }}};
+    const items=localCompletions("sql",site("sql","FROM ord|"),scoped,"FROM ord");
+    expect(items.map(item=>[item.label,item.insert_text])).toEqual([
+      ["orders","`orders`"],["reports.orders","`reports`.`orders`"],["archive.finance.orders","`archive`.`finance`.`orders`"],
+    ]);
+    expect(localCompletions("sql",site("sql","FROM warehouse.finance.ord|"),scoped,"FROM warehouse.finance.ord")[0]).toMatchObject({label:"orders",insert_text:"`orders`"});
+  });
+  it("preserves PostgreSQL quoted schema identity for local and delayed remote table suggestions",()=>{
+    const scoped:CompletionContext={variables:[],tables:[],dbType:"postgresql",database:"warehouse",schema:"analytics",schemaSnapshot:{tables:{
+      "Analytics.UpperOrders":{name:"UpperOrders",schema:"Analytics",columns:[]},
+      "analytics.lower_orders":{name:"lower_orders",schema:"analytics",columns:[]},
+      "Analytics.shared":{name:"shared",schema:"Analytics",columns:[]},
+      "analytics.shared":{name:"shared",schema:"analytics",columns:[]},
+    }}};
+    for(const [qualifier,expected] of [['"Analytics"',["UpperOrders","shared"]],["analytics",["lower_orders","shared"]],["ANALYTICS",["lower_orders","shared"]],['"analytics"',["lower_orders","shared"]]] as const){
+      const before=`FROM ${qualifier}.`,query=site("sql",before+"|");
+      const local=localCompletions("sql",query,scoped,before);
+      expect(local.map(item=>item.label)).toEqual(expected);
+      expect(local[0].insert_text).toBe(`"${expected[0]}"`);
+      const remote=contextualCompletions([{label:"Analytics.UpperOrders",kind:"table"},{label:"analytics.lower_orders",kind:"table"},{label:"shared",kind:"table"}],query,scoped,"sql",local);
+      expect(remote.map(item=>item.label)).toEqual(expected);
+      expect(remote.find(item=>item.label==="shared")?.detail).toBe(`${qualifier==='"Analytics"'?"Analytics":"analytics"}.shared`);
+    }
+  });
+  it("uses the selected MySQL database to disambiguate equal table names without a separate schema",()=>{
+    const scoped:CompletionContext={variables:[],tables:[],dbType:"mysql",database:"green",schemaSnapshot:{tables:{
+      "green.acesso":{name:"acesso",schema:"green",columns:[{name:"green_id"}]},
+      "audit.acesso":{name:"acesso",schema:"audit",columns:[{name:"audit_id"}]},
+    }}};
+    expect(localCompletions("sql",site("sql","FROM ace|"),scoped,"FROM ace").map(item=>item.label)).toEqual(["acesso","audit.acesso"]);
+    expect(localCompletions("sql",site("sql","acesso.|"),scoped,"acesso.").map(item=>item.label)).toEqual(["green_id"]);
+  });
+  it("retains qualification for an object shadowed by a temporary table",()=>{
+    const scoped:CompletionContext={variables:[],tables:[],dbType:"sqlite",schema:"main",schemaSnapshot:{tables:{
+      "main.sales":{name:"sales",schema:"main",columns:[]},"temp.sales":{name:"sales",schema:"temp",temporary:true,columns:[]},
+    }}};
+    expect(localCompletions("sql",site("sql","FROM sa|"),scoped,"FROM sa").map(item=>[item.label,item.insert_text])).toEqual([["main.sales",'"main"."sales"'],["sales",'"sales"']]);
+  });
+  it("matches embedded table words after prefix matches and keeps namespace restrictions",()=>{
+    const scoped:CompletionContext={variables:[],tables:["main.gecon_ft_movimentos_premio","main.movimentocobranca","other.movimentos"],dbType:"sqlite",schema:"main"};
+    expect(localCompletions("sql",site("sql","FROM movimento|"),scoped,"FROM movimento").map(item=>item.label)).toEqual(["main.movimentocobranca","other.movimentos","main.gecon_ft_movimentos_premio"]);
+    expect(localCompletions("sql",site("sql","FROM main.movimento|"),scoped,"FROM main.movimento").map(item=>item.label)).toEqual(["movimentocobranca","gecon_ft_movimentos_premio"]);
+    expect(filterCompletions([{label:"movimento"},{label:"gecon_ft_movimentos_premio"},{label:"orders"}],"movimento","sql").map(item=>item.label)).toEqual(["movimento","gecon_ft_movimentos_premio"]);
+  });
+  it("finds an embedded word in the final object of a 100k catalog and reuses bounded cached entries",()=>{
+    const scoped:CompletionContext={variables:[],tables:[...Array.from({length:100_000},(_,index)=>`main.table_${index}`),"main.gecon_ft_movimentos_premio"]};
+    const query=site("sql","FROM movimento|"),first=localCompletions("sql",query,scoped,"FROM movimento");
+    expect(first.map(item=>item.label)).toEqual(["main.gecon_ft_movimentos_premio"]);
+    expect(localCompletions("sql",query,{...scoped,variables:[{name:"df",type:"DataFrame"}]},"FROM movimento")[0]).toBe(first[0]);
+    expect(localCompletions("sql",site("sql","FROM table_|"),scoped,"FROM table_")).toHaveLength(500);
+  });
   it("includes real Python variables, imports, declarations, builtins and keywords", () => {
     const items = localCompletions("python", site("python", "|"), context, "", pythonSymbols("local_value = 1\nclass Thing:\n    pass"));
     expect(items.map(item => item.label)).toEqual(expect.arrayContaining(["frame", "pd", "np", "square_root", "calculate_total", "other_frame", "local_value", "Thing", "print", "False", "return"]));

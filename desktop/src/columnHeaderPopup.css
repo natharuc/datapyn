@@ -1,4 +1,4 @@
-.column-header-popup{position:fixed;z-index:260;box-sizing:border-box;width:306px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);overflow:auto;border:1px solid var(--border,#253147);border-radius:5px;background:var(--panel,#121a2b);color:inherit;box-shadow:0 8px 28px #0005;font:inherit;font-size:12px;line-height:1.35;scrollbar-width:thin}
+.column-header-popup{position:fixed;z-index:260;box-sizing:border-box;width:306px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);overflow:auto;border:1px solid var(--border,#253147);border-radius:5px;background:var(--panel,#121a2b);color:inherit;box-shadow:0 8px 28px var(--shadow-color);font:inherit;font-size:12px;line-height:1.35;scrollbar-width:thin}
 .column-header-popup>header{display:flex;align-items:center;gap:7px;min-height:34px;padding:5px 9px;border-bottom:1px solid var(--border-muted,#1b263a)}
 .column-header-popup>header>strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
 .column-header-popup>header>span{margin-left:auto;max-width:105px;color:var(--muted,#8b9cb3);font:10px "Ubuntu Mono",monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -23,8 +23,8 @@
 .column-header-range{display:grid;grid-template-columns:1fr 1fr;gap:7px}
 .column-header-single{display:flex;flex-direction:column}
 .column-header-hint{font-size:10px;color:var(--muted,#8b9cb3);line-height:1.5}
-.column-header-error{font-size:11px;line-height:1.4;color:#ef8389;margin:0}
-.column-header-popup input[aria-invalid=true]{border-color:#ef8389}
+.column-header-error{font-size:11px;line-height:1.4;color:var(--danger);margin:0}
+.column-header-popup input[aria-invalid=true]{border-color:var(--danger)}
 .column-header-filter-actions{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px}
 .column-header-filter-actions>button{padding:5px 8px;font-size:11px}
 .column-header-filter-actions>.column-header-apply{background:var(--blue,#3369ff);color:white;padding-inline:13px}

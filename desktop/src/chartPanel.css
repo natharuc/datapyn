@@ -28,7 +28,7 @@ details.chart-section:not([open])> :not(summary){display:none}
 .chart-series small{max-width:70px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chart-panel .chart-toggles{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .chart-hint{color:var(--muted,#8998b3);font-size:10px;line-height:1.5}
-.chart-missing-column{display:flex;justify-content:space-between;gap:6px;color:#ff7e87;font-size:11px}
+.chart-missing-column{display:flex;justify-content:space-between;gap:6px;color:var(--danger);font-size:11px}
 .chart-color-fields{display:grid;grid-template-columns:1fr;gap:7px}
 .chart-panel .chart-color-fields label{display:grid;grid-template-columns:62px 26px minmax(0,1fr);align-items:center;gap:7px}
 .chart-color-fields input[type=color]{width:26px;min-height:26px;height:26px;padding:1px;border:1px solid var(--border,#2b3547);border-radius:3px;background:transparent}
@@ -47,8 +47,8 @@ details.chart-section:not([open])> :not(summary){display:none}
 .chart-export-menu{position:relative}
 .chart-export-menu summary{list-style:none}
 .chart-export-menu summary::-webkit-details-marker{display:none}
-.chart-export-menu>div{position:absolute;z-index:25;right:0;top:calc(100% + 4px);min-width:105px;padding:4px;background:var(--surface,#151d2d);border:1px solid var(--border,#2b3547);box-shadow:0 8px 24px #0005;border-radius:4px;display:flex;flex-direction:column}
+.chart-export-menu>div{position:absolute;z-index:25;right:0;top:calc(100% + 4px);min-width:105px;padding:4px;background:var(--surface,#151d2d);border:1px solid var(--border,#2b3547);box-shadow:0 8px 24px var(--shadow-color);border-radius:4px;display:flex;flex-direction:column}
 .chart-export-menu>div>button{width:100%;text-align:left}
-@container datapyn-panel (max-width:650px){.chart-panel{grid-template-columns:minmax(0,1fr)}.chart-panel .chart-settings{position:absolute;z-index:20;left:0;top:39px;bottom:0;width:min(288px,100%);box-shadow:8px 0 24px #0005}.chart-toolbar>strong{max-width:130px}.chart-source-tag{display:none}.chart-toolbar-actions button>span{display:none}}
+@container datapyn-panel (max-width:650px){.chart-panel{grid-template-columns:minmax(0,1fr)}.chart-panel .chart-settings{position:absolute;z-index:20;left:0;top:39px;bottom:0;width:min(288px,100%);box-shadow:8px 0 24px var(--shadow-color)}.chart-toolbar>strong{max-width:130px}.chart-source-tag{display:none}.chart-toolbar-actions button>span{display:none}}
 .chart-series-order{display:flex;flex-direction:column;gap:3px;margin:4px 0 8px}.chart-series-order>div{display:flex;align-items:center;gap:4px;font-size:11px}.chart-series-order span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.chart-series-order button{padding:3px}.chart-source-missing{padding:24px;color:var(--text-muted)}.dock-results>.results-panel{container-name:datapyn-panel;container-type:inline-size;}
 .chart-settings-footer{display:flex;gap:6px;padding:8px 0 2px}.chart-settings-footer button{flex:1;padding:6px;font-size:11px;}.chart-settings-footer button:last-child{color:var(--accent);}

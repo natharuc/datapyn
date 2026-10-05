@@ -12,6 +12,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:autocomplete": "node scripts/test-autocomplete.mjs",
+    "test:theme": "node scripts/test-theme.mjs",
     "desktop:dev": "node ../scripts/tauri/dev.mjs",
     "runtime:bundle": "node ../scripts/tauri/runtime.mjs",
     "desktop:build": "node ../scripts/tauri/build.mjs",

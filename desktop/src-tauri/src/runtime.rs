@@ -33,6 +33,18 @@ impl Backend {
         method: String,
         params: Value,
     ) -> Result<Value, String> {
+        self.request_with(method, params, || RuntimeClient::start(app))
+            .await
+    }
+
+    // Keep the exact native validation/routing path testable without opening a
+    // WebView. Production and headless transport acceptance share this boundary.
+    async fn request_with(
+        &self,
+        method: String,
+        params: Value,
+        start: impl FnOnce() -> Result<RuntimeClient, String> + Send,
+    ) -> Result<Value, String> {
         if !allowed_method(&method) {
             return Err(format!("Unsupported runtime method: {method}"));
         }
@@ -51,7 +63,7 @@ impl Backend {
                 current.take();
             }
             if current.is_none() {
-                *current = Some(Arc::new(RuntimeClient::start(app)?));
+                *current = Some(Arc::new(start()?));
             }
             Arc::clone(current.as_ref().ok_or("Runtime failed to start")?)
         };
@@ -99,6 +111,7 @@ fn allowed_method(method: &str) -> bool {
             | "explorer.details"
             | "explorer.query"
             | "explorer.use_database"
+            | "language.prepare"
             | "language.complete"
             | "language.cancel"
             | "language.format"
@@ -527,14 +540,22 @@ mod tests {
         name: &str,
         execution_id: Option<&str>,
     ) -> Value {
+        event_matching(events, |message| {
+            message["event"] == name
+                && execution_id.map_or(true, |id| message["payload"]["execution_id"] == id)
+        })
+    }
+
+    fn event_matching(
+        events: &std::sync::mpsc::Receiver<Value>,
+        matches: impl Fn(&Value) -> bool,
+    ) -> Value {
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             let message = events
                 .recv_timeout(deadline.saturating_duration_since(Instant::now()))
                 .expect("Python event deadline exceeded");
-            if message["event"] == name
-                && execution_id.map_or(true, |id| message["payload"]["execution_id"] == id)
-            {
+            if matches(&message) {
                 return message["payload"].clone();
             }
         }
@@ -633,6 +654,73 @@ mod tests {
     }
 
     #[test]
+    fn native_boundary_prepares_and_publishes_sql_metadata() {
+        let backend = Backend::default();
+        let (sender, events) = std::sync::mpsc::channel();
+        let request = |method: &str, params: Value| {
+            let sender = sender.clone();
+            tauri::async_runtime::block_on(backend.request_with(method.into(), params, move || {
+                RuntimeClient::start_with_events(move |message| {
+                    let _ = sender.send(message);
+                })
+            }))
+            .unwrap()
+        };
+        let session = request("session.create", json!({}))["session_id"].clone();
+        request(
+            "connection.connect",
+            json!({"session_id":session,"config":{"db_type":"sqlite","database":":memory:"}}),
+        );
+        request(
+            "execution.run",
+            json!({"session_id":session,"execution_id":"create-completion-table","language":"sql","code":"CREATE TABLE customers (customer_id INTEGER, customer_name TEXT);"}),
+        );
+        assert_eq!(
+            event(
+                &events,
+                "execution.finished",
+                Some("create-completion-table")
+            )["status"],
+            "succeeded"
+        );
+        // Discard execution/connection metadata so only a new native prepare
+        // request can satisfy the following acceptance assertions.
+        while events.try_recv().is_ok() {}
+        let prepared = request(
+            "language.prepare",
+            json!({"session_id":session,"database":":memory:","code":"SELECT c. FROM customers c","refresh":true}),
+        );
+        assert_eq!(prepared["status"], "queued");
+        let metadata = event_matching(&events, |message| {
+            message["event"] == "language.context_updated"
+                && message["payload"]["metadata_state"] == "ready"
+                && message["payload"]["requested_scope"]["database"] == ":memory:"
+        });
+        assert_eq!(metadata["metadata_state"], "ready");
+        assert_eq!(metadata["requested_scope"]["database"], ":memory:");
+        let table = metadata["schema_snapshot"]["tables"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|table| table["name"] == "customers")
+            .unwrap();
+        let key = table["key"].as_str().unwrap();
+        let columns = metadata["schema_snapshot"]["columns"][key]
+            .as_array()
+            .unwrap();
+        assert!(columns
+            .iter()
+            .any(|column| column["name"] == "customer_name"));
+        assert!(tauri::async_runtime::block_on(backend.request_with(
+            "shell.execute".into(),
+            json!({}),
+            || panic!("invalid methods must not start a runtime")
+        ))
+        .is_err());
+        backend.shutdown();
+    }
+
+    #[test]
     fn shutdown_does_not_wait_for_a_held_input_mutex() {
         let client = Arc::new(RuntimeClient::start_with_events(|_| {}).unwrap());
         let held = Arc::clone(&client);
@@ -672,6 +760,7 @@ mod tests {
     fn native_bridge_only_exposes_runtime_contract() {
         assert!(allowed_method("execution.cancel"));
         assert!(allowed_method("language.cancel"));
+        assert!(allowed_method("language.prepare"));
         assert!(allowed_method("workspace.read"));
         assert!(allowed_method("result.export_text"));
         assert!(allowed_method("result.column_values"));

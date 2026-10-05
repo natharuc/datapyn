@@ -1,10 +1,10 @@
 .notification-toasts{position:fixed;bottom:42px;right:22px;z-index:900;display:flex;flex-direction:column-reverse;gap:9px;width:350px;max-width:calc(100vw - 32px);pointer-events:none}
-.notification-toasts .notification-card{position:relative;inset:auto;width:100%;padding:0;border-left-color:#4ba979;pointer-events:auto;overflow:hidden;animation:notification-arrive .18s ease-out}
-.notification-toasts .notification-card.failure{border-left-color:#df646b}
+.notification-toasts .notification-card{position:relative;inset:auto;width:100%;padding:0;border-left-color:var(--success);pointer-events:auto;overflow:hidden;animation:notification-arrive .18s ease-out}
+.notification-toasts .notification-card.failure{border-left-color:var(--danger)}
 .notification-toasts .notification-card.cancelled{border-left-color:var(--muted)}
 .notification-card .notification-open{position:static;display:flex;align-items:flex-start;gap:11px;width:100%;padding:15px 39px 14px 13px;text-align:left;font:inherit;color:inherit;background:transparent;border:0;border-radius:0}
-.notification-card .notification-open>svg{flex-shrink:0;margin-top:2px;color:#4ba979}
-.notification-card.failure .notification-open>svg{color:#df646b}
+.notification-card .notification-open>svg{flex-shrink:0;margin-top:2px;color:var(--blue-light)}
+.notification-card.failure .notification-open>svg{color:var(--danger)}
 .notification-card.cancelled .notification-open>svg{color:var(--muted)}
 .notification-card .notification-open:hover{background:var(--hover,#ffffff08)}
 .notification-card .notification-open strong,.notification-history-open strong{display:block;font-size:12px;line-height:1.5;overflow-wrap:anywhere}
@@ -26,7 +26,7 @@
 .notification-history-open small{font-size:10px;color:var(--blue-light);margin-right:14px}
 .notification-history-open time{font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums}
 .notification-history-open:disabled{opacity:1;cursor:default}
-.notification-delivery-error{display:block;margin-top:8px;color:#df9464;font-size:11px;line-height:1.5;overflow-wrap:anywhere}
+.notification-delivery-error{display:block;margin-top:8px;color:var(--danger);font-size:11px;line-height:1.5;overflow-wrap:anywhere}
 .notification-history-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;min-height:210px;color:var(--muted);font-size:12px}
 .notification-history-empty p{margin:0}
 .notification-history-footer{border-bottom:0;border-top:1px solid var(--border)}

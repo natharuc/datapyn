@@ -1,7 +1,7 @@
 .syntax-diagnostics { color:var(--muted,#7186a5); background:var(--panel,#0e1522); border-bottom:1px solid var(--border,#253047); font-size:11px; }
-.syntax-diagnostics.error { color:#e89898; }
-.syntax-diagnostics.warning { color:#c6ab78; }
-.syntax-diagnostics.valid { color:#69a994; }
+.syntax-diagnostics.error { color:var(--danger); }
+.syntax-diagnostics.warning { color:var(--warning); }
+.syntax-diagnostics.valid { color:var(--success); }
 .syntax-summary { min-height:27px; display:flex; align-items:center; gap:12px; padding:0 12px; }
 .syntax-summary button { border:0; background:none; color:inherit; padding:4px 0; display:flex; align-items:center; gap:6px; font:inherit; min-width:0; }
 .syntax-toggle { white-space:nowrap; flex:none; }
@@ -12,13 +12,10 @@
 .syntax-details { border-top:1px solid var(--border,#253047); padding:5px 12px 8px; max-height:210px; overflow:auto; }
 .syntax-details p { margin:4px 0 8px; color:inherit; line-height:1.5; }
 .syntax-issue { display:grid; grid-template-columns:75px 145px 1fr; gap:8px; width:100%; color:var(--muted,#dce5f3); font:inherit; text-align:left; padding:6px 0; border:0; border-bottom:1px solid var(--border,#253047); background:none; line-height:1.5; }
-.syntax-issue.error .syntax-severity { color:#e89898; }
-.syntax-issue.warning .syntax-severity { color:#c6ab78; }
+.syntax-issue.error .syntax-severity { color:var(--danger); }
+.syntax-issue.warning .syntax-severity { color:var(--warning); }
 .syntax-issue.info .syntax-severity { color:var(--muted,#7186a5); }
 .syntax-issue:hover,.syntax-first:hover { text-decoration:underline; text-underline-offset:3px; }
 .syntax-more { border:0; background:none; color:inherit; font:inherit; margin-top:6px; }
 .syntax-summary button:focus-visible,.syntax-details button:focus-visible { outline:1px solid var(--blue,#80a3ff); outline-offset:2px; }
-:root[data-theme=light] .syntax-diagnostics.error,:root[data-theme=light] .syntax-issue.error .syntax-severity { color:#ac3535; }
-:root[data-theme=light] .syntax-diagnostics.warning,:root[data-theme=light] .syntax-issue.warning .syntax-severity { color:#83602a; }
-:root[data-theme=light] .syntax-diagnostics.valid { color:#257458; }
 @media(max-width:900px) { .syntax-issue { grid-template-columns:60px 1fr; } .syntax-issue > span:last-child { grid-column:1/-1; } }
