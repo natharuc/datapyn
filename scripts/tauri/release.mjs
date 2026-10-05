@@ -23,11 +23,63 @@ export function releaseVersion(tag) {
   return stableVersion(tag.slice("tauri-v".length));
 }
 
-export function releaseRequest({ eventName, refType, refName, inputTag, publish = false, currentVersion }) {
-  if (eventName === "push" && refType === "branch") return { tag: `tauri-v${stableVersion(currentVersion)}`, publish: false };
-  if (eventName === "push" && refType === "tag") { releaseVersion(refName); return { tag: refName, publish: true }; }
-  if (eventName === "workflow_dispatch") { releaseVersion(inputTag); return { tag: inputTag, publish: publish === true }; }
+export function releaseRequest({ eventName, refType, refName, inputTag, publish = false, currentVersion, tagExists }) {
+  if (eventName === "push" && refType === "branch") {
+    const tag = `tauri-v${stableVersion(currentVersion)}`;
+    if (refName === "codex/tauri-migration") return { tag, publish: false, build: true };
+    if (refName === "main") {
+      if (typeof tagExists !== "boolean") throw new Error("Main releases require a verified version-tag lookup.");
+      return { tag, publish: !tagExists, build: !tagExists };
+    }
+  }
+  if (eventName === "push" && refType === "tag") { releaseVersion(refName); return { tag: refName, publish: true, build: true }; }
+  if (eventName === "workflow_dispatch") { releaseVersion(inputTag); return { tag: inputTag, publish: publish === true, build: true }; }
   throw new Error("Unsupported release workflow event.");
+}
+
+export function workflowRequest(env = process.env, repositoryRoot = root) {
+  const git = args => spawnSync("git", args, { cwd: repositoryRoot, encoding: "utf8", shell: false, windowsHide: true });
+  const config = JSON.parse(readFileSync(join(repositoryRoot, "desktop/src-tauri/tauri.conf.json"), "utf8"));
+  let tagExists;
+  if (env.GITHUB_EVENT_NAME === "push" && env.GITHUB_REF_TYPE === "branch" && env.GITHUB_REF_NAME === "main") {
+    const tag = `tauri-v${stableVersion(config.version)}`;
+    const lookup = git(["show-ref", "--verify", "--quiet", `refs/tags/${tag}`]);
+    if (lookup.error || ![0, 1].includes(lookup.status)) throw new Error("Could not verify whether the Tauri version tag already exists.");
+    tagExists = lookup.status === 0;
+  }
+  const request = releaseRequest({ eventName: env.GITHUB_EVENT_NAME, refType: env.GITHUB_REF_TYPE, refName: env.GITHUB_REF_NAME, inputTag: env.DATAPYN_RELEASE_TAG, publish: env.DATAPYN_RELEASE_PUBLISH === "true", currentVersion: config.version, tagExists });
+  const version = verifyReleaseVersion(request.tag, repositoryRoot);
+  const commit = git(["rev-parse", "HEAD"]);
+  if (commit.status !== 0 || !/^[a-f\d]{40}$/.test(commit.stdout.trim())) throw new Error("Could not resolve the Tauri release commit.");
+  if (request.publish && !["origin/codex/tauri-migration", "origin/main"].some(branch => git(["merge-base", "--is-ancestor", "HEAD", branch]).status === 0)) throw new Error("Production Tauri tags must reference the isolated migration branch or main.");
+  return { version, ...request, commit: commit.stdout.trim() };
+}
+
+export async function publishedReleaseExists(tag, token, request = fetch) {
+  releaseVersion(tag);
+  if (!token) throw new Error("Published Tauri release lookup requires the read-only GitHub workflow token.");
+  const response = await request(`https://api.github.com/repos/${RELEASE_REPOSITORY}/releases/tags/${tag}`, {
+    method: "GET",
+    signal: AbortSignal.timeout(30_000),
+    headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}`, "X-GitHub-Api-Version": "2026-03-10" },
+  });
+  if (response.status === 404) return false;
+  if (!response.ok) throw new Error(`Could not verify the existing Tauri release: HTTP ${response.status}.`);
+  const release = await response.json();
+  if (release.tag_name !== tag || typeof release.draft !== "boolean") throw new Error("The existing Tauri release response is invalid.");
+  return !release.draft;
+}
+
+export async function prepareWorkflowRequest(env = process.env, repositoryRoot = root, lookupPublishedRelease = tag => publishedReleaseExists(tag, env.GH_TOKEN)) {
+  const request = workflowRequest(env, repositoryRoot);
+  if (env.GITHUB_EVENT_NAME === "push" && env.GITHUB_REF_TYPE === "tag") {
+    // Publishing from main can create the tag through the release API. A later
+    // tag event must not rebuild an already-published immutable distribution.
+    const published = await lookupPublishedRelease(request.tag);
+    if (typeof published !== "boolean") throw new Error("Could not verify whether the Tauri release is published.");
+    if (published) return { ...request, publish: false, build: false };
+  }
+  return request;
 }
 
 export function compareVersions(left, right) {
@@ -211,14 +263,10 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   try {
     const [command, ...args] = process.argv.slice(2);
     if (command === "workflow-request") {
-      const config = JSON.parse(readFileSync(join(root, "desktop/src-tauri/tauri.conf.json"), "utf8"));
-      const request = releaseRequest({ eventName: process.env.GITHUB_EVENT_NAME, refType: process.env.GITHUB_REF_TYPE, refName: process.env.GITHUB_REF_NAME, inputTag: process.env.DATAPYN_RELEASE_TAG, publish: process.env.DATAPYN_RELEASE_PUBLISH === "true", currentVersion: config.version });
-      const version = verifyReleaseVersion(request.tag);
-      const commit = spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8", shell: false });
-      if (commit.status !== 0 || !/^[a-f\d]{40}$/.test(commit.stdout.trim())) throw new Error("Could not resolve the Tauri release commit.");
-      if (request.publish && !["origin/codex/tauri-migration", "origin/main"].some(branch => spawnSync("git", ["merge-base", "--is-ancestor", "HEAD", branch], { cwd: root, shell: false }).status === 0)) throw new Error("Production Tauri tags must reference the isolated migration branch or main.");
+      const request = await prepareWorkflowRequest();
       if (!process.env.GITHUB_OUTPUT) throw new Error("This command requires a GitHub Actions output file.");
-      appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\ntag=${request.tag}\ncommit=${commit.stdout.trim()}\npublish=${request.publish}\n`);
+      appendFileSync(process.env.GITHUB_OUTPUT, `version=${request.version}\ntag=${request.tag}\ncommit=${request.commit}\npublish=${request.publish}\nbuild=${request.build}\n`);
+      console.log(request.build ? `${request.publish ? "Publish" : "Validate"} ${request.tag} from ${request.commit}.` : `${request.tag} already exists; this event will not rebuild or replace the version.`);
     } else if (command === "verify-version") console.log(verifyReleaseVersion(args[0]));
     else if (command === "manifest") {
       const [directory, platform, baseUrl, output, version] = args;

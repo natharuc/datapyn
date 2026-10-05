@@ -1,6 +1,6 @@
-# DataPyn Desktop — migração Tauri
+# DataPyn Desktop
 
-Frontend React/TypeScript em Tauri 2, com Monaco e grade de resultados. A execução SQL/Python fica em um runtime Python local e em kernels separados por sessão. Este diretório inicia a migração; a versão PyQt continua disponível enquanto a matriz de paridade não estiver completa.
+Frontend React/TypeScript em Tauri 2, com Monaco e grade de resultados. A execução SQL/Python fica em um runtime Python local e em kernels separados por sessão. Esta é a aplicação desktop da branch `main`; o código PyQt6 permanece para compatibilidade e manutenção do legado.
 
 Consulte [arquitetura, contrato e fases](../docs/TAURI_MIGRATION.md) e o [diagnóstico inicial](../docs/DATAPYN_DIAGNOSTIC_AND_MIGRATION_BASELINE.md).
 
@@ -55,8 +55,8 @@ npm run desktop:build
 
 O runtime deve ser construído no mesmo sistema e arquitetura do destino. `--target` aceita o host Rust nativo; o script rejeita cross-compilation do runtime Python. Artefatos gerados ficam em `build/tauri-runtime`, `desktop/src-tauri/binaries` e no target Cargo.
 
-O bundle é um artefato de validação da migração. Empacotamento sem Qt não equivale a paridade funcional: gerenciador de pacotes, Pynia/ACP, timers, migração de dados e atualização ainda precisam de seus próprios gates.
+O workflow de distribuição testa os instaladores Windows, Linux e macOS em runners descartáveis, incluindo o runtime congelado e as assinaturas do updater. Consulte [a publicação de versões](../docs/TAURI_RELEASE.md) e [a matriz de funcionalidades e validações](../docs/TAURI_FEATURE_PARITY.md).
 
-## Dados e retorno à versão atual
+## Dados e versão PyQt6
 
-A nova interface não deve importar nem sobrescrever automaticamente configurações, credenciais, workspaces ou resultados da versão PyQt. Importação de um arquivo escolhido e migração de formatos são ações explícitas. Para voltar à versão atual, execute `uv run python source/main.py` na raiz. Não há substituição do instalador oficial nesta etapa.
+O Tauri mantém configurações, credenciais, workspaces e resultados em armazenamento próprio. Importação de um arquivo escolhido e migração de formatos são ações explícitas. Para executar a interface PyQt6 preservada, use `uv run python source/main.py` na raiz. Os instaladores e canais de atualização são independentes.

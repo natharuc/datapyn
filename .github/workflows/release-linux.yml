@@ -1,6 +1,8 @@
 name: Build Linux Installers (dry run)
 
-# Packaging dry-run only. Real Linux artifacts are published by
+# Legacy PyQt packaging dry-run only, on PyQt-only maintenance refs.
+# The main branch uses the separate Tauri distribution workflow.
+# Real Linux artifacts are published by
 # "Continuous Delivery - PSR" (build-linux-release) onto the same GitHub Release
 # as Windows and macOS. Do not re-enable on: release — that duplicated the build.
 on:
@@ -18,10 +20,24 @@ permissions:
 jobs:
   build-linux-deb:
     runs-on: ubuntu-22.04
+    if: |
+      github.event_name == 'workflow_dispatch' &&
+      github.ref_name != 'main' &&
+      !startsWith(github.ref_name, 'tauri-') &&
+      github.ref_name != 'codex/tauri-migration'
 
     steps:
       - name: Setup | Checkout Repository
         uses: actions/checkout@v4
+
+      - name: Guard | Keep PyQt releases separate from Tauri
+        env:
+          RELEASE_REF: ${{ github.ref_name }}
+        run: |
+          if [[ "$RELEASE_REF" == main || "$RELEASE_REF" == tauri-* || "$RELEASE_REF" == codex/tauri-migration || -f desktop/src-tauri/tauri.conf.json ]]; then
+            echo "::error::Select a PyQt-only maintenance branch or an old v* tag. Tauri releases use the dedicated DataPyn Tauri release workflow."
+            exit 1
+          fi
 
       - name: Setup | Extract version
         id: version

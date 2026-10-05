@@ -9,9 +9,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/natharuc/datapyn/releases/latest"><img src="https://img.shields.io/badge/version-1.36.1-blue.svg" alt="Version"></a>
+  <a href="https://github.com/natharuc/datapyn/releases/tag/tauri-v1.0.1"><img src="https://img.shields.io/badge/Tauri-1.0.1-blue.svg" alt="Version"></a>
   <img src="https://img.shields.io/badge/Python-3.12+-3776AB.svg?logo=python&logoColor=white" alt="Python">
-  <img src="https://img.shields.io/badge/PyQt6-6.6+-41CD52.svg?logo=qt&logoColor=white" alt="PyQt6">
+  <img src="https://img.shields.io/badge/Tauri-2-24C8D8.svg?logo=tauri&logoColor=white" alt="Tauri">
   <img src="https://img.shields.io/badge/Monaco-VS_Code-007ACC.svg?logo=visualstudiocode&logoColor=white" alt="Monaco">
   <img src="https://img.shields.io/badge/uv-package_manager-DE5FE9.svg" alt="uv">
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License">
@@ -36,6 +36,8 @@ O DataPyn e uma IDE focada em **consultas, pipelines e analise** contra bancos r
 - **Pynia**, assistente com contexto da sessao (schema, blocos, resultados e selecao)
 
 Fluxo tipico: executar SQL, materializar o resultado como DataFrame nomeado e continuar em Python no bloco seguinte — sem sair do editor.
+
+`main` contem o aplicativo **Tauri**, com frontend React/TypeScript, host Rust e kernels Python por sessao. A distribuicao PyQt6 permanece historica, com versao e canal de atualizacao independentes.
 
 ---
 
@@ -74,7 +76,7 @@ Fluxo tipico: executar SQL, materializar o resultado como DataFrame nomeado e co
 - **Object Explorer** — tabelas, colunas e procedures da conexao ativa
 - **Timer por aba** — reexecucao periodica dos blocos da sessao
 - **Notificacoes por aba** — templates com referencias ao ultimo resultado (`{{result[0][0]}}`)
-- **Auto-update** via GitHub Releases (instalador Windows)
+- **Auto-update** assinado via canal Tauri no Windows, Linux e macOS
 
 ### Interface
 
@@ -107,64 +109,29 @@ Site e documentacao publica: [datapyn.page](https://datapyn.page)
 
 ## Instalacao
 
-Instaladores oficiais: [datapyn.page/downloads.html](https://datapyn.page/downloads.html) ou [GitHub Releases](https://github.com/natharuc/datapyn/releases/latest).
+Instaladores Tauri: [release 1.0.1](https://github.com/natharuc/datapyn/releases/tag/tauri-v1.0.1). Os arquivos seguem o nome `DataPyn-Tauri-<versao>-<plataforma>`. O link `releases/latest` permanece reservado ao PyQt6 historico.
 
 | Sistema | Artefato | Notas |
 |---------|----------|--------|
-| Windows x64 | `DataPyn-Setup.exe` | Instala em `%LOCALAPPDATA%\DataPyn` |
-| Linux amd64 | `datapyn_amd64.deb` | Ubuntu/Debian 22.04+. Outras distros: `DataPyn-linux-x86_64.tar.gz` |
-| macOS Apple Silicon | `DataPyn-macos-arm64.dmg` | Unsigned — no Gatekeeper use **Open** no menu de contexto ou `xattr -cr /Applications/DataPyn.app` |
+| Windows x64 | `*-windows-x86_64-setup.exe`, ZIP | Setup inclui WebView2 e prepara ODBC quando necessario |
+| Linux amd64 | `*-linux-x86_64.deb`, AppImage, tar.gz | Base Ubuntu 22.04; atualizacao em copia gerenciada pelo usuario |
+| macOS Apple Silicon | `*-darwin-aarch64.dmg` | Sem Developer ID, pode exigir liberacao em Privacidade e Seguranca |
 
-SQL Server no Linux: use o driver **pymssql** (FreeTDS no wheel). `pyodbc` exige `unixodbc` + driver Microsoft/FreeTDS no sistema.
+O runtime Python e os drivers Python acompanham os pacotes. Requisitos de drivers nativos, armazenamento e atualizacao: [distribuicao Tauri](docs/TAURI_DISTRIBUTION.md).
 
-**Desenvolvedores** (Python **3.12+**, [uv](https://docs.astral.sh/uv/)):
+### Desenvolvimento
 
-### Windows
-
-```powershell
-git clone https://github.com/natharuc/datapyn.git
-cd datapyn
-scripts\install.bat
-scripts\run.bat
-```
-
-Build the Windows setup helper locally: `uv run pyinstaller installer/datapyn_setup.spec --clean`
-
-### Linux (Ubuntu/Debian)
+Prerequisitos: Node.js **22**, Rust **1.90+**, Python **3.12+**, [uv](https://docs.astral.sh/uv/) e dependencias nativas da plataforma descritas em [AGENTS.md](AGENTS.md).
 
 ```bash
 git clone https://github.com/natharuc/datapyn.git
 cd datapyn
-chmod +x scripts/linux/install.sh scripts/linux/run.sh
-./scripts/linux/install.sh
-./scripts/linux/run.sh
+uv sync --dev --frozen
+npm --prefix desktop ci
+npm --prefix desktop run desktop:dev
 ```
 
-O `install.sh` instala dependencias de sistema (Qt, ODBC, libpq, etc.) quando necessario.
-
-Empacotar `.deb` apos PyInstaller: `bash scripts/linux/package.sh <version>` (requer `fpm`). Dry-run no CI: Actions → **Build Linux Installers (dry run)**.
-
-### macOS
-
-```bash
-brew install python@3.12
-git clone https://github.com/natharuc/datapyn.git
-cd datapyn
-chmod +x scripts/linux/install.sh scripts/linux/run.sh
-./scripts/linux/install.sh
-./scripts/linux/run.sh
-```
-
-### Docker (experimental)
-
-```bash
-docker build -t datapyn .
-docker run -it --rm \
-  -e DISPLAY=$DISPLAY \
-  -v /tmp/.X11-unix:/tmp/.X11-unix \
-  -v $(pwd)/workspaces:/app/workspaces \
-  datapyn
-```
+O PyQt6 retido em `source/main.py`, `scripts/install.bat`, `scripts/run.bat` e `scripts/linux/` destina-se a manutencao historica em uma referencia explicita. Esses scripts nao sao o fluxo de desenvolvimento ou publicacao de `main`.
 
 ---
 
@@ -193,8 +160,12 @@ Atalhos editaveis em **Configuracoes > Atalhos**.
 
 ```
 datapyn/
+├── desktop/
+│   ├── src/                 # React, Monaco, resultados e estado da UI
+│   └── src-tauri/           # Host Rust, integracoes nativas e updater
 ├── source/
-│   ├── main.py
+│   ├── datapyn_runtime/     # Supervisor e kernels Python sem Qt
+│   ├── main.py             # Entry point PyQt historico
 │   └── src/
 │       ├── core/            # Sessoes, executor, resultados
 │       ├── database/        # Conectores SQLAlchemy
@@ -204,8 +175,9 @@ datapyn/
 │       │   └── copilot/     # SDK / LSP Copilot
 │       ├── ui/                # Janela principal e componentes
 │       └── design_system/     # Tokens e temas
-├── tests/                   # Suite pytest (pytest-qt)
-├── scripts/                 # install, build, CI
+├── runtime_tests/           # Contratos do runtime Tauri
+├── tests/                   # Suite historica PyQt (pytest-qt)
+├── scripts/tauri/           # Desenvolvimento, build e distribuicao Tauri
 ├── docs/                    # Notas tecnicas internas
 ├── pyproject.toml
 └── uv.lock
@@ -217,48 +189,42 @@ datapyn/
 
 | Area | Stack |
 |------|--------|
-| GUI | PyQt6, Qt WebEngine, QtAwesome |
-| Editor | Monaco (WebView) |
+| GUI | Tauri 2, Rust, React, TypeScript |
+| Editor | Monaco |
 | Dados | Pandas, Polars, PyArrow, matplotlib |
 | SQL | SQLAlchemy, sqlglot, sqlparse |
 | IA | Pynia (multi-provedor), github-copilot-sdk |
-| Build | PyInstaller, uv |
+| Build | Tauri, PyInstaller (sidecar Python), uv, npm, Cargo |
 
 ---
 
 ## Testes
 
 ```bash
-uv run pytest
+npm --prefix desktop test
+npm --prefix desktop run build
+uv run pytest -c runtime_tests/pytest.ini runtime_tests -q
+node scripts/tauri/release.mjs verify-version tauri-v1.0.1
 
-# Rapido (sem testes GUI manuais)
-uv run pytest tests/ \
-  --ignore=tests/test_visual_manual.py \
-  --ignore=tests/test_gui.py -q
-
-# Cobertura
-uv run pytest --cov=source/src --cov-report=html
+# Contratos Rust (a partir de desktop/src-tauri)
+cargo fmt --check
+cargo test --locked
 ```
 
-Testes Qt usam `QT_QPA_PLATFORM=offscreen` no CI.
+A suite historica `uv run pytest tests/` permanece separada; os testes Qt usam `QT_QPA_PLATFORM=offscreen` no CI.
 
 ---
 
 ## Build (executavel)
 
-### Windows
-
-```powershell
-scripts\build.bat
-# Saida: dist/DataPyn.exe
-```
-
-### Linux / macOS
-
 ```bash
-uv run pyinstaller scripts/datapyn.spec --clean
-# Saida: dist/DataPyn
+npm --prefix desktop run desktop:build -- --no-bundle
+# Saida nativa: desktop/src-tauri/target/release/
 ```
+
+Instaladores assinados e requisitos por plataforma: [distribuicao](docs/TAURI_DISTRIBUTION.md) e [release](docs/TAURI_RELEASE.md). Um push em `main` publica a versao dos manifests quando o tag `tauri-vX.Y.Z` ainda nao existe, apos validar as tres plataformas. A branch de migracao continua como dry run; tags Tauri e despacho manual tambem sao suportados. A versao Tauri e atualizada explicitamente, sem bump automatico por tipo de commit.
+
+Os scripts `scripts/build.bat` e `scripts/datapyn.spec` permanecem para builds historicos PyQt6.
 
 ---
 

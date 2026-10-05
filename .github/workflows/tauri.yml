@@ -1,6 +1,29 @@
 name: DataPyn Desktop - Tauri migration
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - "desktop/**"
+      - "source/datapyn_runtime/**"
+      - "source/src/database/**"
+      - "source/src/core/__init__.py"
+      - "source/src/core/parameter_settings.py"
+      - "source/src/core/session_result_storage.py"
+      - "source/src/utils/**"
+      - "source/src/services/__init__.py"
+      - "source/src/services/entity_metadata*"
+      - "source/src/services/pynia/**"
+      - "source/src/services/visualization/**"
+      - "scripts/tauri/**"
+      - "runtime_tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/tauri.yml"
+      - ".github/workflows/tauri-release.yml"
+      - ".github/workflows/release.yml"
+      - ".github/workflows/release-linux.yml"
   pull_request:
     paths:
       - "desktop/**"
@@ -20,6 +43,8 @@ on:
       - "uv.lock"
       - ".github/workflows/tauri.yml"
       - ".github/workflows/tauri-release.yml"
+      - ".github/workflows/release.yml"
+      - ".github/workflows/release-linux.yml"
   workflow_dispatch:
     inputs:
       installers:
@@ -79,7 +104,7 @@ jobs:
           npm test
           npm run build
       - name: Distribution pipeline tests
-        run: node --test scripts/tauri/common.test.mjs scripts/tauri/release.test.mjs scripts/tauri/linux-package.test.mjs scripts/tauri/publish.test.mjs scripts/tauri/windows-prerequisites.test.mjs scripts/tauri/smoke-installed.test.mjs
+        run: node --test scripts/tauri/common.test.mjs scripts/tauri/release.test.mjs scripts/tauri/legacy-release.test.mjs scripts/tauri/linux-package.test.mjs scripts/tauri/publish.test.mjs scripts/tauri/windows-prerequisites.test.mjs scripts/tauri/smoke-installed.test.mjs
       - name: Runtime tests
         run: uv run pytest -c runtime_tests/pytest.ini runtime_tests -q
       - name: Runtime smoke (source)

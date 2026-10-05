@@ -1,12 +1,8 @@
 name: Continuous Delivery - PSR
 
+# PyQt maintenance is explicit. The main branch now releases through Tauri;
+# successful legacy test runs must never publish the old application.
 on:
-  workflow_run:
-    workflows: ["Continuous Integration - Tests"]
-    branches:
-      - main
-    types:
-      - completed
   workflow_dispatch:
     inputs:
       rebuild_only:
@@ -31,16 +27,13 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
-    # Manual recovery stays available for PyQt refs; Tauri has a separate workflow.
-    # On workflow_run we check that tests passed and commit is not from Actions.
+    # Rebuild old v* tags or maintain a PyQt-only branch. Also inspect the checked
+    # out source below so renaming a Tauri branch cannot bypass this isolation.
     if: |
-      (github.event_name == 'workflow_dispatch' && !startsWith(github.ref_name, 'tauri-') && github.ref_name != 'codex/tauri-migration') || (
-        github.event_name == 'workflow_run' &&
-        github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.head_commit &&
-        !contains(github.event.workflow_run.head_commit.message, '[skip ci]') &&
-        github.event.workflow_run.head_commit.author.email != 'actions@users.noreply.github.com'
-      )
+      github.event_name == 'workflow_dispatch' &&
+      github.ref_name != 'main' &&
+      !startsWith(github.ref_name, 'tauri-') &&
+      github.ref_name != 'codex/tauri-migration'
     concurrency:
       group: ${{ github.workflow }}-release-${{ github.ref_name }}
       cancel-in-progress: false
@@ -54,48 +47,42 @@ jobs:
       version: ${{ steps.set_release_outputs.outputs.version || steps.dry_run_version.outputs.version }}
 
     steps:
-      - name: Guard | Keep PyQt releases separate from Tauri
-        env:
-          RELEASE_REF: ${{ github.ref_name }}
-        run: |
-          if [[ "$RELEASE_REF" == tauri-* || "$RELEASE_REF" == codex/tauri-migration ]]; then
-            echo "::error::Tauri releases use the dedicated DataPyn Tauri release workflow."
-            exit 1
-          fi
       - name: Install SSH Client and add private key to ssh-agent
-        if: github.event_name != 'workflow_dispatch' || inputs.rebuild_only != true
+        if: inputs.rebuild_only != true
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.ACTIONS_DEPLOY_KEY }}
 
-      # On workflow_dispatch: checkout current branch.
-      # On workflow_run: checkout the branch that triggered the tests.
-      - name: Setup | Checkout Repository on Release Branch
+      - name: Setup | Checkout Selected PyQt Ref
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.ref || github.event.workflow_run.head_branch }}
-          ssh-key: ${{ (github.event_name != 'workflow_dispatch' || inputs.rebuild_only != true) && secrets.ACTIONS_DEPLOY_KEY || '' }}
+          ref: ${{ github.ref }}
+          ssh-key: ${{ inputs.rebuild_only != true && secrets.ACTIONS_DEPLOY_KEY || '' }}
 
-      - name: Setup | Force release branch to be at workflow sha
-        if: github.event_name != 'workflow_dispatch'
+      - name: Guard | Keep PyQt releases separate from Tauri
+        env:
+          RELEASE_REF: ${{ github.ref_name }}
         run: |
-          git reset --hard ${{ github.event.workflow_run.head_sha }}
+          if [[ "$RELEASE_REF" == main || "$RELEASE_REF" == tauri-* || "$RELEASE_REF" == codex/tauri-migration || -f desktop/src-tauri/tauri.conf.json ]]; then
+            echo "::error::Select a PyQt-only maintenance branch or an old v* tag. Tauri releases use the dedicated DataPyn Tauri release workflow."
+            exit 1
+          fi
 
       - name: Setup | Python
-        if: github.event_name != 'workflow_dispatch' || inputs.rebuild_only != true
+        if: inputs.rebuild_only != true
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Setup | Install uv
-        if: github.event_name != 'workflow_dispatch' || inputs.rebuild_only != true
+        if: inputs.rebuild_only != true
         uses: astral-sh/setup-uv@v3
         with:
           version: "latest"
 
       - name: Setup | Install dependencies
-        if: github.event_name != 'workflow_dispatch' || inputs.rebuild_only != true
+        if: inputs.rebuild_only != true
         run: uv sync --dev
 
       # Official PSR docker action pip-installs latest GitPython on every run.
@@ -103,11 +90,11 @@ jobs:
       # uses while loading config. Run the locked CLI plus our compatibility shim.
       - name: Action | Semantic Version Release
         id: release
-        if: github.event_name != 'workflow_dispatch' || inputs.rebuild_only != true
+        if: inputs.rebuild_only != true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GIT_COMMIT_AUTHOR: "github-actions <actions@users.noreply.github.com>"
-          FORCE_LEVEL: ${{ github.event_name == 'workflow_dispatch' && inputs.force || '' }}
+          FORCE_LEVEL: ${{ inputs.force || '' }}
         run: |
           git config user.name "github-actions"
           git config user.email "actions@users.noreply.github.com"
@@ -119,7 +106,7 @@ jobs:
 
       - name: Fallback | Force patch when new commits did not match a release
         id: release_fallback
-        if: steps.release.outputs.released != 'true' && (github.event_name != 'workflow_dispatch' || inputs.rebuild_only != true)
+        if: steps.release.outputs.released != 'true' && inputs.rebuild_only != true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GIT_COMMIT_AUTHOR: "github-actions <actions@users.noreply.github.com>"
@@ -130,7 +117,7 @@ jobs:
 
       - name: Set release job outputs
         id: set_release_outputs
-        if: github.event_name != 'workflow_dispatch' || inputs.rebuild_only != true
+        if: inputs.rebuild_only != true
         run: |
           if [ "${{ steps.release.outputs.released }}" = "true" ]; then
             echo "released=true" >> "$GITHUB_OUTPUT"
@@ -148,10 +135,10 @@ jobs:
           fi
 
       - name: Report | No semantic release (conventional commits required)
-        if: steps.set_release_outputs.outputs.released != 'true' && (github.event_name != 'workflow_dispatch' || inputs.rebuild_only != true)
+        if: steps.set_release_outputs.outputs.released != 'true' && inputs.rebuild_only != true
         run: |
           echo "::notice::Semantic Release did not bump the version (released=false)."
-          echo "Commits on main since the last tag must use Conventional Commits, for example:"
+          echo "Commits on the selected PyQt maintenance branch since the last tag must use Conventional Commits, for example:"
           echo "  feat: new feature (minor bump)"
           echo "  fix: bug fix (patch bump)"
           echo "Free-form subjects like 'Improve grid performance' are mapped by scripts/datapyn_commit_parser.py."
@@ -160,7 +147,7 @@ jobs:
 
       - name: Manual | Read version from pyproject.toml (rebuild only)
         id: dry_run_version
-        if: github.event_name == 'workflow_dispatch' && inputs.rebuild_only == true
+        if: inputs.rebuild_only == true
         run: |
           VERSION=$(grep '^version = ' pyproject.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
           if [ -z "$VERSION" ] || [ "$VERSION" = "0.0.0" ]; then
@@ -172,19 +159,6 @@ jobs:
           echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Rebuild only: version=$VERSION tag=v${VERSION} (no bump)"
-
-  # Automatic runs that only merge ci:/chore:/docs: succeed the release job but skip artifacts.
-  verify-release-published:
-    needs: release
-    if: github.event_name == 'workflow_run' && needs.release.outputs.released != 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Fail when no release was published
-        run: |
-          echo "::error::Release artifacts were not built: semantic-release returned released=false."
-          echo "Check commits since the last tag and scripts/datapyn_commit_parser.py heuristics."
-          echo "Manual recovery: Actions → Continuous Delivery - PSR → force: patch|minor|major"
-          exit 1
 
   build-windows-release:
     needs: release

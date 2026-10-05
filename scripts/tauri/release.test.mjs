@@ -1,8 +1,9 @@
 import { strict as assert } from "node:assert";
+import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { artifactBaseUrl, combineRelease, compareVersions, RELEASE_CHANNEL, RELEASE_PLATFORMS, releaseRequest, releaseVersion, signedConfiguration, stageRelease, UPDATE_ENDPOINT, updateManifest, validateManifest, verifyReleaseVersion } from "./release.mjs";
+import { artifactBaseUrl, combineRelease, compareVersions, prepareWorkflowRequest, publishedReleaseExists, RELEASE_CHANNEL, RELEASE_PLATFORMS, releaseRequest, releaseVersion, signedConfiguration, stageRelease, UPDATE_ENDPOINT, updateManifest, validateManifest, verifyReleaseVersion, workflowRequest } from "./release.mjs";
 import { completeRelease, fixturePlatforms, temporaryRelease } from "./release-fixtures.mjs";
 
 test("signed builds cannot consume the PyQt latest release or leak a private key into configuration", () => {
@@ -27,12 +28,111 @@ test("Tauri tags use stable independent versions and reject legacy tags", () => 
 });
 
 test("migration branch pushes remain dry runs even if a publishing flag is present", () => {
-  assert.deepEqual(releaseRequest({ eventName: "push", refType: "branch", refName: "codex/tauri-migration", currentVersion: "1.0.0", publish: true }), { tag: "tauri-v1.0.0", publish: false });
-  assert.deepEqual(releaseRequest({ eventName: "push", refType: "tag", refName: "tauri-v1.0.1" }), { tag: "tauri-v1.0.1", publish: true });
-  assert.deepEqual(releaseRequest({ eventName: "workflow_dispatch", inputTag: "tauri-v1.0.0" }), { tag: "tauri-v1.0.0", publish: false });
-  assert.deepEqual(releaseRequest({ eventName: "workflow_dispatch", inputTag: "tauri-v1.0.0", publish: true }), { tag: "tauri-v1.0.0", publish: true });
+  assert.deepEqual(releaseRequest({ eventName: "push", refType: "branch", refName: "codex/tauri-migration", currentVersion: "1.0.0", publish: true }), { tag: "tauri-v1.0.0", publish: false, build: true });
+  assert.deepEqual(releaseRequest({ eventName: "push", refType: "tag", refName: "tauri-v1.0.1" }), { tag: "tauri-v1.0.1", publish: true, build: true });
+  assert.deepEqual(releaseRequest({ eventName: "workflow_dispatch", inputTag: "tauri-v1.0.0" }), { tag: "tauri-v1.0.0", publish: false, build: true });
+  assert.deepEqual(releaseRequest({ eventName: "workflow_dispatch", inputTag: "tauri-v1.0.0", publish: true }), { tag: "tauri-v1.0.0", publish: true, build: true });
   assert.throws(() => releaseRequest({ eventName: "push", refType: "tag", refName: "v1.57.0", publish: true }));
   assert.throws(() => releaseRequest({ eventName: "pull_request", publish: true }));
+});
+
+test("main publishes only a new synchronized Tauri version", () => {
+  const event = { eventName: "push", refType: "branch", refName: "main", currentVersion: "1.0.1" };
+  assert.deepEqual(releaseRequest({ ...event, tagExists: false }), { tag: "tauri-v1.0.1", publish: true, build: true });
+  assert.deepEqual(releaseRequest({ ...event, tagExists: true, publish: true }), { tag: "tauri-v1.0.1", publish: false, build: false });
+  assert.throws(() => releaseRequest(event), /verified version-tag lookup/);
+  assert.throws(() => releaseRequest({ ...event, refName: "feature/other", tagExists: false }), /Unsupported/);
+});
+
+function workflowFixture(t) {
+  const repositoryRoot = temporaryRelease(t);
+  mkdirSync(join(repositoryRoot, "desktop/src-tauri"), { recursive: true });
+  writeFileSync(join(repositoryRoot, "desktop/package.json"), JSON.stringify({ version: "1.0.1" }));
+  writeFileSync(join(repositoryRoot, "desktop/src-tauri/Cargo.toml"), '[package]\nversion = "1.0.1"\n');
+  writeFileSync(join(repositoryRoot, "desktop/src-tauri/tauri.conf.json"), JSON.stringify({ version: "1.0.1", identifier: "app.datapyn.tauri" }));
+  const git = args => {
+    const result = spawnSync("git", ["-c", "user.name=Release Test", "-c", "user.email=release-test@example.invalid", "-c", "commit.gpgSign=false", "-c", "tag.gpgSign=false", ...args], { cwd: repositoryRoot, encoding: "utf8", shell: false, windowsHide: true });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  git(["init", "--initial-branch=main"]);
+  git(["commit", "--allow-empty", "-m", "test: create workflow source"]);
+  git(["update-ref", "refs/remotes/origin/main", "HEAD"]);
+  const env = { GITHUB_EVENT_NAME: "push", GITHUB_REF_TYPE: "branch", GITHUB_REF_NAME: "main" };
+  return { repositoryRoot, env, git };
+}
+
+test("workflow detects both lightweight and annotated existing tags and skips replacement builds", t => {
+  const { repositoryRoot, env, git } = workflowFixture(t);
+  const first = workflowRequest(env, repositoryRoot);
+  assert.equal(first.version, "1.0.1");
+  assert.equal(first.publish, true);
+  assert.equal(first.build, true);
+  assert.equal(first.commit, git(["rev-parse", "HEAD"]));
+  git(["tag", "tauri-v1.0.1"]);
+  assert.deepEqual(workflowRequest(env, repositoryRoot), { ...first, publish: false, build: false });
+  git(["tag", "--delete", "tauri-v1.0.1"]);
+  git(["tag", "--annotate", "tauri-v1.0.1", "--message", "Published version"]);
+  assert.deepEqual(workflowRequest(env, repositoryRoot), { ...first, publish: false, build: false });
+  assert.equal(workflowRequest({ ...env, GITHUB_REF_NAME: "codex/tauri-migration" }, repositoryRoot).build, true);
+});
+
+test("main publication fails for mismatched versions and sources outside the authorized branches", t => {
+  const { repositoryRoot, env, git } = workflowFixture(t);
+  writeFileSync(join(repositoryRoot, "desktop/package.json"), JSON.stringify({ version: "1.0.0" }));
+  assert.throws(() => workflowRequest(env, repositoryRoot), /versions must match/);
+  writeFileSync(join(repositoryRoot, "desktop/package.json"), JSON.stringify({ version: "1.0.1" }));
+  git(["update-ref", "-d", "refs/remotes/origin/main"]);
+  assert.throws(() => workflowRequest(env, repositoryRoot), /migration branch or main/);
+});
+
+test("tag pushes skip published versions, build new releases and fail closed when lookup fails", async t => {
+  const { repositoryRoot, env } = workflowFixture(t);
+  const tagEnv = { ...env, GITHUB_REF_TYPE: "tag", GITHUB_REF_NAME: "tauri-v1.0.1" };
+  const first = workflowRequest(tagEnv, repositoryRoot);
+  assert.deepEqual(await prepareWorkflowRequest(tagEnv, repositoryRoot, async tag => { assert.equal(tag, first.tag); return true; }), { ...first, publish: false, build: false });
+  assert.deepEqual(await prepareWorkflowRequest(tagEnv, repositoryRoot, async () => false), first);
+  await assert.rejects(prepareWorkflowRequest(tagEnv, repositoryRoot, async () => { throw new Error("API unavailable"); }), /API unavailable/);
+  await assert.rejects(prepareWorkflowRequest(tagEnv, repositoryRoot, async () => undefined), /Could not verify/);
+});
+
+test("main and explicit dispatch retain their decisions without a published-release lookup", async t => {
+  const { repositoryRoot, env } = workflowFixture(t);
+  const unexpectedLookup = async () => { assert.fail("Only tag pushes query published releases"); };
+  assert.deepEqual(await prepareWorkflowRequest(env, repositoryRoot, unexpectedLookup), workflowRequest(env, repositoryRoot));
+  const dispatch = { ...env, GITHUB_EVENT_NAME: "workflow_dispatch", DATAPYN_RELEASE_TAG: "tauri-v1.0.1", DATAPYN_RELEASE_PUBLISH: "true" };
+  const request = await prepareWorkflowRequest(dispatch, repositoryRoot, unexpectedLookup);
+  assert.equal(request.build, true);
+  assert.equal(request.publish, true);
+});
+
+test("read-only release lookup distinguishes public, draft and missing releases without accepting API errors", async () => {
+  const tag = "tauri-v1.0.1";
+  const token = "workflow-test-token";
+  for (const [draft, expected] of [[false, true], [true, false]]) {
+    const published = await publishedReleaseExists(tag, token, async (url, options) => {
+      assert.equal(url, `https://api.github.com/repos/natharuc/datapyn/releases/tags/${tag}`);
+      assert.equal(options.method, "GET");
+      assert.equal(options.headers.Authorization, `Bearer ${token}`);
+      return new Response(JSON.stringify({ tag_name: tag, draft }), { status: 200 });
+    });
+    assert.equal(published, expected);
+  }
+  assert.equal(await publishedReleaseExists(tag, token, async () => new Response(null, { status: 404 })), false);
+  for (const status of [401, 403, 429, 500]) await assert.rejects(publishedReleaseExists(tag, token, async () => new Response(null, { status })), new RegExp(`HTTP ${status}`));
+  for (const release of [{ tag_name: "tauri-v1.0.0", draft: false }, { tag_name: tag }, { tag_name: tag, draft: "false" }]) {
+    await assert.rejects(publishedReleaseExists(tag, token, async () => new Response(JSON.stringify(release))), /response is invalid/);
+  }
+  await assert.rejects(publishedReleaseExists(tag, "", async () => { assert.fail("No unauthenticated lookup"); }), /read-only GitHub workflow token/);
+});
+
+test("release workflow fetches version tags and gates package builds on the version decision", () => {
+  const workflow = readFileSync(new URL("../../.github/workflows/tauri-release.yml", import.meta.url), "utf8");
+  assert.match(workflow, /branches:\s+ - "main"/);
+  assert.match(workflow, /fetch-depth: 0\s+fetch-tags: true/);
+  assert.match(workflow, /build: \$\{\{ steps\.release\.outputs\.build \}\}/);
+  assert.match(workflow, /build:\s+needs: prepare\s+if: needs\.prepare\.outputs\.build == 'true'/);
+  assert.match(workflow, /GH_TOKEN: \$\{\{ github\.token \}\}/);
 });
 
 test("tag verification checks only Tauri versions and its isolated application identity", t => {

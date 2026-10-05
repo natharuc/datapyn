@@ -1,11 +1,12 @@
-# Release independente do DataPyn Tauri
+# Release do DataPyn Tauri
 
-O workflow `.github/workflows/tauri-release.yml` compila nativamente as mesmas
-plataformas e arquiteturas de `.github/workflows/release.yml` do PyQt6. Não chama
-o instalador antigo, não altera `pyproject.toml`, não usa os tags `vX.Y.Z` do
-semantic-release e nunca promove uma release Tauri para `releases/latest`.
+`main` contém o aplicativo Tauri e seu fluxo de publicação oficial. O workflow
+`.github/workflows/tauri-release.yml` compila nativamente as três plataformas
+abaixo. A versão de `pyproject.toml`, os tags `vX.Y.Z` e o instalador PyQt6
+permanecem históricos e independentes. Releases Tauri não são promovidas para
+`releases/latest`.
 
-| Plataforma | PyQt6 publicado atualmente | Distribuição Tauri |
+| Plataforma | Distribuição histórica PyQt6 | Distribuição Tauri |
 | --- | --- | --- |
 | Windows x86_64 | Setup `.exe`, ZIP | NSIS `.exe` assinado para updater, ZIP com aplicativo e sidecar |
 | Linux x86_64, base Ubuntu 22.04 | DEB, tar.gz | DEB com launcher AppImage por usuário, AppImage assinada, tar.gz portátil com o mesmo launcher |
@@ -17,11 +18,13 @@ autenticação seguem os requisitos descritos em [TAURI_RUNTIME_DISTRIBUTION.md]
 
 ## Canal e versões
 
-As versões Tauri começam em `1.0.0`, independentemente da versão PyQt6. Antes
-de criar `tauri-v1.0.1`, alinhe `desktop/package.json`,
-`desktop/src-tauri/Cargo.toml` e `desktop/src-tauri/tauri.conf.json` em `1.0.1`.
-Atualize também os respectivos lockfiles. O workflow recusa tags antigos,
-pré-releases, versões divergentes e a identidade antiga de preview.
+A versão Tauri atual é `1.0.1`, independentemente da versão PyQt6. Para uma nova
+release, altere em conjunto `desktop/package.json`,
+`desktop/src-tauri/Cargo.toml`, `desktop/src-tauri/tauri.conf.json` e os respectivos
+lockfiles. Valide com `node scripts/tauri/release.mjs verify-version tauri-vX.Y.Z`.
+O workflow recusa tags de outro canal, pré-releases, versões divergentes e a
+identidade antiga de preview. Conventional Commits não incrementam a versão
+Tauri automaticamente.
 
 O feed fixo é
 `https://github.com/natharuc/datapyn/releases/download/tauri-stable/latest.json`.
@@ -68,30 +71,40 @@ removidas antes do build para não tentar importar um certificado vazio.
 
 ## Compilar e publicar
 
+Um push em `main` publica automaticamente a versão dos manifests quando o tag
+`tauri-vX.Y.Z` ainda não existe. O workflow valida o commit, compila e verifica as
+três plataformas; somente depois publica a release, criando o tag nesse SHA e
+promovendo o feed. Se o tag já existe, os jobs de build e publicação são ignorados.
+Para a próxima release, primeiro atualize os manifests e lockfiles no commit
+que será integrado em `main`.
+
 Um push na branch `codex/tauri-migration` faz um **dry run** com assinatura e
 build nas três plataformas, conservando os arquivos como artifacts. Ele não
 cria tags ou releases nem muda o feed, mesmo que um flag de publicação seja
-injetado no ambiente. O primeiro teste da distribuição pode usar esse fluxo.
+injetado no ambiente.
 
-O workflow também declara `workflow_dispatch`, mas o GitHub só aceita execução
-manual quando esse arquivo existir na branch padrão do repositório. Enquanto
-ele existir apenas em `codex/tauri-migration`, use push nessa branch para o dry
-run e push do tag para publicar. Não é necessário incluir o workflow em `main`
-para esses dois fluxos. Quando a execução manual ficar disponível, informe um
-tag Tauri existente e mantenha `publish: false` para gerar artifacts sem publicar.
-[Requisito da branch padrão para execução manual no GitHub](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow?tool=cli).
+O despacho manual continua disponível: informe um tag Tauri existente em
+`release_tag` e mantenha `publish: false` para gerar artifacts sem publicar.
+Use `publish: true` para publicar uma nova release ou retomar um rascunho. Se a
+versão já foi publicada e a promoção do feed falhou, use somente **Re-run failed
+jobs** no run original para preservar os artifacts. Um novo push em `main` ou **Re-run all
+jobs** encontra o tag e ignora os builds; um rebuild manual pode gerar bytes
+diferentes, que o publicador recusa para uma versão já publicada.
 
-Quando a distribuição estiver validada, crie e envie o tag da versão:
+Também é possível publicar por push de um tag próprio no commit validado:
 
 ```bash
-git tag tauri-v1.0.0 <commit-validado-da-branch-tauri>
-git push origin tauri-v1.0.0
+git tag tauri-v1.0.1 <commit-validado>
+git push origin tauri-v1.0.1
 ```
 
 Um push de tag Tauri ou execução manual com `publish: true` habilita publicação.
-O commit precisa pertencer à branch isolada de migração ou a `main`; não exige
-misturar o código Tauri com o pipeline PSR. O guard do workflow legado também
-recusa execução manual em refs `tauri-*` e na branch `codex/tauri-migration`.
+Se o push de tag encontrar uma release já pública, ignora build e publicação;
+um tag sem release ou com rascunho mantém o fluxo de build.
+O commit precisa pertencer à branch de migração ou a `main`. O pipeline PSR
+PyQt6 não publica automaticamente em `main`: sua manutenção exige uma referência
+histórica explícita, como um tag `vX.Y.Z` ou uma branch contendo somente PyQt6.
+Os guards legados recusam `main`, refs Tauri e árvores com o aplicativo Tauri.
 
 O build verifica frontend, Python e contratos Rust, empacota o Python com os
 drivers e executa os quatro smokes do sidecar congelado. No macOS, repete os
@@ -169,7 +182,7 @@ sobrescrita pelo seed.
 
 ```bash
 node --test scripts/tauri/common.test.mjs scripts/tauri/release.test.mjs scripts/tauri/linux-package.test.mjs scripts/tauri/publish.test.mjs scripts/tauri/windows-prerequisites.test.mjs scripts/tauri/smoke-installed.test.mjs
-node scripts/tauri/release.mjs verify-version tauri-v1.0.0
+node scripts/tauri/release.mjs verify-version tauri-v1.0.1
 ```
 
 O teste que realmente monta e inspeciona um DEB roda no Linux. Os testes do

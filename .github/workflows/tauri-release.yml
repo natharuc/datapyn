@@ -3,6 +3,7 @@ name: DataPyn Tauri - isolated release
 on:
   push:
     branches:
+      - "main"
       - "codex/tauri-migration"
     tags:
       - "tauri-v*"
@@ -11,7 +12,7 @@ on:
       release_tag:
         description: "Existing independent Tauri tag (tauri-vX.Y.Z)"
         required: true
-        default: "tauri-v1.0.0"
+        default: "tauri-v1.0.1"
         type: string
       publish:
         description: "Publish all platform installers and advance only the tauri-stable updater feed"
@@ -34,25 +35,29 @@ jobs:
       tag: ${{ steps.release.outputs.tag }}
       commit: ${{ steps.release.outputs.commit }}
       publish: ${{ steps.release.outputs.publish }}
+      build: ${{ steps.release.outputs.build }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.sha }}
           fetch-depth: 0
+          fetch-tags: true
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
       - name: Verify isolated version and source
         id: release
         env:
+          GH_TOKEN: ${{ github.token }}
           DATAPYN_RELEASE_TAG: ${{ inputs.release_tag }}
           DATAPYN_RELEASE_PUBLISH: ${{ inputs.publish }}
         run: node scripts/tauri/release.mjs workflow-request
       - name: Release pipeline tests
-        run: node --test scripts/tauri/common.test.mjs scripts/tauri/release.test.mjs scripts/tauri/linux-package.test.mjs scripts/tauri/publish.test.mjs scripts/tauri/windows-prerequisites.test.mjs scripts/tauri/smoke-installed.test.mjs
+        run: node --test scripts/tauri/common.test.mjs scripts/tauri/release.test.mjs scripts/tauri/legacy-release.test.mjs scripts/tauri/linux-package.test.mjs scripts/tauri/publish.test.mjs scripts/tauri/windows-prerequisites.test.mjs scripts/tauri/smoke-installed.test.mjs
 
   build:
     needs: prepare
+    if: needs.prepare.outputs.build == 'true'
     name: Tauri (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
@@ -123,7 +128,7 @@ jobs:
           npm --prefix desktop ci
       - name: Validate frontend, runtime and native contracts
         run: |
-          node --test scripts/tauri/common.test.mjs scripts/tauri/release.test.mjs scripts/tauri/linux-package.test.mjs scripts/tauri/publish.test.mjs scripts/tauri/windows-prerequisites.test.mjs scripts/tauri/smoke-installed.test.mjs
+          node --test scripts/tauri/common.test.mjs scripts/tauri/release.test.mjs scripts/tauri/legacy-release.test.mjs scripts/tauri/linux-package.test.mjs scripts/tauri/publish.test.mjs scripts/tauri/windows-prerequisites.test.mjs scripts/tauri/smoke-installed.test.mjs
           npm --prefix desktop test
           uv run pytest -c runtime_tests/pytest.ini runtime_tests -q
           cargo fmt --manifest-path desktop/src-tauri/Cargo.toml --check

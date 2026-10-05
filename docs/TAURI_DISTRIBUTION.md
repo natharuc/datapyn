@@ -1,8 +1,8 @@
 # Distribuição DataPyn Tauri
 
 O Tauri tem instalação, armazenamento, assinatura e canal de atualização próprios.
-A migração permanece em `codex/tauri-migration`. O instalador e updater do PyQt6
-não instalam esta versão.
+`main` é a referência do aplicativo Tauri. O instalador e updater históricos do
+PyQt6 continuam separados e não instalam esta versão.
 
 ## Plataformas preservadas
 
@@ -43,7 +43,7 @@ do usuário. O pipeline verifica o sidecar novamente depois da assinatura.
 ## Identidade e armazenamento
 
 - Nome: `DataPyn Tauri`; identificador: `app.datapyn.tauri`.
-- Versão independente: `1.0.0`, sem alterar a numeração do PyQt6.
+- Versão independente: `1.0.1`, sem alterar a numeração do PyQt6.
 - Windows: `%LOCALAPPDATA%/app.datapyn.tauri`.
 - macOS: `~/Library/Application Support/app.datapyn.tauri`.
 - Linux: `$XDG_DATA_HOME/app.datapyn.tauri` ou `~/.local/share/app.datapyn.tauri`.
@@ -100,8 +100,10 @@ ao usuário e SYSTEM. `password.dpapi` só abre no mesmo usuário Windows. Guard
 chave e senha em backup seguro antes de distribuir: perder a chave impede assinar
 updates aceitos pelos clientes instalados.
 
-Push na branch de migração gera artefatos para revisão e não publica releases.
-Publicação exige tag própria ou despacho explícito, conforme TAURI_RELEASE.md.
+Push em `main` publica a versão atual quando seu tag `tauri-vX.Y.Z` ainda não
+existe, após validar os três builds. Um tag existente evita nova publicação.
+Push na branch de migração gera artefatos para revisão. Tags Tauri e despacho
+manual continuam disponíveis, conforme [TAURI_RELEASE.md](TAURI_RELEASE.md).
 A assinatura do updater é diferente do certificado de editor Windows e da
 notarização Apple. Configure essas credenciais para distribuição com editor
 reconhecido/Gatekeeper; assinatura ad hoc não substitui notarização.

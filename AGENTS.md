@@ -8,19 +8,17 @@ Instructions for AI agents (Cursor, Copilot, Claude, etc.) working in this repos
 
 Format: `type(scope): subject`
 
-| Type | Semver on merge to `main` |
-|------|---------------------------|
-| `feat` | Minor |
-| `fix`, `perf`, `refactor`, `revert`, `build` | Patch |
-| `chore`, `ci`, `docs`, `style`, `test` | No automatic bump |
-
-CI uses `scripts/datapyn_commit_parser.py` (extends python-semantic-release) plus a **fallback patch** if no release is detected. Imperative subjects without a prefix (e.g. `Add …`, `Improve …`) are mapped heuristically, but **`feat:` / `fix:` are still required** for predictable changelog and semver.
+Use `feat` for features, `fix` for corrections, and the appropriate `perf`, `refactor`, `revert`, `build`, `chore`, `ci`, `docs`, `style`, or `test` type for other changes. Conventional Commits describe the change; they do not automatically bump the Tauri version.
 
 See `.github/git-commit-instructions.md` and `.cursor/rules/conventional-commits.mdc`.
 
 ## Releases
 
-After tests pass on `main`, python-semantic-release bumps the version and builds the Windows MSI. Manual recovery: GitHub Actions → **Continuous Delivery - PSR** → `force: patch|minor|major` (with `rebuild_only: false`).
+`main` is the authoritative Tauri application. A push to `main` publishes its current version after native validation on all three platforms when `tauri-vX.Y.Z` does not exist. An existing version tag skips build/publication. The migration branch remains a dry run; Tauri tag pushes and manual dispatch are also supported.
+
+For a new release, update the app version in `desktop/package.json`, `desktop/package-lock.json`, `desktop/src-tauri/Cargo.toml`, `desktop/src-tauri/Cargo.lock`, and `desktop/src-tauri/tauri.conf.json`, then run `node scripts/tauri/release.mjs verify-version tauri-vX.Y.Z`. Keep dependency versions, the updater key/feed, and `app.datapyn.tauri` unchanged unless the task explicitly requires them. See `docs/TAURI_RELEASE.md`.
+
+The PyQt version in `pyproject.toml` and its `vX.Y.Z` releases are independent historical artifacts. PSR has no automatic release from `main`; legacy maintenance requires an explicit historical tag or a PyQt-only branch. Historical tags can be rebuilt manually. Do not assume that PSR bumps a maintenance branch without checking its branch configuration.
 
 ## Pull requests (one at a time)
 
@@ -38,24 +36,28 @@ Agents must not run `gh pr create` if an open PR already exists unless the user 
 
 ## Project
 
-- Python 3.12+, PyQt6, `uv` for dependencies
-- Run tests: `uv run pytest` (see `pytest.ini` for CI ignores)
+- Tauri 2 / Rust host, React / TypeScript frontend, and isolated Python session kernels.
+- Prerequisites: Node.js 22, Rust 1.90+, Python 3.12+, and `uv`.
+- Setup: `uv sync --dev --frozen` and `npm --prefix desktop ci`.
+- Dev: `npm --prefix desktop run desktop:dev`.
+- Frontend: `npm --prefix desktop test` and `npm --prefix desktop run build`.
+- Runtime: `uv run pytest -c runtime_tests/pytest.ini runtime_tests -q`.
+- Rust: from `desktop/src-tauri`, run `cargo fmt --check`, `cargo check --locked`, and `cargo test --locked`.
+- Native build: `npm --prefix desktop run desktop:build -- --no-bundle`; signed distribution is documented in `docs/TAURI_DISTRIBUTION.md`.
 
 ## Cursor Cloud specific instructions
 
-DataPyn is a **single-process PyQt6 desktop IDE** (no separate API server or Docker stack). The update script only runs `uv sync --dev`; Linux **system packages** are not installed automatically on each VM start.
+DataPyn is a Tauri desktop IDE with Python sidecars and per-session kernels. No separate API server or Docker stack is required. Linux system packages are not installed by `uv` or `npm`.
 
 ### Linux system dependencies
 
-On Ubuntu/Debian, match CI (`.github/workflows/tests.yml`) or run `./scripts/linux/install.sh` once per VM: Qt/XCB/OpenGL libs, `libmariadb-dev`, `freeglut3-dev`, `xvfb` (optional, for headless GUI tests). Without these, `uv sync` may succeed but PyQt/WebEngine tests or the app can fail at runtime.
+Match `.github/workflows/tauri.yml`: `libwebkit2gtk-4.1-dev`, `build-essential`, `libxdo-dev`, `libssl-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`, `patchelf`, `unixodbc-dev`, and `libmariadb-dev`. Driver requirements are in `docs/TAURI_RUNTIME_DISTRIBUTION.md`.
 
-### Running the app
+### Historical PyQt maintenance
 
-- Dev: `uv run python source/main.py` (needs `DISPLAY`; Cloud VMs usually have `:1`).
-- WebEngine: set `QTWEBENGINE_DISABLE_SANDBOX=1` and `QTWEBENGINE_CHROMIUM_FLAGS=--no-sandbox` if Chromium sandbox errors appear.
-- Optional: `./scripts/linux/run.sh` after install.
+The retained PyQt source and scripts support maintenance on historical references. Its entry point is `uv run python source/main.py`, and Linux dependencies follow `.github/workflows/tests.yml` or `scripts/linux/install.sh`.
 
-### Tests and lint
+### Historical tests and lint
 
 - Lint: `uv run ruff check source/` (tests are excluded in `pyproject.toml`).
 - **CI-like pytest** (headless, ignores QWebEngine-heavy modules): use the same `--ignore=…` list as `.github/workflows/tests.yml`, plus env `QT_QPA_PLATFORM=offscreen`, `QTWEBENGINE_DISABLE_SANDBOX=1`, `QTWEBENGINE_CHROMIUM_FLAGS=--no-sandbox`.
