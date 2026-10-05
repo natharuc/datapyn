@@ -11,6 +11,19 @@ function transport(handler: (method: string, params: Record<string, unknown>) =>
 }
 
 describe("block database and schema picker", () => {
+  it("separates list caches when a block switches between pinned and inherited physical affinity",async()=>{
+    const requests:Record<string,unknown>[]=[];const client=new ScopeOptionsClient(transport(async(_,params)=>{requests.push(params);return{nodes:[node(params.scope_inherited?"inherited":"pinned","schema")]};}));
+    expect((await client.list({...scope,block_id:"block"},"schema")).options[0].name).toBe("pinned");
+    expect((await client.list({...scope,block_id:"block",scope_inherited:true},"schema")).options[0].name).toBe("inherited");
+    expect((await client.list({...scope,block_id:"block",scope_inherited:false},"schema")).options[0].name).toBe("pinned");expect(requests.map(params=>params.scope_inherited)).toEqual([false,true]);
+  });
+  it("keeps selector metadata tied to each block connector",async()=>{
+    const requests:Record<string,unknown>[]=[];
+    const client=new ScopeOptionsClient(transport(async(_,params)=>{requests.push(params);return{nodes:[node(String(params.block_id),"schema")]};}));
+    expect((await client.list({...scope,block_id:"first"},"schema")).options[0].name).toBe("first");
+    expect((await client.list({...scope,block_id:"second"},"schema")).options[0].name).toBe("second");
+    expect(requests.map(params=>params.block_id)).toEqual(["first","second"]);
+  });
   it("normalizes only database/catalog metadata and keeps case-sensitive names distinct", () => {
     expect(scopeOptionList([node("catalog", "catalog"), node("db10"), node("db2"), node("db2"), node("DB2"), node("tbl", "table")], "database")
       .map(option => option.name)).toEqual(["catalog", "db2", "DB2", "db10"]);

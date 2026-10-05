@@ -3,7 +3,7 @@ export interface ExplorerContext { database?: string; schema?: string }
 export interface ExplorerNode extends ExplorerContext { id: string; name: string; kind: string; has_children: boolean; qualified_name?: string; data_type?: string; nullable?: boolean; [key: string]: unknown }
 export interface ExplorerResult { nodes: ExplorerNode[]; context?: ExplorerContext }
 export interface ExplorerDetails { columns?: Array<Record<string, unknown>>; indexes?: Array<Record<string, unknown>>; keys?: Array<Record<string, unknown>>; definition?: string; [key: string]: unknown }
-export interface ExplorerScope extends ExplorerContext { session_id: string; connection_id?: string }
+export interface ExplorerScope extends ExplorerContext { session_id: string; block_id?: string; scope_inherited?: boolean; connection_id?: string }
 
 export class ExplorerController {
   private generation = 0;

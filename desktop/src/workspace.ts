@@ -1,9 +1,9 @@
-import { errorText, isRuntimeEvent, type ExecutionFinished, type Language, type ResultRef, type RuntimeEvent, type RuntimeInfo, type RuntimeTransport, type Variable,type RichOutput } from "./runtime";
+import { errorText, isRuntimeEvent, type ExecutionContextChange, type ExecutionFinished, type Language, type ResultRef, type RuntimeEvent, type RuntimeInfo, type RuntimeTransport, type Variable,type RichOutput } from "./runtime";
 import type { NativeDocumentRecord, NativeWorkspaceState } from "./nativeDrafts";
 import { flushEditorViewStates,restoreEditorViewState, selectedCode, subscribeEditorViewStates } from "./editorRegistry";
 import type { QueueCompletion } from "./executionNotifications";
 import type { NotificationContext } from "./NotificationsDialog";
-import { completionConnectionScope } from "./sessionCompletion";
+import { completionConnectionScope, inheritsSessionScope } from "./sessionCompletion";
 
 export type BlockStatus = "idle" | "queued" | "running" | "cancelling" | "succeeded" | "failed" | "cancelled";
 export interface Block {
@@ -151,6 +151,32 @@ function appendLog(session: SessionDocument, stream: string, text: string, block
   return [...session.logs.slice(-499), { id: newId(), time: new Date().toLocaleTimeString("pt-BR"), stream, text: text.slice(-200_000), blockName }];
 }
 
+/** A SQL context command changes the running block's scope, preserving pinned peers. */
+export function applyExecutionContextChange(session: SessionDocument, blockId: string | undefined, change: ExecutionContextChange | undefined): SessionDocument {
+  const block = session.blocks.find(item => item.id === blockId);
+  if (!block || block.language !== "sql" || !change?.current || !change.previous || !change.requested_scope) return session;
+  const { previous, current, requested_scope: requested } = change;
+  if (previous.database === current.database && previous.schema === current.schema) return session;
+  const active = completionConnectionScope(session, block);
+  // Focus and selection can move while a request is running. Its captured scope
+  // must still own this block before a terminal event may change the document.
+  if ((requested.connection_id ?? undefined) !== active.connectionId
+    || (requested.database ?? undefined) !== active.database
+    || (requested.schema ?? undefined) !== active.schema) return session;
+  const context = { database: current.database ?? undefined, schema: current.schema ?? undefined };
+  const inherits = inheritsSessionScope(block);
+  if (!inherits) return { ...session, modified: true, blocks: session.blocks.map(item => item.id === block.id ? { ...item, database_name: context.database, schema: context.schema } : item) };
+  const next = { ...session, ...context, modified: true,
+    connectionState: session.connectionState ? { ...session.connectionState, scope: context } : undefined };
+  next.blocks = session.blocks.map(item => {
+    if (inheritsSessionScope(item)) return item;
+    const before = completionConnectionScope(session, item), after = completionConnectionScope(next, item);
+    return before.database !== after.database || before.schema !== after.schema
+      ? { ...item, database_name: before.database ?? previous.database ?? undefined, schema: before.schema } : item;
+  });
+  return next;
+}
+
 export function applyRuntimeEvent(session: SessionDocument, event: RuntimeEvent): SessionDocument {
   if (!isRuntimeEvent(event)) return session;
   if (event.event === "backend.exited" || event.event === "language.context_updated" || event.event === "result.export_progress" || event.event === "notifications.delivery_finished") return session;
@@ -179,8 +205,10 @@ export function applyRuntimeEvent(session: SessionDocument, event: RuntimeEvent)
   }
   if (event.event === "execution.export_progress") return {...session,notice:`Download: ${event.payload.total_rows.toLocaleString()} linhas · ${(event.payload.size_bytes/1048576).toFixed(1)} MiB`};
   const payload = event.payload;
+  session = applyExecutionContextChange(session, session.currentBlockId, payload.context_change);
   const resultRefs = payload.results ?? [];
   return { ...session,
+    blocks: session.blocks.map(block => block.id === session.currentBlockId ? { ...block, status: payload.status, duration_ms: payload.duration_ms, error: payload.error, results: payload.results } : block),
     results: payload.status === "failed" ? [] : resultRefs.length ? resultRefs : session.results,
     resultRevision: session.resultRevision + (payload.status === "succeeded" ? 1 : 0),
     // Cancelling a queued job does not restart the kernel. session.reset owns namespace invalidation.
@@ -625,8 +653,9 @@ export class WorkspaceController {
       for (const [index, block] of runnable.entries()) {
         if (this.cancelRequests.has(sessionId)) {succeeded=false;cancelled=true;break;}
         lastBlock = block; if (index) lastExecutionId = newId();
-        lastContext = { tab_name: session?.title, block_name: block.block_name, blocks: index + 1,
-          type: block.language === "sql" ? "SQL" : "Python", rows: 0, connection: String(block.connection_name ?? session?.extras.connection_name ?? session?.connection?.name ?? ""), database: session ? completionConnectionScope(session,block).database : block.database_name };
+        const current=this.session(sessionId),liveBlock=current?.blocks.find(item=>item.id===block.id) ?? block;
+        lastContext = { tab_name: current?.title, block_name: block.block_name, blocks: index + 1,
+          type: block.language === "sql" ? "SQL" : "Python", rows: 0, connection: String(block.connection_name ?? current?.extras.connection_name ?? current?.connection?.name ?? ""), database: current ? completionConnectionScope(current,liveBlock).database : block.database_name };
         const result = await this.runOne(sessionId, block, lastExecutionId, {
           config: session?.extras.notification_config, context: { ...lastContext, block_id: block.id, workspace_id: workspaceId }, queue_result:queueResult, emit_notification: index === runnable.length - 1,
         });
@@ -660,8 +689,11 @@ export class WorkspaceController {
     this.patchSession(sessionId, (session) => ({ ...session, currentExecutionId: executionId, currentBlockId: block.id,
       blocks: session.blocks.map((item) => item.id === block.id ? { ...item, status: "running", error: undefined } : item) }));
     const current = this.session(sessionId)!;
-    const scope = completionConnectionScope(current, block);
-    const acknowledged = this.transport.request("execution.run", { session_id: sessionId, execution_id: executionId,
+    // Queue source code is captured at Run All, but context follows earlier
+    // commands in that queue and must be resolved from the current document.
+    const liveBlock=current.blocks.find(item => item.id === block.id) ?? block,scope = completionConnectionScope(current, liveBlock);
+    const acknowledged = this.transport.request("execution.run", { session_id: sessionId, block_id: block.id, execution_id: executionId,
+      scope_inherited:inheritsSessionScope(liveBlock),
       language: block.language, code: block.code,
       ...(block.language === "sql" ? { variable_name: block.block_name || undefined } : {}),
       connection_id: scope.connectionId,
@@ -728,8 +760,6 @@ export class WorkspaceController {
     const completion = this.completions.get(event.payload.execution_id);
     if (!completion || completion.sessionId !== event.payload.session_id) return;
     this.completions.delete(event.payload.execution_id);
-    this.patchSession(completion.sessionId, (session) => ({ ...session,
-      blocks: session.blocks.map((block) => block.id === completion.blockId ? { ...block, status: event.payload.status, duration_ms: event.payload.duration_ms, error: event.payload.error, results: event.payload.results } : block) }));
     completion.resolve(event.payload);
   }
   clearResults(sessionId: string) { this.patchSession(sessionId, (session) => ({ ...session, results: [], images: [],richOutputs:[], logs: [],blocks:session.blocks.map(b=>({...b,results:undefined})) })); }

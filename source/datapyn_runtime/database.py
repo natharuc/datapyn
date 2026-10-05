@@ -151,8 +151,91 @@ class ConnectorPool:
         self.active_key = None
         self.default_config = None
         self.default_id = None
+        self.default_active_key = None
         self.last_used = {}
         self.idle_timeout = idle_timeout
+        self.configs = {}
+        self.block_affinity = {}
+        self.namespace_settings = OrderedDict()
+
+    @staticmethod
+    def _normalized_config(config):
+        config = dict(config)
+        engine = str(config.get("db_type") or "").lower()
+        explicit_schema = "schema" in config and config["schema"] is not None
+        schema = config.get("schema") if explicit_schema else config.get("postgresql_schema") or config.get("databricks_schema")
+        if engine in {"mysql", "mariadb"}:
+            schema = schema if explicit_schema else config.get("database") or ""
+        elif engine == "postgresql":
+            schema = schema if explicit_schema else schema or "public"
+        elif engine == "databricks":
+            schema = schema or "default"
+        for field in ("postgresql_schema", "databricks_schema", "databricks_catalog", "postgresql_search_path"):
+            config.pop(field, None)
+        config["schema"] = str(schema or "")
+        return config
+
+    @classmethod
+    def _key(cls, identifier, config):
+        normalized = cls._normalized_config(config)
+        return (identifier or "transient", hashlib.sha256(json.dumps(normalized, sort_keys=True, default=str).encode()).hexdigest())
+
+    def _forget(self, key):
+        self.explorers.pop(key, None)
+        self.last_used.pop(key, None)
+        self.configs.pop(key, None)
+        self.block_affinity = {block: item for block, item in self.block_affinity.items() if item != key}
+        if self.default_active_key == key:
+            self.default_active_key = None
+
+    def reindex_active(self, context, params):
+        """Move a changed session without reconnecting or keeping an old alias."""
+        old_key = self.active_key
+        if old_key is None:
+            return
+        config = dict(self.configs[old_key])
+        config.update(database=context["database"], schema=context["schema"])
+        if "postgresql_search_path" in self.active.connection_params:
+            config["postgresql_search_path"] = self.active.connection_params["postgresql_search_path"]
+        for field in ("postgresql_schema", "databricks_schema", "databricks_catalog"):
+            config.pop(field, None)
+        new_key = self._key(old_key[0], config)
+        block_id = params.get("block_id")
+        if new_key != old_key and new_key in self.items:
+            # A physical connection in this context already exists. Keep both:
+            # they can own different temporary tables in the same database.
+            suffix = time.monotonic_ns()
+            candidate = (*new_key, str(suffix))
+            while candidate in self.items:
+                suffix += 1
+                candidate = (*new_key, str(suffix))
+            new_key = candidate
+        if new_key != old_key:
+            connector = self.items.pop(old_key)
+            explorer = self.explorers.pop(old_key, None)
+            last_used = self.last_used.pop(old_key, time.monotonic())
+            self.configs.pop(old_key, None)
+            self.items[new_key] = connector
+            if explorer is not None:
+                self.explorers[new_key] = explorer
+            self.last_used[new_key] = last_used
+            self.active_key = new_key
+            self.block_affinity = {block: new_key if item == old_key else item for block, item in self.block_affinity.items()}
+        self.configs[new_key] = config
+        if "postgresql_search_path" in config:
+            settings_key = new_key[:2]
+            self.namespace_settings[settings_key] = config["postgresql_search_path"]
+            self.namespace_settings.move_to_end(settings_key)
+            while len(self.namespace_settings) > 64:
+                self.namespace_settings.popitem(last=False)
+        if block_id:
+            self.block_affinity[str(block_id)] = new_key
+        inherits = params.get("scope_inherited") is True or ("scope_inherited" not in params and not params.get("database") and not params.get("schema"))
+        if inherits and old_key[0] == (self.default_id or "transient"):
+            self.default_config = config
+            self.default_active_key = new_key
+        elif self.default_active_key == old_key:
+            self.default_active_key = None
 
     def activate(self, params, *, default=False):
         config = params.get("_connection_config") or params.get("config")
@@ -176,9 +259,27 @@ class ConnectorPool:
                 for field in ("schema", "postgresql_schema", "databricks_schema"):
                     config.pop(field, None)
             config["database"] = str(database_override)
-        if schema_override and config.get("db_type") != "sqlite":
+        if schema_override is not None and config.get("db_type") != "sqlite":
             config["schema"] = str(schema_override)
-        key = (identifier or "transient", hashlib.sha256(json.dumps(config, sort_keys=True, default=str).encode()).hexdigest())
+        key = self._key(identifier, config)
+        affinity = self.block_affinity.get(str(params.get("block_id") or ""))
+        if params.get("scope_inherited") and self.default_active_key in self.items and self.default_active_key[:2] == key:
+            key = self.default_active_key
+        elif affinity in self.items and affinity[:2] == key:
+            key = affinity
+        elif not params.get("block_id") and self.active_key in self.items and self.active_key[:2] == key:
+            key = self.active_key
+        elif key not in self.items and not config.get("schema") and config.get("db_type") == "sqlserver":
+            # The resolved login schema is not an explicit selector override.
+            # Match the moved physical connector when requesting its database.
+            for candidate in [self.active_key, *self.items]:
+                if candidate not in self.configs or candidate[0] != key[0]:
+                    continue
+                stored = dict(self.configs[candidate])
+                stored.pop("schema", None)
+                if self._key(identifier, stored) == key:
+                    key = candidate
+                    break
         if key not in self.items:
             if len(self.items) >= 8:
                 evict = next((item for item, existing in self.items.items()
@@ -186,21 +287,24 @@ class ConnectorPool:
                 if evict is None:
                     raise ConnectionError("This session retains eight connections with temporary tables; disconnect one before opening another")
                 old_connector = self.items.pop(evict)
-                self.explorers.pop(evict, None)
-                self.last_used.pop(evict, None)
+                self._forget(evict)
                 if self.active_key == evict:
                     self.active_key = None
                 old_connector.disconnect()
+            if key[:2] in self.namespace_settings:
+                config["postgresql_search_path"] = self.namespace_settings[key[:2]]
             connector = connect(config)
             self.items[key] = connector
+            self.configs[key] = config
         else:
             connector = self.items[key]
             self.items.move_to_end(key)
         self.active_key = key
         self.last_used[key] = time.monotonic()
-        if default:
+        if default or (params.get("scope_inherited") and self.default_active_key is None):
             self.default_config = dict(config)
             self.default_id = identifier
+            self.default_active_key = key
         return connector
 
     @property
@@ -220,8 +324,7 @@ class ConnectorPool:
             if identifier is None or key[0] == identifier:
                 connector.disconnect()
                 del self.items[key]
-                self.explorers.pop(key, None)
-                self.last_used.pop(key, None)
+                self._forget(key)
                 if self.active_key == key:
                     self.active_key = None
         if identifier is None or identifier == self.default_id:
@@ -250,8 +353,7 @@ class ConnectorPool:
                     pass
                 finally:
                     del self.items[key]
-                    self.last_used.pop(key, None)
-                    self.explorers.pop(key, None)
+                    self._forget(key)
                     if self.active_key == key:
                         self.active_key = None
                 closed.append(key[0])

@@ -2,6 +2,14 @@ import { describe, expect, it } from "vitest";
 import { ExplorerController, explorerRows, quoteIdentifier, quoteIdentifierPart, identifierParts,reloadExpanded, type ExplorerNode } from "./explorer";
 import type { RuntimeTransport } from "./runtime";
 describe("Object Explorer", () => {
+  it("rejects old block metadata when focus moves to another physical connector in the same scope",async()=>{
+    const resolvers:Array<(value:{nodes:ExplorerNode[]})=>void>=[],requests:Record<string,unknown>[]=[];
+    const transport={request:(_method:string,params:Record<string,unknown>)=>{requests.push(params);return new Promise(resolve=>resolvers.push(resolve as typeof resolvers[number]));}} as unknown as RuntimeTransport;
+    const controller=new ExplorerController(transport),scope={session_id:"s",connection_id:"main",database:"db",schema:"public"};
+    controller.setScope({...scope,block_id:"first"});const old=controller.list();controller.setScope({...scope,block_id:"second"});const fresh=controller.list();
+    const nodes=[{id:"temp",name:"temp_second",kind:"table",has_children:false}];resolvers[1]({nodes});expect(await fresh).toEqual(nodes);resolvers[0]({nodes:[{...nodes[0],name:"temp_first"}]});expect(await old).toEqual([]);
+    expect(await controller.list()).toEqual(nodes);expect(requests.map(params=>params.block_id)).toEqual(["first","second"]);
+  });
   it("quotes identifiers using their real dialect and preserves embedded quoted dots", () => {
     expect(identifierParts('[my.db].[odd]]name]')).toEqual(["my.db", "odd]name"]);
     expect(quoteIdentifier('[my.db].[odd]]name]', "sqlserver")).toBe('[my.db].[odd]]name]');

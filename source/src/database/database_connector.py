@@ -576,9 +576,8 @@ class DatabaseConnector:
             )
 
             if db_type == "postgresql":
-                initial_schema = str(
-                    kwargs.get("schema") or kwargs.get("postgresql_schema") or "public"
-                ).strip() or "public"
+                initial_schema = (str(kwargs["schema"] or "") if kwargs.get("postgresql_search_path") is not None and "schema" in kwargs
+                                  else str(kwargs.get("schema") or kwargs.get("postgresql_schema") or "public").strip() or "public")
                 self.connection_params = {
                     "host": host,
                     "port": port,
@@ -586,6 +585,8 @@ class DatabaseConnector:
                     "username": username,
                     "postgresql_schema": initial_schema,
                 }
+                if kwargs.get("postgresql_search_path") is not None:
+                    self.connection_params.update(schema=initial_schema, postgresql_search_path=kwargs["postgresql_search_path"])
             self._register_engine_checkout_hooks(db_type)
 
             if db_type == "sqlserver" and sqlserver_auth_mode == SQLSERVER_AUTH_ENTRA_MFA:
@@ -671,6 +672,9 @@ class DatabaseConnector:
                     str(kwargs.get("schema") or kwargs.get("postgresql_schema") or "public").strip()
                     or "public"
                 )
+                if kwargs.get("postgresql_search_path") is not None:
+                    self.connection_params.update(postgresql_search_path=kwargs["postgresql_search_path"],
+                                                  postgresql_schema=str(kwargs.get("schema") or ""), schema=str(kwargs.get("schema") or ""))
             self._connection_config = {
                 "db_type": db_type,
                 "host": host,
@@ -714,6 +718,14 @@ class DatabaseConnector:
                     str(kwargs.get("schema") or kwargs.get("postgresql_schema") or "public").strip()
                     or "public"
                 )
+
+            if db_type == "postgresql" and kwargs.get("postgresql_search_path") is not None:
+                raw_conn = self.engine.raw_connection()
+                try:
+                    self._context_probe_required = True
+                    self._reconcile_execution_context(raw_conn)
+                finally:
+                    raw_conn.close()
 
             logger.info(f"Connected to {self.SUPPORTED_DATABASES[db_type]}: {host}/{database}")
             return True
@@ -857,7 +869,11 @@ class DatabaseConnector:
             ).strip() or "public"
             # New backends pick this up; pooled checkouts also SET search_path
             # because pool_size > 1 (same issue as SQL Server USE).
-            search_path = DatabaseConnector._postgresql_search_path_value(initial_schema)
+            search_path = (str(kwargs["postgresql_search_path"]) if kwargs.get("postgresql_search_path") is not None
+                           else DatabaseConnector._postgresql_search_path_value(initial_schema))
+            if kwargs.get("postgresql_search_path") is not None:
+                # libpq options use backslash to preserve whitespace/backslashes.
+                search_path = "".join("\\" + char if char.isspace() or char == "\\" else char for char in search_path)
             existing_options = str(connect_args.get("options") or "").strip()
             search_option = f"-csearch_path={search_path}"
             connect_args["options"] = (
@@ -1125,15 +1141,13 @@ class DatabaseConnector:
         is_cancelled: Optional[Any] = None,
         on_total: Optional[Any] = None,
     ) -> StreamExportResult:
-        import re
-
+        self._prepare_context_tracking(query)
         use_match = self._match_use_only_command(query)
         if use_match:
             new_db = use_match.group(1)
             if self.db_type == "sqlserver" and not self._sqlserver_supports_use():
                 self.change_database(new_db)
                 return StreamExportResult(errors=[f"Database changed to: {new_db}"])
-            self.connection_params["database"] = new_db
 
         if self.db_type == "sqlserver":
             batches = self._split_sql_batches(query)
@@ -1367,6 +1381,7 @@ class DatabaseConnector:
                 except Exception:
                     pass
             if raw_conn:
+                self._reconcile_execution_context(raw_conn)
                 try:
                     raw_conn.close()
                 except Exception:
@@ -1400,30 +1415,26 @@ class DatabaseConnector:
             cursor = raw_conn.cursor()
             self._active_cursor = cursor
 
-            if parameters:
-                prepared = prepare_databricks_sql(query, parameters)
-                cursor.execute(prepared.query, prepared.params)
-            else:
-                cursor.execute(query)
-
-            if self._cancelled or (is_cancelled and is_cancelled()):
-                result.cancelled = True
-                return result
-
-            if cursor.description:
-                columns = [desc[0] for desc in cursor.description]
-                self._stream_write_result_set(
-                    columns,
-                    cursor,
-                    base_path=base_path,
-                    export_format=export_format,
-                    file_index=1,
-                    result=result,
-                    csv_options=csv_options,
-                    on_progress=on_progress,
-                    on_file_started=on_file_started,
-                    is_cancelled=is_cancelled,
-                )
+            from datapyn_runtime.sql_context import sql_statements
+            for statement in sql_statements(query, "databricks"):
+                if parameters:
+                    prepared = prepare_databricks_sql(statement, parameters)
+                    cursor.execute(prepared.query, prepared.params)
+                else:
+                    cursor.execute(statement)
+                if self._cancelled or (is_cancelled and is_cancelled()):
+                    result.cancelled = True
+                    return result
+                if cursor.description:
+                    columns = [desc[0] for desc in cursor.description]
+                    if not self._stream_write_result_set(
+                        columns, cursor, base_path=base_path,
+                        export_format=export_format, file_index=len(result.files) + 1,
+                        result=result, csv_options=csv_options,
+                        on_progress=on_progress, on_file_started=on_file_started,
+                        is_cancelled=is_cancelled,
+                    ):
+                        break
             return result
 
         except Exception as e:
@@ -1440,6 +1451,7 @@ class DatabaseConnector:
                 except Exception:
                     pass
             if raw_conn:
+                self._reconcile_execution_context(raw_conn)
                 try:
                     raw_conn.close()
                 except Exception:
@@ -1457,7 +1469,7 @@ class DatabaseConnector:
         on_file_started: Optional[Any] = None,
         is_cancelled: Optional[Any] = None,
     ) -> StreamExportResult:
-        commands = self._split_sql_statements(query)
+        commands = self._execution_statements(query)
         result = StreamExportResult()
         file_index = 0
         raw_conn = None
@@ -1520,9 +1532,7 @@ class DatabaseConnector:
     def _execute_query_unlocked(
         self, query: str, parameters: Optional[List[Dict[str, Any]]] = None
     ) -> Union[pd.DataFrame, List[pd.DataFrame]]:
-        # Detect USE command to update current database
-        import re
-
+        self._prepare_context_tracking(query)
         use_match = self._match_use_only_command(query)
         if use_match:
             new_db = use_match.group(1)
@@ -1530,7 +1540,6 @@ class DatabaseConnector:
             if self.db_type == "sqlserver" and not self._sqlserver_supports_use():
                 self.change_database(new_db)
                 return pd.DataFrame({"Result": [f"Database changed to: {new_db}"]})
-            self.connection_params["database"] = new_db
 
         # For SQL Server, split on GO and execute each batch separately
         if self.db_type == "sqlserver":
@@ -1665,10 +1674,81 @@ class DatabaseConnector:
             except Exception:
                 pass
         if raw_conn is not None:
+            self._reconcile_execution_context(raw_conn)
             try:
                 raw_conn.close()
             except Exception:
                 pass
+
+    def _prepare_context_tracking(self, query: str) -> None:
+        from datapyn_runtime.sql_context import changes_sql_context
+
+        self._context_probe_required = changes_sql_context(query, self.db_type)
+
+    def _reconcile_execution_context(self, raw_conn) -> None:
+        """Read actual context once, on the physical connection that executed SQL.
+
+        Parsing SQL only decides whether to probe. It cannot establish that a
+        USE/SET succeeded, especially when a later statement or result set fails.
+        PostgreSQL SET is transactional, so finish rollback before observing it.
+        """
+        if not getattr(self, "_context_probe_required", False):
+            return
+        self._context_probe_required = False
+        queries = {
+            "sqlserver": "SELECT DB_NAME(), SCHEMA_NAME()",
+            "mysql": "SELECT DATABASE()",
+            "mariadb": "SELECT DATABASE()",
+            "databricks": "SELECT current_catalog(), current_schema()",
+            "postgresql": "SELECT current_database(), current_schema(), current_setting('search_path')",
+        }
+        query = queries.get(self.db_type)
+        if not query:
+            return
+        cursor = None
+        try:
+            if self.db_type == "postgresql":
+                # A committed SET survives; SET LOCAL and an aborted transaction
+                # disappear exactly as they will when this connection returns.
+                raw_conn.rollback()
+            cursor = raw_conn.cursor()
+            cursor.execute(query)
+            row = cursor.fetchone()
+            if not row:
+                return
+            database = str(row[0] or "")
+            previous_database = str(self.connection_params.get("database") or "")
+            self.connection_params["database"] = database
+            if self.db_type == "databricks":
+                self.connection_params["databricks_catalog"] = database
+                self.connection_params["databricks_schema"] = str(row[1] or "")
+                self.connection_params["schema"] = str(row[1] or "")
+            elif self.db_type == "postgresql":
+                self.connection_params["postgresql_schema"] = str(row[1] or "")
+                self.connection_params["schema"] = str(row[1] or "")
+                self.connection_params["postgresql_search_path"] = str(row[2] or "")
+            elif self.db_type in {"mysql", "mariadb"}:
+                self.connection_params["schema"] = database
+            elif database != previous_database:
+                # The previous database's selected metadata schema may not exist
+                # here. Use the login's actual default in the new database.
+                self.connection_params["schema"] = str(row[1] or "")
+            info = getattr(raw_conn, "info", None)
+            if isinstance(info, dict) and self.db_type in {"mysql", "mariadb", "databricks"}:
+                info["datapyn_namespace"] = (database, self.connection_params.get("databricks_schema", "") if self.db_type == "databricks" else "")
+        except Exception as exc:
+            logger.warning("Could not resolve SQL execution context: %s", exc)
+        finally:
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+            if self.db_type == "postgresql":
+                try:
+                    raw_conn.rollback()
+                except Exception:
+                    pass
 
     def force_disconnect(self) -> None:
         """Drop pooled connections so a stuck server-side query cannot block reuse."""
@@ -1916,6 +1996,7 @@ class DatabaseConnector:
                 except Exception:
                     pass
             if raw_conn:
+                self._reconcile_execution_context(raw_conn)
                 try:
                     raw_conn.close()
                 except Exception:
@@ -1937,36 +2018,20 @@ class DatabaseConnector:
             cursor = raw_conn.cursor()
             self._active_cursor = cursor  # Expose cursor for cancellation
             
-            # Execute query
-            if parameters:
-                prepared = prepare_databricks_sql(query, parameters)
-                cursor.execute(prepared.query, prepared.params)
-            else:
-                cursor.execute(query)
-            
-            if self._cancelled:
-                raise OperationCancelled()
-
-            # Try to fetch results
-            try:
-                columns = [desc[0] for desc in cursor.description] if cursor.description else []
-                if columns:
-                    rows = fetch_rows_chunked(cursor, is_cancelled=lambda: self._cancelled)
-                    df = records_to_dataframe(rows, columns)
-                    logger.info(f"Databricks query executed: {len(df)} rows returned")
-                    return df
+            from datapyn_runtime.sql_context import sql_statements
+            frames = []
+            for statement in sql_statements(query, "databricks"):
+                if parameters:
+                    prepared = prepare_databricks_sql(statement, parameters)
+                    cursor.execute(prepared.query, prepared.params)
                 else:
-                    # No results (DDL/DML command)
-                    rows_affected = cursor.rowcount if hasattr(cursor, 'rowcount') else -1
-                    if rows_affected >= 0:
-                        return self._success_message_df("success_command_rows", rows=rows_affected)
-                    return self._success_message_df("success_command")
-            except OperationCancelled:
-                raise
-            except Exception:
-                if self._cancelled:
-                    raise OperationCancelled()
-                raise
+                    cursor.execute(statement)
+                self._ensure_not_cancelled()
+                if cursor.description:
+                    frames.append(self._cursor_to_dataframe(cursor))
+            if frames:
+                return frames[0] if len(frames) == 1 else frames
+            return self._success_message_df("success_commands")
 
         except OperationCancelled:
             raise
@@ -1986,6 +2051,7 @@ class DatabaseConnector:
                 except Exception:
                     pass
             if raw_conn:
+                self._reconcile_execution_context(raw_conn)
                 try:
                     raw_conn.close()
                 except Exception:
@@ -2203,9 +2269,16 @@ class DatabaseConnector:
         rows = fetch_rows_chunked(result, is_cancelled=is_cancelled)
         return records_to_dataframe(rows, columns)
 
+    def _execution_statements(self, query: str) -> list:
+        if self.db_type == "postgresql":
+            from datapyn_runtime.sql_context import sql_statements
+
+            return sql_statements(query, self.db_type)
+        return self._split_sql_statements(query)
+
     def _execute_generic_query(self, query: str, parameters: Optional[List[Dict[str, Any]]] = None) -> pd.DataFrame:
         """Execute generic query for non-MSSQL databases using raw DBAPI for cancellation."""
-        commands = self._split_sql_statements(query)
+        commands = self._execution_statements(query)
         if not commands:
             return self._success_message_df("no_commands")
 
@@ -2499,11 +2572,41 @@ class DatabaseConnector:
                 )
                 try:
                     cursor = dbapi_conn.cursor()
-                    cursor.execute(DatabaseConnector._postgresql_search_path_sql(schema))
+                    search_path = connector_ref.connection_params.get("postgresql_search_path")
+                    search_path_sql = "SET search_path TO " + (search_path or "''") if search_path is not None else DatabaseConnector._postgresql_search_path_sql(schema)
+                    cursor.execute(search_path_sql)
                     cursor.close()
                 except Exception:
                     pass
             listen_checkout(on_postgresql_checkout)
+            return
+        if db_type in {"mysql", "mariadb", "databricks"}:
+            def on_namespace_checkout(dbapi_conn, connection_record, connection_proxy):
+                database = str(connector_ref.connection_params.get("database") or "")
+                if not database:
+                    return
+                schema = str(connector_ref.connection_params.get("databricks_schema") or "default") if db_type == "databricks" else ""
+                desired = (database, schema)
+                initial = getattr(connector_ref, "_connection_config", None) or {}
+                initial_schema = str(initial.get("schema") or initial.get("databricks_schema") or "default") if db_type == "databricks" else ""
+                applied = connection_record.info.setdefault("datapyn_namespace", (str(initial.get("database") or ""), initial_schema))
+                if applied == desired:
+                    return
+                cursor = None
+                try:
+                    cursor = dbapi_conn.cursor()
+                    quoted_database = "`" + database.replace("`", "``") + "`"
+                    if db_type == "databricks":
+                        cursor.execute(f"USE CATALOG {quoted_database}")
+                        quoted_schema = "`" + schema.replace("`", "``") + "`"
+                        cursor.execute(f"USE SCHEMA {quoted_schema}")
+                    else:
+                        cursor.execute(f"USE {quoted_database}")
+                    connection_record.info["datapyn_namespace"] = desired
+                finally:
+                    if cursor is not None:
+                        cursor.close()
+            listen_checkout(on_namespace_checkout)
 
     @staticmethod
     def _postgresql_quote_ident(name: str) -> str:
@@ -2570,6 +2673,8 @@ class DatabaseConnector:
     def get_current_schema(self) -> str:
         """Return current schema name (Databricks or PostgreSQL search_path)."""
         if self.db_type == "postgresql":
+            if "postgresql_search_path" in self.connection_params:
+                return str(self.connection_params.get("postgresql_schema") or "")
             return str(self.connection_params.get("postgresql_schema") or "public")
         return self.connection_params.get("databricks_schema", "default")
 

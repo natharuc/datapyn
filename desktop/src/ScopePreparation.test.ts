@@ -12,6 +12,53 @@ function contextEvent(payload: Record<string, unknown>): RuntimeEvent {
 }
 
 describe("focused SQL scope preparation", () => {
+  it("routes inherited and pinned metadata independently even when their logical scope is equal",async()=>{
+    const requests:Record<string,unknown>[]=[];const client=new ScopePreparation(transport(async(_,params)=>{requests.push(params);return ready;}));
+    const pinned=client.request({...scope,blockId:"block"}),inherited=client.request({...scope,blockId:"block",scopeInherited:true});await Promise.all([pinned,inherited]);
+    expect(inherited).not.toBe(pinned);expect(requests.map(params=>params.scope_inherited)).toEqual([false,true]);
+    expect(client.request({...scope,blockId:"block",scopeInherited:false})).toBe(pinned);expect(client.request({...scope,blockId:"block",scopeInherited:true})).toBe(inherited);
+  });
+  it("releases inherited peer preparations after the tab connector moves without dropping pinned peers",async()=>{
+    const client=new ScopePreparation(transport(async()=>ready)),inherited={...scope,blockId:"peer",scopeInherited:true},pinned={...scope,blockId:"pinned",scopeInherited:false};
+    const old=client.request(inherited),preserved=client.request(pinned);await Promise.all([old,preserved]);
+    client.accept({event:"execution.finished",payload:{session_id:scope.sessionId,execution_id:"use",block_id:"first",scope_inherited:true,status:"succeeded",duration_ms:1,results:[],variables:[],context_change:{connection_id:scope.connectionId,previous:{database:"sales",schema:"public"},current:{database:"archive",schema:"private"},requested_scope:{connection_id:scope.connectionId,database:"sales",schema:"public"}}}});
+    expect(client.request(inherited)).not.toBe(old);expect(client.request(pinned)).toBe(preserved);
+  });
+  it("releases inherited peer metadata for a search_path update even when primary scope is unchanged",async()=>{
+    const client=new ScopePreparation(transport(async()=>ready)),inherited={...scope,blockId:"peer",scopeInherited:true},pinned={...scope,blockId:"pinned",scopeInherited:false};
+    const old=client.request(inherited),preserved=client.request(pinned);await Promise.all([old,preserved]);
+    client.accept(contextEvent({block_id:"first",scope_inherited:true,metadata_invalidated:true,metadata_invalidation_scope:"block"}));
+    expect(client.request(inherited)).not.toBe(old);expect(client.request(pinned)).toBe(preserved);
+  });
+  it("prepares each block's connector independently and sends its identity",async()=>{
+    const requests:Record<string,unknown>[]=[];
+    const client=new ScopePreparation(transport(async(_,params)=>{requests.push(params);return ready;}));
+    const first=client.request({...scope,blockId:"first"}),second=client.request({...scope,blockId:"second"});await Promise.all([first,second]);
+    expect(second).not.toBe(first);expect(requests.map(params=>params.block_id)).toEqual(["first","second"]);
+    expect(requests[0]).toMatchObject({database:"sales",schema:"public"});
+  });
+  it("releases a switched block and prepares its actual new scope while preserving peers",async()=>{
+    const requests:Record<string,unknown>[]=[];
+    const client=new ScopePreparation(transport(async(_,params)=>{requests.push(params);return ready;}));
+    const first={...scope,blockId:"first"},second={...scope,blockId:"second"},old=client.request(first),peer=client.request(second);await Promise.all([old,peer]);
+    client.accept({event:"execution.finished",payload:{session_id:scope.sessionId,execution_id:"use",block_id:"first",status:"succeeded",duration_ms:1,results:[],variables:[],context_change:{connection_id:scope.connectionId,previous:{database:"sales",schema:"public"},current:{database:"archive",schema:"private"},requested_scope:{connection_id:scope.connectionId,database:"sales",schema:"public"}}}});
+    expect(client.request(second)).toBe(peer);
+    await client.request({...first,database:"archive",schema:"private"},"SELECT 1",true);
+    expect(requests.at(-1)).toMatchObject({session_id:scope.sessionId,block_id:"first",connection_id:scope.connectionId,database:"archive",schema:"private",refresh:true});
+    expect(client.request(first)).not.toBe(old);
+  });
+  it("applies block metadata invalidation without evicting another block's preparation",async()=>{
+    const client=new ScopePreparation(transport(async()=>ready)),first={...scope,blockId:"first"},second={...scope,blockId:"second"};
+    const original=client.request(first),peer=client.request(second);await Promise.all([original,peer]);
+    client.accept(contextEvent({block_id:"first",metadata_invalidated:true,metadata_invalidation_scope:"block"}));
+    expect(client.request(first)).not.toBe(original);expect(client.request(second)).toBe(peer);
+  });
+  it.each(["connection",undefined] as const)("DDL invalidation releases every peer block on a connection: %s",async metadata_invalidation_scope=>{
+    const client=new ScopePreparation(transport(async()=>ready)),first={...scope,blockId:"first"},second={...scope,blockId:"second"},unrelated={...scope,connectionId:"other",blockId:"third"};
+    const original=client.request(first),peer=client.request(second),other=client.request(unrelated);await Promise.all([original,peer,other]);
+    client.accept(contextEvent({block_id:"first",metadata_invalidated:true,metadata_invalidation_scope}));
+    expect(client.request(first)).not.toBe(original);expect(client.request(second)).not.toBe(peer);expect(client.request(unrelated)).toBe(other);
+  });
   it("keys metadata by relations rather than changes to expressions, whitespace, or comments", () => {
     expect(preparationCodeKey("SELECT 1 FROM sales s WHERE s.value > 0"))
       .toBe(preparationCodeKey("SELECT 2\nFROM sales s\nWHERE s.value > 200 /* JOIN irrelevant */"));

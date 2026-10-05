@@ -46,7 +46,8 @@ class ObjectExplorer:
         if self.db_type == "sqlite":
             schema = "main"
         elif self.db_type == "postgresql":
-            schema = schema or config.get("postgresql_schema") or "public"
+            schema = (config.get("schema", config.get("postgresql_schema", ""))
+                      if "postgresql_search_path" in config else schema or config.get("postgresql_schema") or "public")
         elif self.db_type == "sqlserver":
             schema = schema or self.sqlserver_default_schema()
         elif self.db_type in {"mysql", "mariadb"}:
@@ -62,7 +63,7 @@ class ObjectExplorer:
             if callable(getter):
                 try:
                     value = getter()
-                    if value:
+                    if value or (key == "schema" and self.db_type == "postgresql" and "postgresql_search_path" in config):
                         if key == "database":
                             database = value
                         else:

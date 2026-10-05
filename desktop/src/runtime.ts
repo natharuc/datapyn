@@ -8,9 +8,11 @@ export interface Column { name: string; dtype: string }
 export interface ResultRef { result_id: string; variable_name: string; columns: Column[]; row_count: number }
 export interface Variable { name: string; type: string; preview: string }
 export interface LanguageContextUpdate {
-  session_id: string; connection_id?: string; database?: string; schema?: string; version: number;
+  session_id: string; block_id?: string; connection_id?: string; database?: string; schema?: string; version: number;
+  scope_inherited?: boolean;
   variables: Record<string, {type: string; module?: string; columns?: string[]}>;
   metadata_invalidated?: boolean;
+  metadata_invalidation_scope?: "connection" | "block";
   metadata_state?: "ready" | "error";
   schema_error?: string | null;
   requested_scope?: {connection_id?:string|null;database?:string|null;schema?:string|null};
@@ -26,10 +28,19 @@ export interface ResultPage { columns: Column[]; rows: Primitive[][]; total_rows
 export interface ColumnValues { values: Primitive[]; kind: "text" | "number" | "bool" | "date"; sampled: boolean; scanned_rows: number; total_rows: number }
 export interface RuntimeInfo { protocol_version: number; python_version: string; capabilities: Record<string, unknown> | string[] }
 export type RichOutput = {artifact_id?:string;type:"image";data:string;mime:string}|{artifact_id?:string;type:"html";data:string}|{artifact_id?:string;type:"json"|"plotly";data:unknown};
+export interface SqlContextScope { db_type?: string; database?: string | null; schema?: string | null }
+export interface ExecutionContextChange {
+  previous: SqlContextScope;
+  current: SqlContextScope;
+  connection_id?: string | null;
+  requested_scope: { connection_id?: string | null; database?: string | null; schema?: string | null };
+}
 export interface ExecutionFinished {
-  session_id: string; execution_id: string; status: "succeeded" | "failed" | "cancelled";
+  session_id: string; execution_id: string; block_id?: string; status: "succeeded" | "failed" | "cancelled";
+  scope_inherited?: boolean;
   duration_ms: number; error?: string; results: ResultRef[]; variables: Variable[];
   rich_outputs?: RichOutput[];
+  context_change?: ExecutionContextChange;
   notification?: NotificationResult;
   notification_error?: string;
   export?: {files:Array<{path:string;rows:number;columns:number;size_bytes:number}>;total_rows:number;cancelled:boolean;errors:string[]};

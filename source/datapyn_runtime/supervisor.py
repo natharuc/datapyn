@@ -302,7 +302,12 @@ class SessionRuntime:
                 self.language_version += 1
                 if context.get("metadata_invalidated"):
                     for old_key, old_context in self.language_contexts.items():
-                        if old_context.get("connection_id") == context.get("connection_id"):
+                        same_connection = old_context.get("connection_id") == context.get("connection_id")
+                        same_owner = (context.get("metadata_invalidation_scope") != "block"
+                                      or old_context.get("block_id") == context.get("block_id")
+                                      or (context.get("scope_inherited") is True
+                                          and old_context.get("scope_inherited") is True))
+                        if same_connection and same_owner:
                             old_context["schema"] = {}
                             old_context["schema_complete"] = False
                             self._context_codes.pop(old_key, None)
@@ -320,11 +325,15 @@ class SessionRuntime:
                     "session_id": self.session_id, "connection_id": merged.get("connection_id"),
                     "database": merged.get("database", ""), "schema": merged.get("schema_name", ""),
                     "version": self.language_version, "variables": self.language_variables,
+                    **({"block_id": context["block_id"]} if context.get("block_id") else {}),
+                    **({"scope_inherited": True} if context.get("scope_inherited") is True else {}),
                     **({"schema_snapshot": context["schema"]} if "schema" in context else {}),
                     **({"metadata_state": context["metadata_state"], "schema_error": context.get("schema_error")}
                        if "metadata_state" in context else {}),
                     **({"requested_scope": context["requested_scope"]} if "requested_scope" in context else {}),
                     **({"metadata_invalidated": True} if context.get("metadata_invalidated") else {}),
+                    **({"metadata_invalidation_scope": context["metadata_invalidation_scope"]}
+                       if context.get("metadata_invalidation_scope") in {"connection", "block"} else {}),
                 }})
                 return
             event = message.get("event")
@@ -426,12 +435,26 @@ class SessionRuntime:
 
     @staticmethod
     def context_key(params):
-        return "|".join(str(params.get(key) or "") for key in ("connection_id", "database", "schema")) or "default"
+        key = "|".join(str(params.get(name) or "") for name in ("connection_id", "database", "schema")) or "default"
+        if params.get("block_id"):
+            key += "|block:" + str(params["block_id"])
+        if params.get("scope_inherited") is True:
+            key += "|scope:inherited"
+        return key
 
     def editor_context(self, params, *, refresh=True, force=False):
         with self._lock:
             key = self.context_key(params)
             context = dict(self.language_contexts.get(key) or {})
+            if params.get("block_id") and "scope_inherited" not in params:
+                # Older clients prepare a connection-wide snapshot before
+                # requesting completion with a block id. Modern clients send
+                # an explicit ownership flag and never borrow this snapshot.
+                legacy_params = {name: value for name, value in params.items() if name != "block_id"}
+                legacy_context = self.language_contexts.get(self.context_key(legacy_params)) or {}
+                if legacy_context.get("schema") and (not context.get("schema")
+                        or legacy_context.get("version", 0) > context.get("version", 0)):
+                    context = dict(legacy_context)
             context["variables"] = dict(self.language_variables)
             context["version"] = self.language_version
             if not refresh:

@@ -12,6 +12,8 @@ import "./blockScopePicker.css";
 
 export interface BlockScopePickerProps {
   sessionId: string;
+  blockId?: string;
+  scopeInherited?: boolean;
   connectionId?: string;
   dbType?: string;
   database?: string;
@@ -31,15 +33,15 @@ interface ScopePopover {
 }
 
 /** Database and schema remain visible; metadata is fetched only when the picker opens. */
-export function BlockScopePicker({ sessionId, connectionId, dbType, database, schema,
+export function BlockScopePicker({ sessionId, blockId, scopeInherited, connectionId, dbType, database, schema,
   connected = true, disabled = false, refresh = 0, showSchema = hasSchemaScope(dbType), onChange, onError }: BlockScopePickerProps) {
   useLocale();
   const container = useRef<HTMLDivElement>(null);
   const selectedTrigger = useRef<HTMLButtonElement>();
   const [popover, setPopover] = useState<ScopePopover>();
   const [selecting, setSelecting] = useState(false);
-  const scope = useMemo<BlockScope>(() => ({ session_id: sessionId, connection_id: connectionId,
-    db_type: dbType, database, schema, revision: refresh }), [sessionId, connectionId, dbType, database, schema, refresh]);
+  const scope = useMemo<BlockScope>(() => ({ session_id: sessionId, block_id: blockId, ...(blockId || scopeInherited!==undefined?{scope_inherited:Boolean(scopeInherited)}:{}),connection_id: connectionId,
+    db_type: dbType, database, schema, revision: refresh }), [sessionId, blockId, scopeInherited, connectionId, dbType, database, schema, refresh]);
   useEffect(() => { setPopover(undefined); }, [sessionId, connectionId, database, schema, disabled, connected]);
   useEffect(() => {
     const element = container.current;
@@ -55,6 +57,7 @@ export function BlockScopePicker({ sessionId, connectionId, dbType, database, sc
     }
   }, [selecting]);
   const databaseLabel = dbType === "databricks" ? t("Catálogo") : t("Banco");
+  const schemaLabel = schema === "" ? t("Nenhum") : schema ?? t("Padrão");
   async function select(value: string, field: ScopeField) {
     selectedTrigger.current = popover?.button;
     setPopover(undefined); setSelecting(true);
@@ -78,8 +81,8 @@ export function BlockScopePicker({ sessionId, connectionId, dbType, database, sc
     </button>}
     {showSchema && <button type="button" className="block-scope-trigger" disabled={disabled || !connected || selecting}
       aria-label={t("Selecionar schema")} aria-haspopup="listbox" aria-expanded={popover?.field === "schema"}
-      title={`${t("Schema")}: ${schema || t("Padrão")}`} onClick={event => trigger("schema", event)}>
-      <span className="block-scope-label">{t("Schema")}</span><span className="block-scope-value">{schema || t("Padrão")}</span><ChevronDown size={11} />
+      title={`${t("Schema")}: ${schemaLabel}`} onClick={event => trigger("schema", event)}>
+      <span className="block-scope-label">{t("Schema")}</span><span className="block-scope-value">{schemaLabel}</span><ChevronDown size={11} />
     </button>}
     {popover && <ScopeSearchPopover key={`${popover.field}:${sessionId}:${connectionId}`} host={popover}
       scope={scope} label={popover.field === "database" ? databaseLabel : t("Schema")}

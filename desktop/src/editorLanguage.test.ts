@@ -2,8 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { InlineRequestGate, LanguageRequestGate, languageParams, mergeCompletions, type LanguageCompletion } from "./editorLanguage";
 import type { RuntimeTransport } from "./runtime";
 describe("editor language requests", () => {
+  it.each([true,false])("sends explicit modern connector inheritance %s while legacy context remains optional",scopeInherited=>{
+    expect(languageParams({variables:[],tables:[],sessionId:"s",blockId:"block",scopeInherited},{language:"sql",code:"SELECT 1"})).toMatchObject({block_id:"block",scope_inherited:scopeInherited});
+    expect(languageParams({variables:[],tables:[],sessionId:"s"},{language:"sql",code:"SELECT 1"})).not.toHaveProperty("scope_inherited");
+  });
   it("sends the focused block's database scope and cursor without changing indexes", () => {
-    expect(languageParams({ variables: [], tables: [], sessionId: "s", connectionId: "c", database: "catalog", schema: "schema" }, { language: "sql", code: "SELECT a.", line: 1, column: 10 })).toMatchObject({ session_id: "s", connection_id: "c", database: "catalog", schema: "schema", line: 1, column: 10 });
+    expect(languageParams({ variables: [], tables: [], sessionId: "s", blockId:"block", connectionId: "c", database: "catalog", schema: "schema" }, { language: "sql", code: "SELECT a.", line: 1, column: 10 })).toMatchObject({ session_id: "s", block_id:"block", connection_id: "c", database: "catalog", schema: "schema", line: 1, column: 10 });
   });
   it("rejects late completions after a newer keystroke or changed connection", async () => {
     const resolvers: Array<(value: { items: LanguageCompletion[] }) => void> = [];

@@ -180,6 +180,7 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
     namespace.setdefault("display", rich_capture.display)
     connector = None
     context_key = "default"
+    context_params = {}
     connection_labels = {}
     snapshot_dirty = False
 
@@ -201,7 +202,7 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
             emit("snapshot.warning", {"session_id": session_id, "saved": False, "error": f"{type(exc).__name__}: {exc}"})
 
     def activate(params, *, default=False):
-        nonlocal connector, context_key
+        nonlocal connector, context_key, context_params
         connector = pool.activate(params, default=default)
         config = params.get("_connection_config") or params.get("config") or pool.default_config or {}
         name = params.get("_connection_name") or config.get("name")
@@ -211,6 +212,11 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
             if key not in pool.items:
                 del connection_labels[key]
         context_key = "|".join(str(params.get(key) or "") for key in ("connection_id", "database", "schema")) or "default"
+        if params.get("block_id"):
+            context_key += "|block:" + str(params["block_id"])
+        if params.get("scope_inherited") is True:
+            context_key += "|scope:inherited"
+        context_params = dict(params)
         resolved = pool.explorer().context()
         namespace.update({
             "db_engine": connector.engine, "db_type": connector.db_type,
@@ -221,11 +227,20 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
         })
         return connector
 
-    def publish_context(params=None, *, metadata=False, invalidated=False):
+    def publish_context(params=None, *, metadata=False, invalidated=False, invalidation_scope="connection"):
+        params = context_params if params is None else params
         key = context_key
         context = {"key": key, "variables": namespace_snapshot(namespace), "connection_id": pool.active_key[0] if pool.active_key else None}
+        if params.get("block_id"):
+            context["block_id"] = params["block_id"]
+        if params.get("scope_inherited"):
+            context["scope_inherited"] = True
+        if connector is not None:
+            resolved = pool.explorer().context()
+            context.update(db_type=resolved["db_type"], database=resolved["database"], schema_name=resolved["schema"],
+                           requested_scope={field: params.get(field) for field in ("connection_id", "database", "schema")})
         if invalidated:
-            context.update({"schema": {}, "metadata_invalidated": True})
+            context.update({"schema": {}, "metadata_invalidated": True, "metadata_invalidation_scope": invalidation_scope})
         if metadata and connector is not None:
             schema = pool.explorer().completion_schema((params or {}).get("code", ""))
             context.update({"schema": schema, "database": schema.get("database", ""),
@@ -278,12 +293,17 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                 sys.stdout, sys.stderr = CapturedStream(capture, "stdout"), CapturedStream(capture, "stderr")
                 results, rich_outputs, error, download_result = [], [], None, None
                 execution_connection = None
+                previous_context = None
+                previous_search_path = None
+                sql_scope_changed = False
                 rich_capture.begin()
                 try:
                     before = {name: id(value) for name, value in namespace.items() if store.is_frame(value)}
                     if params.get("connection_id") or params.get("_connection_config") or pool.default_config is not None:
-                        activate(params)
+                        activate(params, default=bool(params.get("scope_inherited")))
                     if connector is not None:
+                        previous_context = pool.explorer().context()
+                        previous_search_path = connector.connection_params.get("postgresql_search_path")
                         execution_connection = {"database": connector.connection_params.get("database", "")}
                         if pool.active_key in connection_labels:
                             execution_connection["connection"] = connection_labels[pool.active_key]
@@ -358,31 +378,61 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                     "results": results,
                     "variables": describe_variables(namespace),
                 }
+                if params.get("block_id"):
+                    payload["block_id"] = params["block_id"]
+                if "scope_inherited" in params:
+                    payload["scope_inherited"] = params["scope_inherited"] is True
                 if error:
                     payload["error"] = error
                 if rich_outputs:
                     payload["rich_outputs"] = rich_outputs
                 if download_result is not None:
                     payload["export"] = download_result
+                if params["language"] == "sql" and previous_context is not None and connector is not None:
+                    current_context = pool.explorer().context()
+                    sql_scope_changed = current_context != previous_context or (connector.db_type == "postgresql" and connector.connection_params.get("postgresql_search_path") != previous_search_path)
+                    if current_context != previous_context:
+                        identifier = pool.active_key[0] if pool.active_key else pool.default_id
+                        payload["context_change"] = {
+                            "previous": previous_context, "current": current_context,
+                            "connection_id": None if identifier == "transient" else identifier,
+                            "requested_scope": {field: params.get(field) for field in ("connection_id", "database", "schema")},
+                        }
+                    if sql_scope_changed:
+                        old_key = pool.active_key
+                        pool.reindex_active(current_context, params)
+                        if old_key in connection_labels:
+                            connection_labels[pool.active_key] = connection_labels.pop(old_key)
+                        namespace.update(db_database=current_context["database"], db_schema=current_context["schema"])
+                        identifier = pool.active_key[0] if pool.active_key else pool.default_id
+                        context_key = "|".join(str(value or "") for value in (None if identifier == "transient" else identifier, current_context["database"], current_context["schema"]))
+                        if params.get("block_id"):
+                            context_key += "|block:" + str(params["block_id"])
+                        if params.get("scope_inherited") is True:
+                            context_key += "|scope:inherited"
                 # A failed block may have partially changed a frame in place.
                 # Keep the previous durable generation until a later success.
                 snapshot_dirty = error is None
                 # All blocks share this interpreter's namespace. Publish its
                 # immutable names/types/columns before clients observe the
                 # completed execution, without waiting for database metadata.
-                publish_context()
+                publish_context(params)
                 from .notifications import capture_completion
                 notification = capture_completion(params, payload, namespace, store, connection_context=execution_connection)
                 send({"event": "execution.finished", "payload": payload, "job_id": job_id,
                       **({"notification_delivery": notification} if notification is not None else {})})
                 from .sql_context import changes_metadata
-                invalidated = params["language"] == "sql" and connector is not None and changes_metadata(params["code"])
+                invalidated = params["language"] == "sql" and connector is not None and (sql_scope_changed or changes_metadata(params["code"]))
                 if invalidated:
                     from .table_export import refresh_temporary_tables
-                    refresh_temporary_tables(connector)
                     pool.explorer().cache.clear()
                     pool.explorer().column_cache.clear()
-                    publish_context(invalidated=True)
+                    try:
+                        if changes_metadata(params["code"]):
+                            refresh_temporary_tables(connector)
+                        publish_context(params, invalidated=True, invalidation_scope="connection" if changes_metadata(params["code"]) else "block")
+                    except Exception as exc:
+                        emit("language.refresh_failed", {"session_id": session_id, "block_id": params.get("block_id"), "error": str(exc)[:2048]})
                 continue
             try:
                 if method == "connection.connect":
@@ -438,6 +488,10 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                         publish_context(params, metadata=True)
                     except Exception as exc:
                         key = "|".join(str(params.get(key) or "") for key in ("connection_id", "database", "schema")) or "default"
+                        if params.get("block_id"):
+                            key += "|block:" + str(params["block_id"])
+                        if params.get("scope_inherited") is True:
+                            key += "|scope:inherited"
                         config = params.get("_connection_config") or params.get("config") or pool.default_config or {}
                         send({"language_context": {"key": key, "variables": namespace_snapshot(namespace),
                               "connection_id": params.get("connection_id") or pool.default_id,
@@ -445,6 +499,8 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                               "schema_name": params.get("schema") or config.get("schema") or config.get("postgresql_schema") or config.get("databricks_schema") or "",
                               "schema": {}, "schema_complete": False, "metadata_state": "error",
                               "requested_scope": {field: params.get(field) for field in ("connection_id", "database", "schema")},
+                              "block_id": params.get("block_id"),
+                              "scope_inherited": params.get("scope_inherited") is True,
                               "schema_error": f"{type(exc).__name__}: {exc}"[:2048]}})
                     result = {"status": "updated"}
                 elif method in {"data.import", "variable.inspect", "variable.delete", "result.export", "result.export_text", "result.summary", "result.chart", "result.chart_export", "result.export_table", "document.read", "document.script_export", "variable.archive.list", "variable.archive.export", "variable.archive.import"}:
@@ -455,6 +511,7 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                             emit("result.export_progress", {"session_id": session_id, "operation_id": operation_id, **update})
                     if method == "result.export_table":
                         previous_connector, previous_key, previous_context = connector, pool.active_key, context_key
+                        previous_context_params = context_params
                         connection_names = ("db_engine", "db_type", "db_database", "db_host", "db_username", "db_schema")
                         previous_variables = {name: namespace[name] for name in connection_names if name in namespace}
                         try:
@@ -472,6 +529,7 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                             publish_context(invalidated=True)
                         finally:
                             connector, context_key = previous_connector, previous_context
+                            context_params = previous_context_params
                             pool.active_key = previous_key if previous_key in pool.items else None
                             for name in connection_names:
                                 namespace.pop(name, None)

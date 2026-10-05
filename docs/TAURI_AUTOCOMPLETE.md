@@ -14,6 +14,16 @@ Eventos de metadados incluem `requested_scope` e o contexto resolvido pelo drive
 
 SQL Server, MySQL e MariaDB deixam de receber o schema artificial `default`. PostgreSQL descobre os bancos acessíveis e prioriza o schema focado quando existe o mesmo nome de tabela em outro schema. O preparo reconhece fontes separadas por vírgula e subqueries. Listas de nomes já obtidas do driver não são truncadas em 10 mil objetos; colunas continuam carregadas sob demanda e armazenadas em caches limitados.
 
+### Contexto alterado pela execução SQL
+
+Comandos de contexto executados pelo bloco também atualizam banco, catálogo e schema na interface, no Explorer, nos diagnósticos e no autocomplete. A detecção considera somente o código enviado à execução, incluindo uma seleção parcial, e ignora comandos presentes em comentários ou literais. Após `USE` ou alterações de `search_path`, o driver consulta o contexto real na mesma conexão física, antes de devolvê-la ao pool. Queries comuns não recebem essa consulta adicional.
+
+Um comando de troca que falha mantém o contexto anterior. Se o `USE` funcionar e uma instrução posterior falhar, a interface acompanha a troca efetivamente realizada. PostgreSQL observa o contexto após commit/rollback, respeita a duração de `SET LOCAL` e preserva caminhos de busca completos e schema vazio conforme o resultado real da transação ([SET no PostgreSQL](https://www.postgresql.org/docs/18/sql-set.html)). Databricks distingue catálogo de schema; `USE DATABASE` altera schema, como `USE SCHEMA` ([USE SCHEMA no Databricks](https://docs.databricks.com/aws/en/sql/language-manual/sql-ref-syntax-ddl-use-schema)).
+
+Um bloco que herda o contexto da aba atualiza também os demais blocos herdados; blocos com contexto próprio mantêm sua seleção. A fila resolve o contexto atualizado antes de cada execução. A conexão física e suas tabelas temporárias são preservadas mesmo quando já existe outra conexão no banco de destino. O runtime recebe `block_id` e `scope_inherited` explícito nos pedidos modernos; snapshots distinguem o bloco e a origem herdada ou própria. Invalidações de contexto alcançam o bloco ou sua família herdada, enquanto DDL invalida metadados da conexão. Respostas atrasadas não associam um catálogo novo à seleção antiga.
+
+Regressões: `runtime_tests/test_sql_execution_context.py`, `runtime_tests/test_block_language_context.py` e `desktop/src/workspaceSqlContext.test.ts`. Os cenários de plataformas remotas usam DBAPI simulado; os contratos stdio existentes continuam exercitando SQLite real.
+
 Teste do editor real, sem operar o desktop: `npm --prefix desktop run test:autocomplete`. Em uma máquina sem Chromium de teste, instalar com `npm --prefix desktop exec playwright install chromium`. O runner usa Monaco e os componentes de produção em Chromium headless, com a fronteira IPC controlada. Esse teste comprova interação e isolamento dos seis dialetos; integração com banco real usa SQLite. Bancos externos devem ser conferidos no ambiente configurado.
 
 ## Aceite desta correção de contexto

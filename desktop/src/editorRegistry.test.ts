@@ -4,6 +4,12 @@ import {registerDocument} from "./documentWindows";
 
 afterEach(()=>{models.clear();pendingInsertions.clear();contexts.clear();contextVersions.clear();completionGates.clear();inlineGates.clear();diagnosticRefreshers.clear();editorPreferences.clear();vi.unstubAllGlobals();});
 describe("Editor focus across viewport virtualization",()=>{
+  it("invalidates completion and diagnostics when connector inheritance changes in the same SQL scope",()=>{
+    const context={variables:[],tables:[],sessionId:"s",blockId:"block",connectionId:"main",database:"db",schema:"public",scopeInherited:false};
+    setCompletionContext("block",context);const version=contextVersions.get("block"),invalidate=vi.fn(),refresh=vi.fn();
+    completionGates.set("block",{invalidate} as never);diagnosticRefreshers.set("block",refresh);
+    setCompletionContext("block",{...context,scopeInherited:true});expect(contextVersions.get("block")).toBe(version!+1);expect(invalidate).toHaveBeenCalledOnce();expect(refresh).toHaveBeenCalledOnce();
+  });
   it("reveals a diagnostic range in a live editor without changing its code",()=>{
     vi.stubGlobal("document",{querySelector:()=>null});vi.stubGlobal("CSS",{escape:(text:string)=>text});
     const editor={focus:vi.fn(),setSelection:vi.fn(),revealRangeInCenter:vi.fn()},range={startLineNumber:8,startColumn:3,endLineNumber:8,endColumn:5};

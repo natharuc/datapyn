@@ -4,29 +4,46 @@ import type {Block, ConnectionConfig, SessionDocument} from "./workspace";
 
 type Schema = NonNullable<CompletionContext["schemaSnapshot"]>;
 interface Snapshot {version:number; schemaSnapshot?:Schema; tables:string[]; metadataState?:"ready"|"error";error?:string|null}
-const scopeKey=(connection?:string,database?:string,schema?:string)=>JSON.stringify([connection ?? "",database ?? "",schema ?? ""]);
+const scopeKey=(connection?:string,database?:string,schema?:string,blockId?:string,scopeInherited=false)=>JSON.stringify([connection ?? "",database ?? "",schema ?? "",blockId ?? "",scopeInherited]);
 
 /** Metadata arrives independently of typing; each connection scope keeps its own bounded index. */
 export class SessionLanguageContexts {
   private sessions=new Map<string,{variables:LanguageContextUpdate["variables"];variableSignature:string;namespaceVersion:number;version:number;hasRequestedScopes:boolean;scopes:Map<string,Snapshot>}>();
+  private scopedBlocks=new Map<string,Set<string>>();
   accept(event:RuntimeEvent):boolean {
-    if(event.event === "backend.exited"){const changed=this.sessions.size>0;this.sessions.clear();return changed;}
-    if(["session.reset","session.error","session.ready"].includes(event.event))return this.sessions.delete(event.payload.session_id);
+    if(event.event === "backend.exited"){const changed=this.sessions.size>0;this.sessions.clear();this.scopedBlocks.clear();return changed;}
+    if(["session.reset","session.error","session.ready"].includes(event.event)){this.scopedBlocks.delete(event.payload.session_id);return this.sessions.delete(event.payload.session_id);}
+    if(event.event === "execution.finished" && event.payload.context_change){
+      const change=event.payload.context_change,requested=change.requested_scope;
+      if(event.payload.block_id)this.ownBlock(event.payload.session_id,event.payload.block_id);
+      let removed=false;
+      if(event.payload.scope_inherited){
+        const scopes=this.sessions.get(event.payload.session_id)?.scopes,targets=new Set<Snapshot>();
+        if(scopes){for(const [key,value] of scopes){const [connection,,,block,inherited]=JSON.parse(key) as [string,string,string,string,boolean];if(connection===(requested.connection_id ?? "") && (inherited || !block))targets.add(value);}
+          for(const [key,value] of scopes)if(targets.has(value)){scopes.delete(key);removed=true;}
+        }
+      }
+      removed=this.invalidate(event.payload.session_id,requested.connection_id ?? undefined,requested.database ?? undefined,requested.schema ?? undefined,event.payload.block_id) || removed;
+      return this.invalidate(event.payload.session_id,requested.connection_id ?? undefined,change.current.database ?? undefined,change.current.schema ?? undefined,event.payload.block_id) || removed;
+    }
     if(event.event !== "language.context_updated")return false;
     const p=event.payload,previous=this.sessions.get(p.session_id);
     if(previous && p.version<=previous.version)return false;
-    const scopes=previous?.scopes ?? new Map<string,Snapshot>();let key=scopeKey(p.connection_id,p.database,p.schema);
+    if(p.block_id && (p.schema_snapshot || p.metadata_invalidated))this.ownBlock(p.session_id,p.block_id);
+    const scopes=previous?.scopes ?? new Map<string,Snapshot>();let key=scopeKey(p.connection_id,p.database,p.schema,p.block_id,p.scope_inherited);
     if(p.metadata_invalidated){
       const invalidated=new Set<Snapshot>();
-      for(const [oldKey,value] of scopes)if((JSON.parse(oldKey) as string[])[0]===(p.connection_id ?? ""))invalidated.add(value);
+      for(const [oldKey,value] of scopes){const [connection,,,block,inherited]=JSON.parse(oldKey) as [string,string,string,string,boolean];
+        if(connection===(p.connection_id ?? "") && (p.metadata_invalidation_scope!=="block" || !p.block_id || block===p.block_id || p.scope_inherited && (inherited || !block)))invalidated.add(value);
+      }
       for(const [oldKey,value] of scopes)if(invalidated.has(value))scopes.delete(oldKey);
     }
     // A namespace-only event does not define a new unresolved SQL scope. Keep
     // the most recent metadata for this connection instead of shadowing it
     // with an empty [connection,"",""] entry after an execution.
     if(!p.schema_snapshot && !p.metadata_invalidated && !scopes.has(key) && (!p.database || !p.schema))for(const existing of scopes.keys()){
-      const [connection,database,schema]=JSON.parse(existing) as string[];
-      if(connection===(p.connection_id ?? "") && (!p.database || database===p.database) && (!p.schema || schema===p.schema))key=existing;
+      const [connection,database,schema,block,inherited]=JSON.parse(existing) as [string,string,string,string,boolean];
+      if(connection===(p.connection_id ?? "") && block===(p.block_id ?? "") && inherited===Boolean(p.scope_inherited) && (!p.database || database===p.database) && (!p.schema || schema===p.schema))key=existing;
     }
     const old=scopes.get(key);
     let schemaSnapshot=old?.schemaSnapshot,tables=old?.tables ?? [];
@@ -48,22 +65,30 @@ export class SessionLanguageContexts {
     // Requested defaults and the resolved catalogue share the same immutable
     // snapshot. Never guess a default schema from whichever scope arrived last.
     if(p.requested_scope){
-      const request=p.requested_scope,requested=scopeKey(request.connection_id ?? undefined,request.database ?? undefined,request.schema ?? undefined);
-      scopes.delete(requested);scopes.set(requested,snapshot);
+      const request=p.requested_scope,requested=scopeKey(request.connection_id ?? undefined,request.database ?? undefined,request.schema ?? undefined,p.block_id,p.scope_inherited);
+      // A late preparation may resolve a connector after USE changed it. Such
+      // metadata belongs to the actual scope, never the old explicit selection.
+      if((!request.database || request.database===p.database) && (!request.schema || request.schema===p.schema)){
+        scopes.delete(requested);scopes.set(requested,snapshot);
+      }
     }
     while(scopes.size>32)scopes.delete(scopes.keys().next().value!);
     const variableSignature=JSON.stringify(p.variables),namespaceVersion=(previous?.namespaceVersion ?? 0)+(previous?.variableSignature===variableSignature ? 0 : 1);
     this.sessions.set(p.session_id,{variables:p.variables,variableSignature,namespaceVersion,version:p.version,hasRequestedScopes:Boolean(p.requested_scope)||Boolean(previous?.hasRequestedScopes),scopes});return true;
   }
-  retain(ids:ReadonlySet<string>){for(const id of this.sessions.keys())if(!ids.has(id))this.sessions.delete(id);}
-  get(sessionId:string,connection?:string,database?:string,schema?:string){
+  private ownBlock(sessionId:string,blockId:string){
+    let blocks=this.scopedBlocks.get(sessionId);if(!blocks){blocks=new Set();this.scopedBlocks.set(sessionId,blocks);}blocks.add(blockId);
+  }
+  retain(ids:ReadonlySet<string>){for(const id of this.sessions.keys())if(!ids.has(id))this.sessions.delete(id);for(const id of this.scopedBlocks.keys())if(!ids.has(id))this.scopedBlocks.delete(id);}
+  get(sessionId:string,connection?:string,database?:string,schema?:string,blockId?:string,scopeInherited=false){
     const session=this.sessions.get(sessionId);if(!session)return undefined;
-    let snapshot=session.scopes.get(scopeKey(connection,database,schema));
+    const owned=Boolean(blockId && this.scopedBlocks.get(sessionId)?.has(blockId));
+    let snapshot=session.scopes.get(scopeKey(connection,database,schema,blockId,scopeInherited)) ?? (owned?undefined:session.scopes.get(scopeKey(connection,database,schema)));
     // Empty inherited database/schema accepts the resolved default for the SAME connection only.
     if(!snapshot && !session.hasRequestedScopes && (!database || !schema)){
       const candidates=new Set<Snapshot>();
-      for(const [key,value] of session.scopes){const [c,d,s]=JSON.parse(key) as string[];
-        if(c===(connection ?? "") && (!database || d===database) && (!schema || s===schema))candidates.add(value);
+      for(const [key,value] of session.scopes){const [c,d,s,b,inherited]=JSON.parse(key) as [string,string,string,string,boolean];
+        if(c===(connection ?? "") && (b===blockId && inherited===scopeInherited || !owned && !b) && (!database || d===database) && (!schema || s===schema))candidates.add(value);
       }
       if(candidates.size===1)snapshot=candidates.values().next().value;
     }
@@ -76,17 +101,22 @@ export class SessionLanguageContexts {
     for(const [key,value] of session.scopes)if(targets.has(value))session.scopes.delete(key);
     return targets.size>0;
   }
-  invalidate(sessionId:string,connection?:string,database?:string,schema?:string){
+  invalidate(sessionId:string,connection?:string,database?:string,schema?:string,blockId?:string,scopeInherited?:boolean){
     const session=this.sessions.get(sessionId);if(!session)return false;
-    const selected=session.scopes.get(scopeKey(connection,database,schema));let changed=false;
+    const targets=new Set<Snapshot>();
+    for(const [key,value] of session.scopes){const [c,d,s,b,inherited]=JSON.parse(key) as [string,string,string,string,boolean];
+      if(c===(connection ?? "") && d===(database ?? "") && s===(schema ?? "") && b===(blockId ?? "") && (scopeInherited===undefined || scopeInherited===inherited))targets.add(value);
+    }
+    let changed=false;
     for(const [key,value] of session.scopes){
-      if(value===selected || key===scopeKey(connection,database,schema)){session.scopes.delete(key);changed=true;}
+      if(targets.has(value)){session.scopes.delete(key);changed=true;}
     }
     return changed;
   }
 }
 
 interface ParsedBlock {code:string;language:string;cellType?:string;imports:string[];hasCode:boolean;preamble:string}
+export const inheritsSessionScope=(block:Block)=>block.connection_id===undefined && block.database_name===undefined && block.schema===undefined;
 /** A block routed elsewhere inherits that connection's defaults, never another connection's database. */
 export function completionConnectionScope(session:SessionDocument,block:Block,defaults?:Partial<ConnectionConfig>) {
   const inherits=block.connection_id===undefined || block.connection_id===session.savedConnectionId;
@@ -206,7 +236,7 @@ export class SessionCompletionIndex {
     const block=session.blocks.find(b=>b.id===blockId);if(!block)return undefined;
     this.diagnosticsRevision(session);
     const {connectionId,database,schema}=completionConnectionScope(session,block,defaults);
-    const snapshot=contexts.get(session.id,connectionId,database,schema);
+    const scopeInherited=inheritsSessionScope(block),snapshot=contexts.get(session.id,connectionId,database,schema,blockId,scopeInherited);
     const variables=new Map((snapshot ? [] : session.variables).map(v=>[v.name,{name:v.name,type:v.type} as CompletionContext["variables"][number]]));
     for(const [name,v] of Object.entries(snapshot?.variables ?? {}))variables.set(name,{name,...v});
     for(const result of session.results)if(!snapshot) {
@@ -231,7 +261,7 @@ export class SessionCompletionIndex {
     }
     const importParts:string[]=[];let importsLength=0;
     for(const line of imports)if(importsLength+line.length+1<=MAX_IMPORTS){importParts.push(line);importsLength+=line.length+1;}
-    return {sessionId:session.id,connectionId,database,schema,dbType:defaults?.db_type ?? (block.connection_id===undefined || block.connection_id===session.savedConnectionId?session.connection?.db_type:undefined),variables:[...variables.values()],tables:snapshot?.tables ?? [],
+    return {sessionId:session.id,blockId,scopeInherited,connectionId,database,schema,dbType:defaults?.db_type ?? (block.connection_id===undefined || block.connection_id===session.savedConnectionId?session.connection?.db_type:undefined),variables:[...variables.values()],tables:snapshot?.tables ?? [],
       schemaSnapshot:block.language === "sql" ? snapshot?.schemaSnapshot : undefined,schemaVersion:block.language === "sql" ? snapshot?.version : undefined,namespaceVersion:snapshot?.namespaceVersion,
       globalImports:importParts.join("\n"),preamble:parts.join("\n"),siblings};
   }

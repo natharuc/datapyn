@@ -324,6 +324,77 @@ describe("resolved default scope delivery",()=>{
   });
 });
 
+describe("metadata follows the physical connector of each SQL block",()=>{
+  const scoped=(version:number,block_id:string,database="db",schema="public",name="orders"):RuntimeEvent=>({
+    event:"language.context_updated",payload:{session_id:"s",block_id,connection_id:"main",database,schema,version,variables:{},metadata_state:"ready",
+      requested_scope:{connection_id:"main",database,schema},schema_snapshot:{database,current_schema:schema,tables:[{key:name,name,temporary:true}],columns:{[name]:[{name:"value"}]}}},
+  });
+  const finished:RuntimeEvent={event:"execution.finished",payload:{session_id:"s",execution_id:"use",block_id:"first",status:"succeeded",duration_ms:1,results:[],variables:[],context_change:{connection_id:"main",previous:{database:"db",schema:"public"},current:{database:"next",schema:"private"},requested_scope:{connection_id:"main",database:"db",schema:"public"}}}};
+  it("separates inherited affinity from pinned metadata in the same block and logical scope",()=>{
+    const contexts=new SessionLanguageContexts(),inherited=scoped(1,"first","db","public","inherited_temp");if(inherited.event!=="language.context_updated")throw new Error("fixture");inherited.payload.scope_inherited=true;
+    contexts.accept(inherited);contexts.accept(scoped(2,"first","db","public","late_pinned_temp"));
+    expect(contexts.get("s","main","db","public","first",true)?.tables).toEqual(["inherited_temp"]);
+    expect(contexts.get("s","main","db","public","first",false)?.tables).toEqual(["late_pinned_temp"]);
+    expect(contexts.invalidate("s","main","db","public","first",true)).toBe(true);
+    expect(contexts.get("s","main","db","public","first",true)?.schemaSnapshot).toBeUndefined();expect(contexts.get("s","main","db","public","first",false)?.tables).toEqual(["late_pinned_temp"]);
+  });
+  it("invalidates every inherited peer after a default connector changes while pinned peers keep their tables",()=>{
+    const contexts=new SessionLanguageContexts();
+    for(const [index,block] of ["first","inherited_peer"].entries()){const event=scoped(index+1,block,"next","private",block);if(event.event!=="language.context_updated")throw new Error("fixture");event.payload.scope_inherited=true;contexts.accept(event);}
+    contexts.accept(scoped(3,"pinned_peer","next","private","pinned_temp"));contexts.accept({...finished,payload:{...finished.payload,scope_inherited:true}} as RuntimeEvent);
+    expect(contexts.get("s","main","next","private","inherited_peer",true)?.schemaSnapshot).toBeUndefined();
+    expect(contexts.get("s","main","next","private","pinned_peer",false)?.tables).toEqual(["pinned_temp"]);
+  });
+  it("invalidates inherited peers for a secondary search_path change without a primary scope change",()=>{
+    const contexts=new SessionLanguageContexts();contexts.accept(update(1,"main","db","public",["legacy_default"]));
+    const peer=scoped(2,"peer");if(peer.event!=="language.context_updated")throw new Error("fixture");peer.payload.scope_inherited=true;contexts.accept(peer);contexts.accept(scoped(3,"pinned"));
+    contexts.accept({event:"language.context_updated",payload:{session_id:"s",block_id:"first",scope_inherited:true,connection_id:"main",database:"db",schema:"public",version:4,variables:{},metadata_invalidated:true,metadata_invalidation_scope:"block"}});
+    expect(contexts.get("s","main","db","public","peer",true)?.schemaSnapshot).toBeUndefined();expect(contexts.get("s","main","db","public","never_prepared",true)?.schemaSnapshot).toBeUndefined();
+    expect(contexts.get("s","main","db","public","pinned",false)?.tables).toEqual(["orders"]);
+  });
+  it("isolates temporary tables for two blocks with identical connection/database/schema",()=>{
+    const contexts=new SessionLanguageContexts();contexts.accept(scoped(1,"first","db","public","temp_first"));contexts.accept(scoped(2,"second","db","public","temp_second"));
+    expect(contexts.get("s","main","db","public","first")?.tables).toEqual(["temp_first"]);
+    expect(contexts.get("s","main","db","public","second")?.tables).toEqual(["temp_second"]);
+    expect(contexts.get("s","main","db","public","unprepared")?.schemaSnapshot).toBeUndefined();
+  });
+  it("does not borrow global metadata or late old-scope snapshots after USE",()=>{
+    const contexts=new SessionLanguageContexts();contexts.accept(update(1,"main","next","private",["wrong_connector"]));contexts.accept(scoped(2,"first"));contexts.accept(scoped(3,"second"));
+    contexts.accept(finished);
+    expect(contexts.get("s","main","next","private","first")?.schemaSnapshot).toBeUndefined();
+    expect(contexts.get("s","main","db","public","second")?.tables).toEqual(["orders"]);
+    contexts.accept(scoped(4,"first","db","public","late_previous"));
+    expect(contexts.get("s","main","next","private","first")?.schemaSnapshot).toBeUndefined();
+    contexts.accept(scoped(5,"first","next","private","fresh_current"));
+    expect(contexts.get("s","main","next","private","first")?.tables).toEqual(["fresh_current"]);
+  });
+  it("never aliases a late response's resolved scope to a different explicit requested scope",()=>{
+    const contexts=new SessionLanguageContexts();contexts.accept(scoped(1,"first","next","private","current"));
+    const late=scoped(2,"first","db","public","stale");if(late.event!=="language.context_updated")throw new Error("fixture");
+    late.payload.requested_scope={connection_id:"main",database:"next",schema:"private"};contexts.accept(late);
+    expect(contexts.get("s","main","next","private","first")?.tables).toEqual(["current"]);
+    expect(contexts.get("s","main","db","public","first")?.tables).toEqual(["stale"]);
+  });
+  it("invalidates only the changed block even when default aliases share the same scope",()=>{
+    const contexts=new SessionLanguageContexts();contexts.accept(scoped(1,"first"));contexts.accept(scoped(2,"second"));
+    contexts.accept({event:"language.context_updated",payload:{session_id:"s",block_id:"first",connection_id:"main",database:"next",schema:"private",version:3,variables:{},metadata_invalidated:true,metadata_invalidation_scope:"block",requested_scope:{connection_id:"main",database:"db",schema:"public"}}});
+    expect(contexts.get("s","main","db","public","first")?.schemaSnapshot).toBeUndefined();
+    expect(contexts.get("s","main","db","public","second")?.tables).toEqual(["orders"]);
+  });
+  it.each(["connection",undefined] as const)("DDL invalidation clears peer blocks on the connection: %s",metadata_invalidation_scope=>{
+    const contexts=new SessionLanguageContexts();contexts.accept(scoped(1,"first"));contexts.accept(scoped(2,"second"));contexts.accept(update(3,"other"));
+    contexts.accept({event:"language.context_updated",payload:{session_id:"s",block_id:"first",connection_id:"main",database:"db",schema:"public",version:4,variables:{},metadata_invalidated:true,metadata_invalidation_scope}});
+    expect(contexts.get("s","main","db","public","first")?.schemaSnapshot).toBeUndefined();expect(contexts.get("s","main","db","public","second")?.schemaSnapshot).toBeUndefined();
+    expect(contexts.get("s","other","db","public")?.tables).toEqual(["public.users"]);
+  });
+  it("refreshes completion and diagnostics with the live block scope after a command",()=>{
+    const session=newSession();session.id="s";session.savedConnectionId="main";session.database="db";session.schema="public";session.currentExecutionId="use";session.currentBlockId=session.blocks[0].id;
+    const contexts=new SessionLanguageContexts(),index=new SessionCompletionIndex(),next=applyRuntimeEvent(session,{...finished,payload:{...finished.payload,block_id:session.blocks[0].id}} as RuntimeEvent);
+    const metadata=scoped(1,next.blocks[0].id,"next","private","new_table");if(metadata.event!=="language.context_updated")throw new Error("fixture");metadata.payload.scope_inherited=true;contexts.accept(metadata);
+    expect(index.context(next,next.blocks[0].id,contexts)).toMatchObject({sessionId:"s",blockId:next.blocks[0].id,database:"next",schema:"private",tables:["new_table"],schemaVersion:1});
+  });
+});
+
 
 it("discards the edited connection's catalogue and every default alias while keeping other connections",()=>{
   const contexts=new SessionLanguageContexts();

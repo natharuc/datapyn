@@ -3,6 +3,8 @@ import { sqlStringEscapesBackslash } from "./sqlCompletionScope";
 
 export interface PreparationScope {
   sessionId: string;
+  blockId?: string;
+  scopeInherited?: boolean;
   connectionId?: string;
   database?: string;
   schema?: string;
@@ -111,7 +113,7 @@ export function preparationCodeKey(code: string, dbType?: string): string {
   return JSON.stringify([[...references].sort(), [...prefixes].sort(), routines]);
 }
 
-const scopeKey = (scope: PreparationScope) => JSON.stringify([scope.connectionId ?? "", scope.database ?? "", scope.schema ?? ""]);
+const scopeKey = (scope: PreparationScope) => JSON.stringify([scope.connectionId ?? "", scope.database ?? "", scope.schema ?? "", scope.blockId ?? ""]);
 
 /** Preparation follows focus and scope changes, independently of editor typing. */
 export class ScopePreparation {
@@ -122,7 +124,7 @@ export class ScopePreparation {
 
   request(scope: PreparationScope, code = "", force = false): Promise<PreparationResult> {
     const normalized = { ...scope };
-    const target = scopeKey(normalized), key = JSON.stringify([target, preparationCodeKey(code, scope.dbType)]);
+    const target = scopeKey(normalized), key = JSON.stringify([target, Boolean(scope.scopeInherited), preparationCodeKey(code, scope.dbType)]);
     let entries = this.sessions.get(scope.sessionId);
     if (!entries) { entries = new Map(); this.sessions.set(scope.sessionId, entries); }
     if (force) {
@@ -133,7 +135,8 @@ export class ScopePreparation {
       if (existing) { entries.delete(key); entries.set(key, existing); return existing.promise; }
     }
     let entry: PreparationEntry;
-    const params = { session_id: normalized.sessionId, connection_id: normalized.connectionId,
+    const params = { session_id: normalized.sessionId, ...(normalized.blockId ? {block_id:normalized.blockId} : {}), connection_id: normalized.connectionId,
+      ...(normalized.blockId || normalized.scopeInherited!==undefined?{scope_inherited:Boolean(normalized.scopeInherited)}:{}),
       database: normalized.database, schema: normalized.schema, code, ...(force ? { refresh: true } : {}) };
     // Start asynchronously so synchronous transport errors participate in the
     // same retry path, and the entry exists before a runtime event can arrive.
@@ -172,6 +175,11 @@ export class ScopePreparation {
   accept(event: RuntimeEvent) {
     if (event.event === "backend.exited") { this.reset(); return; }
     if (["session.ready", "session.reset", "session.error"].includes(event.event)) { this.reset(event.payload.session_id); return; }
+    if (event.event === "execution.finished" && event.payload.context_change) {
+      const payload=event.payload,entries=this.sessions.get(payload.session_id),requested=payload.context_change!.requested_scope;
+      if(entries)for(const [key,entry] of entries)if((!payload.block_id || entry.scope.blockId===payload.block_id || payload.scope_inherited && (entry.scope.scopeInherited || !entry.scope.blockId)) && (entry.scope.connectionId ?? "")===(requested.connection_id ?? ""))entries.delete(key);
+      return;
+    }
     if (event.event !== "language.context_updated") return;
     const payload = event.payload;
     if (payload.requested_scope && (payload.metadata_state === "ready" || payload.schema_snapshot)) {
@@ -189,12 +197,12 @@ export class ScopePreparation {
       if (payload.connection_id === "transient") connections.add("");
       const entries = this.sessions.get(payload.session_id);
       if (entries) for (const [key, entry] of entries) {
-        if (connections.has(entry.scope.connectionId ?? "")) entries.delete(key);
+        if (connections.has(entry.scope.connectionId ?? "") && (payload.metadata_invalidation_scope!=="block" || !payload.block_id || entry.scope.blockId===payload.block_id || payload.scope_inherited && (entry.scope.scopeInherited || !entry.scope.blockId))) entries.delete(key);
       }
     }
     if (payload.metadata_state === "error") {
       const requested = payload.requested_scope;
-      this.releaseScope({ sessionId: payload.session_id, connectionId: requested ? requested.connection_id ?? undefined : payload.connection_id,
+      this.releaseScope({ sessionId: payload.session_id, blockId:payload.block_id, connectionId: requested ? requested.connection_id ?? undefined : payload.connection_id,
         database: requested ? requested.database ?? undefined : payload.database,
         schema: requested ? requested.schema ?? undefined : payload.schema });
     }

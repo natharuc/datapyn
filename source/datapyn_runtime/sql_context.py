@@ -41,7 +41,8 @@ def lexical_spans(code, db_type=""):
             kind = "literal" if char == "'" else "identifier"
             closing = "]" if char == "[" else char
             postgres_escape = db_type in {"", "postgres", "postgresql"} and start > 0 and code[start - 1] in {"E", "e"} and (start < 2 or not re.match(r"[\w$]", code[start - 2]))
-            escapes_backslash = db_type in {"mysql", "mariadb"} or postgres_escape
+            databricks_raw = db_type == "databricks" and start > 0 and code[start - 1] in {"R", "r"} and (start < 2 or not re.match(r"[\w$]", code[start - 2]))
+            escapes_backslash = db_type in {"mysql", "mariadb"} or (db_type == "databricks" and not databricks_raw) or postgres_escape
             index += 1
             closed = False
             while index < size:
@@ -52,7 +53,7 @@ def lexical_spans(code, db_type=""):
                         continue
                     closed = True
                     break
-                if code[index] == "\\" and kind == "literal" and escapes_backslash:
+                if code[index] == "\\" and (kind == "literal" or (db_type == "databricks" and char == '"')) and escapes_backslash:
                     index += 1
                 index += 1
             index = min(index, size)
@@ -82,6 +83,49 @@ def sql_statement_boundaries(code, db_type=""):
     if db_type in {"sqlserver", "mssql"}:
         boundaries.extend((match.start(), match.end()) for match in re.finditer(r"(?im)^[ \t]*GO(?:[ \t]+\d+)?[ \t]*(?=\n|$)", masked))
     return sorted(boundaries)
+
+
+def sql_statements(code, db_type=""):
+    """Split ordinary statements without treating quoted text as SQL syntax."""
+    if db_type == "databricks" and re.match(r"\s*(?:BEGIN\b|CREATE\s+(?:OR\s+REPLACE\s+)?(?:PROCEDURE|FUNCTION)\b)", sql_code_mask(code, db_type, identifiers=True), re.IGNORECASE):
+        # Databricks scripting/routine bodies are a single server statement.
+        # Their internal semicolons must retain the original execution unit.
+        return [code.strip()]
+    start = 0
+    statements = []
+    for left, right in sql_statement_boundaries(code, db_type):
+        statement = code[start:left].strip()
+        if sql_code_mask(statement, db_type, identifiers=True).strip():
+            statements.append(statement)
+        start = right
+    statement = code[start:].strip()
+    if sql_code_mask(statement, db_type, identifiers=True).strip():
+        statements.append(statement)
+    return statements
+
+
+def changes_sql_context(code, db_type=""):
+    """Identify scripts needing one post-execution context probe.
+
+    This is a trigger, never a prediction of success or the resulting context.
+    The driver reads the real database/schema on the connection that ran SQL.
+    """
+    engine = str(db_type or "").lower()
+    cleaned = sql_code_mask(code or "", engine, identifiers=True)
+    if engine in {"sqlserver", "mssql", "mysql", "mariadb", "databricks"}:
+        return bool(re.search(r"\bUSE\s+", cleaned, re.IGNORECASE))
+    if engine in {"postgres", "postgresql"}:
+        # Restore only the quoted setting name, never arbitrary quoted SQL.
+        names = list(cleaned)
+        for start, end, kind, _closed in lexical_spans(code or "", engine):
+            if kind == "identifier" and code[start:end].casefold() == '"search_path"':
+                names[start:end] = code[start:end]
+        names = "".join(names)
+        if re.search(r'\b(?:SET\s+(?:(?:SESSION|LOCAL)\s+)?(?:(?:search_path|"search_path")\s*(?:TO|=)|SCHEMA\b)|RESET\s+(?:search_path|ALL)\b|DISCARD\s+ALL\b)', names, re.IGNORECASE):
+            return True
+        return any(re.match(r"\s*'search_path'\s*,", code[match.end():], re.IGNORECASE)
+                   for match in re.finditer(r"\bset_config\s*\(", cleaned, re.IGNORECASE))
+    return False
 
 
 def sql_cursor_blocked(code, offset, db_type=""):
