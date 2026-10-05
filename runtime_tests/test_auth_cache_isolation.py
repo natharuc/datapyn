@@ -65,19 +65,21 @@ def test_tauri_authentication_record_stays_in_its_own_profile(monkeypatch, tmp_p
     assert not record.exists()
 
 
-def test_browser_credential_receives_isolated_cache_without_authentication(monkeypatch, tmp_path):
+@pytest.mark.parametrize("platform", ["win32", "linux", "darwin"])
+def test_browser_credential_receives_isolated_cache_without_authentication(monkeypatch, tmp_path, platform):
     import azure.identity
 
     monkeypatch.setenv("DATAPYN_WORKSPACE_PATH", str(tmp_path))
+    monkeypatch.setattr(connector, "sys", SimpleNamespace(platform=platform))
     captured = {}
 
-    def credential(**kwargs):
-        captured.update(kwargs)
-        return object()
+    class Credential:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
 
-    monkeypatch.setattr(azure.identity, "InteractiveBrowserCredential", credential)
+    monkeypatch.setattr(azure.identity, "InteractiveBrowserCredential", Credential)
     result = connector._create_sqlserver_mfa_credential("tenant.database.windows.net", "example", "tenant")
-    assert result is not None
+    assert isinstance(result, Credential)
     assert captured["cache_persistence_options"].name == connector._get_sqlserver_entra_cache_name("tenant.database.windows.net")
     assert captured["login_hint"] == "example"
     assert captured["tenant_id"] == "tenant"
