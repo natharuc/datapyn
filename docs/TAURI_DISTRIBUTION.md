@@ -49,6 +49,9 @@ do usuário. O pipeline verifica o sidecar novamente depois da assinatura.
 - Linux: `$XDG_DATA_HOME/app.datapyn.tauri` ou `~/.local/share/app.datapyn.tauri`.
 - Credenciais: `DataPyn.Tauri.Connections` no cofre do sistema; notificações usam
   um namespace Tauri por workspace.
+- Tokens Entra: cache separado por workspace e servidor. No macOS e Linux,
+  o serviço `DataPyn.Tauri.SQLServer` usa respectivamente Keychain e SecretService;
+  no Windows, a persistência MSAL mantém um nome exclusivo Tauri.
 - Snapshots: cache Tauri próprio do sistema.
 
 O host fixa esses caminhos e não herda um workspace PyQt6 do shell. Configurações
