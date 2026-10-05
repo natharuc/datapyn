@@ -49,7 +49,7 @@ jobs:
           DATAPYN_RELEASE_PUBLISH: ${{ inputs.publish }}
         run: node scripts/tauri/release.mjs workflow-request
       - name: Release pipeline tests
-        run: node --test scripts/tauri/release.test.mjs scripts/tauri/linux-package.test.mjs scripts/tauri/publish.test.mjs scripts/tauri/windows-prerequisites.test.mjs scripts/tauri/smoke-installed.test.mjs
+        run: node --test scripts/tauri/common.test.mjs scripts/tauri/release.test.mjs scripts/tauri/linux-package.test.mjs scripts/tauri/publish.test.mjs scripts/tauri/windows-prerequisites.test.mjs scripts/tauri/smoke-installed.test.mjs
 
   build:
     needs: prepare
@@ -118,7 +118,7 @@ jobs:
           npm --prefix desktop ci
       - name: Validate frontend, runtime and native contracts
         run: |
-          node --test scripts/tauri/release.test.mjs scripts/tauri/linux-package.test.mjs scripts/tauri/publish.test.mjs scripts/tauri/windows-prerequisites.test.mjs scripts/tauri/smoke-installed.test.mjs
+          node --test scripts/tauri/common.test.mjs scripts/tauri/release.test.mjs scripts/tauri/linux-package.test.mjs scripts/tauri/publish.test.mjs scripts/tauri/windows-prerequisites.test.mjs scripts/tauri/smoke-installed.test.mjs
           npm --prefix desktop test
           uv run pytest -c runtime_tests/pytest.ini runtime_tests -q
           cargo fmt --manifest-path desktop/src-tauri/Cargo.toml --check

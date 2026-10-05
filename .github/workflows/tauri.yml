@@ -79,7 +79,7 @@ jobs:
           npm test
           npm run build
       - name: Distribution pipeline tests
-        run: node --test scripts/tauri/release.test.mjs scripts/tauri/linux-package.test.mjs scripts/tauri/publish.test.mjs scripts/tauri/windows-prerequisites.test.mjs scripts/tauri/smoke-installed.test.mjs
+        run: node --test scripts/tauri/common.test.mjs scripts/tauri/release.test.mjs scripts/tauri/linux-package.test.mjs scripts/tauri/publish.test.mjs scripts/tauri/windows-prerequisites.test.mjs scripts/tauri/smoke-installed.test.mjs
       - name: Runtime tests
         run: uv run pytest -c runtime_tests/pytest.ini runtime_tests -q
       - name: Runtime smoke (source)

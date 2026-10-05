@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
@@ -107,9 +107,18 @@ export function run(command, args, { cwd = desktopRoot, env = developmentEnviron
   });
 }
 
-export async function bundleRuntime(args = []) {
-  const env = developmentEnvironment();
+export function runtimeBuildEnvironment(base = developmentEnvironment()) {
+  const env = { ...base };
   env.DATAPYN_RUNTIME_PYTHON = runtimePython(env);
+  // Invoking a venv Python directly does not activate its console scripts.
+  // PyInstaller and distribution preflight also need the selected interpreter's
+  // uv/ruff; local project tools remain available for a custom interpreter.
+  prependEnvironmentPath(env, "PATH", [dirname(env.DATAPYN_RUNTIME_PYTHON), join(repoRoot, ".venv", process.platform === "win32" ? "Scripts" : "bin")]);
+  return env;
+}
+
+export async function bundleRuntime(args = []) {
+  const env = runtimeBuildEnvironment();
   return run(env.DATAPYN_RUNTIME_PYTHON, [join(repoRoot, "scripts", "tauri", "build_runtime.py"), ...args], { cwd: repoRoot, env });
 }
 
