@@ -144,7 +144,7 @@ def test_macos_tauri_cache_isolates_keychain_items_and_cae_without_reading_secre
         second.close()
 
 
-@pytest.mark.parametrize("platform, workspace", [("win32", True), ("linux", True), ("darwin", False)])
+@pytest.mark.parametrize("platform, workspace", [("win32", True), ("linux", False), ("darwin", False)])
 def test_platforms_and_legacy_keep_the_original_browser_credential(monkeypatch, tmp_path, platform, workspace):
     import azure.identity
 
@@ -163,3 +163,115 @@ def test_platforms_and_legacy_keep_the_original_browser_credential(monkeypatch, 
     monkeypatch.setattr(azure.identity, "InteractiveBrowserCredential", credential)
     assert connector._create_sqlserver_mfa_credential("tenant.database.windows.net") is expected
     assert captured["cache_persistence_options"].allow_unencrypted_storage is False
+
+
+@pytest.fixture
+def secret_service(monkeypatch):
+    from keyring.backends import SecretService
+
+    class Backend:
+        def __init__(self):
+            self.values = {}
+            self.fail = None
+            self.operations = []
+
+        def set_password(self, service, account, content):
+            self.operations.append(("save", service, account))
+            if self.fail:
+                raise self.fail
+            self.values[service, account] = content
+
+        def get_password(self, service, account):
+            self.operations.append(("load", service, account))
+            if self.fail:
+                raise self.fail
+            return self.values.get((service, account))
+
+    backend = Backend()
+    monkeypatch.setattr(SecretService, "Keyring", lambda: backend)
+    return backend
+
+
+def test_linux_token_persistence_stores_secrets_only_in_native_keyring(tmp_path, secret_service):
+    from msal_extensions.persistence import BasePersistence
+
+    path = tmp_path / "token-cache.signal"
+    persistence = connector._create_sqlserver_tauri_linux_persistence(path, "isolated-account")
+    assert isinstance(persistence, BasePersistence)
+    assert persistence.is_encrypted
+    assert persistence.get_location() == str(path)
+    assert not path.exists() and secret_service.operations == []
+    persistence.save("private token cache")
+    assert secret_service.values == {("DataPyn.Tauri.SQLServer", "isolated-account"): "private token cache"}
+    assert path.read_bytes() == b"", "The signal file must never contain access or refresh tokens"
+    assert persistence.time_last_modified() > 0
+    assert persistence.load() == "private token cache"
+
+
+def test_linux_token_persistence_missing_items_match_msal_contract(tmp_path, secret_service):
+    from msal_extensions.persistence import PersistenceNotFound
+
+    path = tmp_path / "absent.signal"
+    persistence = connector._create_sqlserver_tauri_linux_persistence(path, "isolated-account")
+    with pytest.raises(PersistenceNotFound):
+        persistence.load()
+    with pytest.raises(PersistenceNotFound):
+        persistence.time_last_modified()
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("operation", ["save", "load"])
+def test_linux_secret_service_failures_never_fall_back_to_plaintext(tmp_path, secret_service, operation):
+    path = tmp_path / "unavailable.signal"
+    persistence = connector._create_sqlserver_tauri_linux_persistence(path, "isolated-account")
+    secret_service.fail = RuntimeError("Secret Service is locked or unavailable")
+    with pytest.raises(RuntimeError, match="Secret Service is locked or unavailable"):
+        if operation == "save":
+            persistence.save("private token cache")
+        else:
+            persistence.load()
+    assert not path.exists()
+    assert secret_service.values == {}
+
+
+def test_linux_token_cache_uses_msal_locking_and_reloads_between_instances(tmp_path, secret_service):
+    from msal_extensions import PersistedTokenCache
+
+    path = tmp_path / "shared.signal"
+    first = PersistedTokenCache(connector._create_sqlserver_tauri_linux_persistence(path, "isolated-account"))
+    second = PersistedTokenCache(connector._create_sqlserver_tauri_linux_persistence(path, "isolated-account"))
+    first.modify("AccessToken", {}, {"secret": "private token cache", "home_account_id": "example", "expires_on": "9999999999"})
+    assert list(second.search("AccessToken"))[0]["secret"] == "private token cache"
+    assert "private token cache" not in path.read_text()
+    assert first.is_encrypted and second.is_encrypted
+    assert Path(first._lock_location).parent == tmp_path
+
+
+def test_linux_browser_cache_isolates_profiles_hosts_and_cae_without_secret_access(monkeypatch, tmp_path, secret_service):
+    import msal_extensions
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Tauri must not initialize the SDK's PyGObject/libsecret persistence")
+
+    monkeypatch.setattr(msal_extensions, "LibsecretPersistence", forbidden)
+    monkeypatch.setattr(connector, "sys", SimpleNamespace(platform="linux"))
+    credentials = []
+    caches = []
+    try:
+        for profile, host in (("first", "tenant.database.windows.net"), ("second", "tenant.database.windows.net"),
+                              ("first", "another.database.windows.net")):
+            workspace = tmp_path / profile
+            monkeypatch.setenv("DATAPYN_WORKSPACE_PATH", str(workspace))
+            credential = connector._create_sqlserver_mfa_credential(host)
+            credentials.append(credential)
+            for is_cae in (False, True):
+                cache = credential._initialize_cache(is_cae)
+                caches.append(cache)
+                assert cache.is_encrypted
+                assert cache._persistence._service_name == "DataPyn.Tauri.SQLServer"
+                assert Path(cache._persistence.get_location()).is_relative_to(workspace)
+        assert len({cache._persistence._account_name for cache in caches}) == 6
+        assert secret_service.operations == [], "Constructors must not open or query a real cofre"
+    finally:
+        for credential in credentials:
+            credential.close()

@@ -39,7 +39,7 @@ report['keyring_backend'] = backend_module
 if sys.platform == 'linux':
     import secretstorage, jeepney
     report['keyring_dependencies'] = {name: importlib.metadata.version(name) for name in ('SecretStorage', 'jeepney')}
-if sys.platform == 'darwin':
+if sys.platform in ('darwin', 'linux'):
     from src.database.database_connector import _create_sqlserver_mfa_credential
     credential = _create_sqlserver_mfa_credential('offline.example')
     try:
@@ -49,7 +49,7 @@ if sys.platform == 'darwin':
         assert cache._persistence._service_name == 'DataPyn.Tauri.SQLServer'
         assert cache._persistence._account_name != cae_cache._persistence._account_name
         assert Path(cache._persistence.get_location()).is_relative_to(Path(os.environ['DATAPYN_WORKSPACE_PATH']))
-        report['mfa_keychain_isolated'] = True
+        report['mfa_native_cache_isolated'] = True
     finally:
         credential.close()
 # Do not call priority/get_password/set_password or connect to the desktop bus.

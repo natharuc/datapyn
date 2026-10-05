@@ -277,6 +277,41 @@ def _build_sqlserver_access_token_struct(access_token: str) -> bytes:
     return struct.pack(f"<I{len(token_bytes)}s", len(token_bytes), token_bytes)
 
 
+def _create_sqlserver_tauri_linux_persistence(path: Path, name: str):
+    """Persist MSAL tokens in Secret Service without a PyGObject dependency."""
+    from keyring.backends.SecretService import Keyring
+    from msal_extensions.persistence import BasePersistence, FilePersistence, PersistenceNotFound
+
+    class SecretServicePersistence(BasePersistence):
+        is_encrypted = True
+
+        def __init__(self):
+            self._signal = FilePersistence(str(path))
+            # Explicit backend: never select a user-configured plaintext keyring
+            # or silently fall back when the native secret service is unavailable.
+            self._keyring = Keyring()
+            self._service_name = "DataPyn.Tauri.SQLServer"
+            self._account_name = name
+
+        def save(self, content):
+            self._keyring.set_password(self._service_name, self._account_name, content)
+            self._signal.touch()
+
+        def load(self):
+            content = self._keyring.get_password(self._service_name, self._account_name)
+            if content is None:
+                raise PersistenceNotFound(message="SQL Server Entra token cache is not initialized")
+            return content
+
+        def time_last_modified(self):
+            return self._signal.time_last_modified()
+
+        def get_location(self):
+            return self._signal.get_location()
+
+    return SecretServicePersistence()
+
+
 def _create_sqlserver_mfa_credential(host: str, login_hint: str = "", tenant_id: str = "", authentication_record=None):
     """Create a browser credential for SQL Server Entra MFA."""
     try:
@@ -297,20 +332,25 @@ def _create_sqlserver_mfa_credential(host: str, login_hint: str = "", tenant_id:
     if authentication_record is not None:
         kwargs["authentication_record"] = authentication_record
 
-    if sys.platform == "darwin" and os.environ.get("DATAPYN_WORKSPACE_PATH"):
+    if sys.platform in {"darwin", "linux"} and os.environ.get("DATAPYN_WORKSPACE_PATH"):
         # Azure Identity's macOS persistence uses one fixed service/account
         # pair even when options.name differs. Isolate the actual Keychain item,
         # not only its signal file, without changing the SDK's global factory.
-        class TauriMacBrowserCredential(InteractiveBrowserCredential):
+        # On Linux, use the bundled Secret Service backend instead of the SDK's
+        # PyGObject-based persistence, retaining encrypted storage and MSAL locks.
+        class TauriBrowserCredential(InteractiveBrowserCredential):
             def _initialize_cache(self, is_cae: bool = False):
                 import msal_extensions
 
                 suffix = "cae" if is_cae else "nocae"
                 name = f"{self._cache_options.name}_{suffix}"
-                path = _get_oauth_cache_dir() / f"{name}.keychain"
-                persistence = msal_extensions.KeychainPersistence(
-                    str(path), "DataPyn.Tauri.SQLServer", name,
-                )
+                path = _get_oauth_cache_dir() / f"{name}.signal"
+                if sys.platform == "darwin":
+                    persistence = msal_extensions.KeychainPersistence(
+                        str(path), "DataPyn.Tauri.SQLServer", name,
+                    )
+                else:
+                    persistence = _create_sqlserver_tauri_linux_persistence(path, name)
                 cache = msal_extensions.PersistedTokenCache(persistence)
                 if is_cae:
                     self._cae_cache = cache
@@ -318,7 +358,7 @@ def _create_sqlserver_mfa_credential(host: str, login_hint: str = "", tenant_id:
                     self._cache = cache
                 return cache
 
-        return TauriMacBrowserCredential(**kwargs)
+        return TauriBrowserCredential(**kwargs)
     return InteractiveBrowserCredential(**kwargs)
 
 
