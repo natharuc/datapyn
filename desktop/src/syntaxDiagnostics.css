@@ -1,4 +1,4 @@
-.syntax-diagnostics { color:var(--muted,#7186a5); background:var(--panel,#0e1522); border-bottom:1px solid var(--border,#253047); font-size:11px; }
+.syntax-diagnostics { color:var(--muted,#7186a5); background:var(--panel,#0e1522); border-top:1px solid var(--border,#253047); font-size:11px; }
 .syntax-diagnostics.error { color:var(--danger); }
 .syntax-diagnostics.warning { color:var(--warning); }
 .syntax-diagnostics.valid { color:var(--success); }
