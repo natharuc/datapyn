@@ -73,8 +73,13 @@ build nas três plataformas, conservando os arquivos como artifacts. Ele não
 cria tags ou releases nem muda o feed, mesmo que um flag de publicação seja
 injetado no ambiente. O primeiro teste da distribuição pode usar esse fluxo.
 
-Também existe `workflow_dispatch`: informe um tag Tauri existente e mantenha
-`publish: false` para gerar os mesmos artifacts sem publicar.
+O workflow também declara `workflow_dispatch`, mas o GitHub só aceita execução
+manual quando esse arquivo existir na branch padrão do repositório. Enquanto
+ele existir apenas em `codex/tauri-migration`, use push nessa branch para o dry
+run e push do tag para publicar. Não é necessário incluir o workflow em `main`
+para esses dois fluxos. Quando a execução manual ficar disponível, informe um
+tag Tauri existente e mantenha `publish: false` para gerar artifacts sem publicar.
+[Requisito da branch padrão para execução manual no GitHub](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow?tool=cli).
 
 Quando a distribuição estiver validada, crie e envie o tag da versão:
 
@@ -149,7 +154,7 @@ sobrescrita pelo seed.
 ## Comandos de verificação local
 
 ```bash
-node --test scripts/tauri/release.test.mjs scripts/tauri/linux-package.test.mjs scripts/tauri/publish.test.mjs
+node --test scripts/tauri/common.test.mjs scripts/tauri/release.test.mjs scripts/tauri/linux-package.test.mjs scripts/tauri/publish.test.mjs scripts/tauri/windows-prerequisites.test.mjs scripts/tauri/smoke-installed.test.mjs
 node scripts/tauri/release.mjs verify-version tauri-v1.0.0
 ```
 
