@@ -152,6 +152,19 @@ div.explorer-empty { text-align: center; padding-top: 14px; }
 .result-tabs button { display: flex; gap: 6px; align-items: center; padding: 0 12px; border-right: 1px solid var(--border-muted); color: var(--muted); font-size: 10px; white-space: nowrap; }
 .result-tabs button span { color: var(--muted); margin-left: 6px; font-size: 9px; }
 .result-tabs button.active { background: var(--selected); color: var(--text); }
+.command-results { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: 12px 16px; }
+.command-execution + .command-execution { border-top: 1px solid var(--border-muted); margin-top: 12px; padding-top: 12px; }
+.command-execution-heading { display: flex; gap: 12px; justify-content: space-between; color: var(--muted); font-size: 11px; margin-bottom: 8px; }
+.command-execution-heading > :first-child { min-width: 0; overflow-wrap: anywhere; }
+.command-execution-heading > :last-child { flex-shrink: 0; }
+.command-message-list { list-style: none; margin: 0; padding: 0; }
+.command-message { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 10px; padding: 6px 0; line-height: 1.5; overflow-wrap: anywhere; }
+.command-message > svg { flex: none; align-self: center; color: var(--success); }
+.command-message-label { color: var(--muted); font-family: 'Ubuntu Mono', monospace; }
+.command-execution-error, .command-execution-cancelled { display: flex; align-items: flex-start; gap: 8px; padding: 8px 0 2px; line-height: 1.5; overflow-wrap: anywhere; }
+.command-execution-error { color: var(--danger); }
+.command-execution-cancelled { color: var(--muted); }
+.command-execution-error svg, .command-execution-cancelled svg { flex: none; margin-top: 2px; }
 .result-grid-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
 .grid-toolbar { height: 35px; flex-shrink: 0; display: flex; align-items: center; padding: 0 12px; gap: 8px; color: var(--muted); border-bottom: 1px solid var(--border-muted); }
 .result-meta { font-size: 10px; white-space: nowrap; }
@@ -251,7 +264,23 @@ div.explorer-empty { text-align: center; padding-top: 14px; }
 .block-context { display:flex; gap:6px; padding:5px 12px; border-bottom:1px solid var(--border-muted); color:var(--muted); }
 .block-context button { display:flex; align-items:center; gap:5px; white-space:nowrap; }
 .block-context input { width:135px; padding:3px 6px; font-size:11px; }
-.code-block.maximized { flex:1; }
+/* A maximized block follows its dock, including floating and popout panels. */
+.editor-area.has-maximized-block { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:clip; padding:0; }
+.editor-area.has-maximized-block > :not(.code-block) { flex:none; }
+.editor-area.has-maximized-block > .add-block-row { display:none; }
+.code-block.maximized { display:flex; flex-direction:column; flex:1 1 0; min-width:0; min-height:0; margin:0; }
+.code-block.maximized > .block-header { flex:none; }
+.code-block.maximized > .syntax-diagnostics { display:flex; flex-direction:column; flex:0 1 auto; min-height:28px; max-height:40%; overflow:hidden; }
+.code-block.maximized .syntax-summary { flex:none; }
+.code-block.maximized .syntax-details { min-height:0; }
+.code-block.maximized > .block-body:not([hidden]) { display:flex; flex-direction:column; flex:1 1 0; min-width:0; min-height:0; overflow:hidden; }
+.code-block.maximized .block-editor-viewport { flex:1 1 0; min-width:0; min-height:0; overflow:hidden; }
+.code-block.maximized .block-body > .parameter-panel { flex:0 1 auto; min-height:0; max-height:40%; overflow:auto; }
+.editor-area.has-maximized-block > .parameter-panel { max-height:35%; overflow:auto; }
+.editor-area.has-maximized-block .parameter-panel,.code-block.maximized .syntax-details { scrollbar-width:none; }
+.editor-area.has-maximized-block .parameter-panel::-webkit-scrollbar,.code-block.maximized .syntax-details::-webkit-scrollbar { display:none; }
+.code-block.maximized .block-resizer { display:none; }
+.code-block.maximized .markdown-block { flex:1; min-height:0; overflow:auto; }
 .block-header { position:sticky; top:0; z-index:2; background:var(--card); }
 .block-header [draggable=true] { cursor:grab; }
 .parameter-panel { margin:8px 12px; border:1px solid var(--border); border-radius:5px; background:var(--panel); }

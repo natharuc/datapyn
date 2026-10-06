@@ -26,9 +26,31 @@ class SQLiteConnector:
         )
         self.db_type = "sqlite"
         self.connection_params = {"database": database, "host": "", "port": 0, "username": ""}
+        self._last_command_results = []
+        self.command_result_callback = None
+
+    def get_last_command_results(self):
+        return [dict(result) for result in self._last_command_results]
+
+    def _record_command_result(self, statement, statement_index, rows_affected):
+        from .sql_commands import command_label, command_result
+
+        result = command_result({"statement_index": statement_index,
+                                 "command": command_label(statement), "rows_affected": rows_affected})
+        self._last_command_results.append(result)
+        if callable(self.command_result_callback):
+            try:
+                self.command_result_callback(dict(result))
+            except Exception:
+                # Feedback observers cannot change the query transaction.
+                pass
 
     def execute_query(self, query: str, parameters=None):
         import pandas as pd
+        from .sql_commands import command_label
+        from .sql_context import sql_code_mask
+
+        self._last_command_results = []
 
         if isinstance(parameters, list):
             from src.utils.sql_parameter_service import prepare_generic_sql
@@ -45,19 +67,29 @@ class SQLiteConnector:
                 buffer = ""
         if buffer.strip():
             statements.append(buffer)
+        statements = [statement for statement in statements if sql_code_mask(statement, "sqlite", identifiers=True).strip(" ;\r\n\t")]
         results = []
         try:
-            for statement in statements:
+            for statement_index, statement in enumerate(statements, start=1):
                 cursor = self.connection.execute(statement, parameters or {})
-                if cursor.description:
-                    results.append(pd.DataFrame.from_records(cursor.fetchall(), columns=[c[0] for c in cursor.description]))
-                cursor.close()
+                try:
+                    if cursor.description:
+                        results.append(pd.DataFrame.from_records(cursor.fetchall(), columns=[c[0] for c in cursor.description]))
+                    # RETURNING remains tabular and also reports DML completion.
+                    if not cursor.description or command_label(statement) in {"INSERT", "UPDATE", "DELETE", "REPLACE"}:
+                        self._record_command_result(statement, statement_index, cursor.rowcount)
+                finally:
+                    cursor.close()
             self.connection.commit()
         except BaseException:
             self.connection.rollback()
             raise
         if not results:
-            return pd.DataFrame({"Result": ["Command(s) executed successfully."]})
+            frame = pd.DataFrame({"Result": ["Command(s) executed successfully."]})
+            frame.attrs["datapyn_command_result"] = True
+            frame.attrs["datapyn_command_results"] = self.get_last_command_results()
+            return frame
+        results[0].attrs["datapyn_command_results"] = self.get_last_command_results()
         return results[0] if len(results) == 1 else results
 
     def schema(self):

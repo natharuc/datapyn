@@ -2,7 +2,8 @@
 Database connector with support for multiple DBMS
 """
 
-from typing import Optional, Dict, Any, List, Union, Callable
+from typing import Optional, Dict, Any, List, Union, Callable, TypedDict
+from numbers import Integral
 import pandas as pd
 from sqlalchemy import create_engine, text, event
 from sqlalchemy.engine import Engine
@@ -43,6 +44,12 @@ class QueryBusyError(ConnectionError):
 
 class OperationCancelled(Exception):
     """Raised when a running query was cancelled by the user."""
+
+
+class SqlCommandResult(TypedDict):
+    statement_index: int
+    command: str
+    rows_affected: Optional[int]
 
 
 # Fetch rows from DB cursors in bounded chunks.
@@ -529,6 +536,8 @@ class DatabaseConnector:
         self._active_mysql_thread_id: Optional[int] = None
         self._connection_config: Dict[str, Any] = {}
         self._sqlserver_mfa_credential = None
+        self._last_command_results: list[SqlCommandResult] = []
+        self.command_result_callback: Optional[Callable[[SqlCommandResult], None]] = None
 
     def connect(
         self, db_type: str, host: str, port: int, database: str, username: str = "", password: str = "", **kwargs
@@ -996,6 +1005,7 @@ class DatabaseConnector:
             raise QueryBusyError("A query is still running on this connection")
 
         try:
+            self._last_command_results = []
             return self._execute_query_unlocked(query, parameters=parameters)
         except OperationCancelled:
             raise
@@ -1018,7 +1028,142 @@ class DatabaseConnector:
             msg = template.format(**fmt) if fmt else template
         except Exception:
             msg = template
-        return pd.DataFrame({"Result": [msg]})
+        frame = pd.DataFrame({"Result": [msg]})
+        frame.attrs["datapyn_command_result"] = True
+        frame.attrs["datapyn_command_results"] = self.get_last_command_results()
+        return frame
+
+    def get_last_command_results(self) -> list[SqlCommandResult]:
+        """Snapshot of completed commands, including those before an error.
+
+        The driver reported execution; transaction/commit behavior is unchanged.
+        Consumers must not infer that a later rollback committed these changes.
+        """
+        return [dict(item) for item in sorted(self._last_command_results, key=lambda item: item["statement_index"])]
+
+    def _command_label(self, statement: str) -> str:
+        from datapyn_runtime.sql_context import sql_code_mask
+        import re
+
+        code = sql_code_mask(statement, self.db_type, identifiers=True).strip()
+        words = re.finditer(r"[A-Za-z_]+|[()]", code)
+        head = next(words, None)
+        if head is None:
+            return "SQL"
+        label = head.group().upper()
+        if label == "WITH":
+            # A CTE may precede DML or SELECT; ignore commands inside its body.
+            depth = 0
+            for word in words:
+                token = word.group().upper()
+                if token == "(":
+                    depth += 1
+                elif token == ")":
+                    depth = max(0, depth - 1)
+                elif not depth and token in {"SELECT", "INSERT", "UPDATE", "DELETE", "MERGE"}:
+                    return token
+        return label
+
+    def _is_data_command(self, statement: str) -> bool:
+        label = self._command_label(statement)
+        if label == "SELECT":
+            from datapyn_runtime.sql_context import sql_code_mask
+            import re
+
+            depth = 0
+            code = sql_code_mask(statement, self.db_type, identifiers=True)
+            for word in re.finditer(r"[A-Za-z_]+|[()]", code):
+                token = word.group().upper()
+                if token == "(":
+                    depth += 1
+                elif token == ")":
+                    depth = max(0, depth - 1)
+                elif not depth and token == "INTO":
+                    # SELECT INTO creates/populates a table without returning
+                    # rows. Its affected count belongs in command feedback.
+                    return False
+                elif not depth and token == "SELECT" and self.db_type == "sqlserver":
+                    if re.match(r"\s+(?:TOP\s*(?:\([^)]*\)|\d+)\s*)?@\w+\s*=", code[word.end():], re.IGNORECASE):
+                        # SELECT @variable = expression updates batch state;
+                        # it does not return a tabular SELECT result.
+                        return False
+        return label in {"SELECT", "SHOW", "DESC", "DESCRIBE", "EXPLAIN", "VALUES", "TABLE"}
+
+    def _record_command_result(self, statement: str, statement_index: int, rows_affected=None, *, command: Optional[str] = None) -> None:
+        count = int(rows_affected) if isinstance(rows_affected, Integral) and not isinstance(rows_affected, bool) and rows_affected >= 0 else None
+        result: SqlCommandResult = {
+            "statement_index": statement_index,
+            "command": command or self._command_label(statement),
+            "rows_affected": count,
+        }
+        self._last_command_results.append(result)
+        callback = self.command_result_callback
+        if callable(callback):
+            try:
+                callback(dict(result))
+            except Exception as exc:
+                logger.debug("Could not report SQL command completion: %s", type(exc).__name__)
+
+    def _with_command_results(self, frames: list[pd.DataFrame], success_key="success_commands", *, query: Optional[str] = None):
+        if not frames:
+            if not self._last_command_results and query:
+                from datapyn_runtime.sql_context import sql_statements
+
+                statements = sql_statements(query, self.db_type)
+                if statements:
+                    # Successful execution may produce neither a result set
+                    # nor per-statement counts (e.g. SELECT assignments). Show
+                    # one confirmed execution, never claim untaken branches.
+                    self._record_command_result(query, 1, command=self._command_label(statements[0]) if len(statements) == 1 else "SQL")
+            return self._success_message_df(success_key)
+        # Carry execution metadata once, without introducing a synthetic table
+        # into mixed scripts or confusing real SELECT ... AS Result columns.
+        carrier = next((frame for frame in frames if frame.attrs.get("datapyn_command_result") is not True), frames[0])
+        carrier.attrs["datapyn_command_results"] = self.get_last_command_results()
+        return frames[0] if len(frames) == 1 else frames
+
+    @staticmethod
+    def _cursor_has_result_set(cursor) -> bool:
+        return bool(cursor.description) and len(cursor.description) > 0
+
+    def _mssql_feedback_statements(self, batch: str) -> tuple[list[str], bool]:
+        """Read metadata boundaries without changing the server's batch.
+
+        Ordinary T-SQL permits omitted semicolons. Newline candidates are used
+        only when every fragment is accepted as an independent SQL expression;
+        INSERT SELECT, UNION and multiline clauses remain one unit. Control
+        flow uses observed driver tokens because a branch may never execute.
+        """
+        from datapyn_runtime.sql_context import sql_code_mask, sql_statements
+        import re
+
+        masked = sql_code_mask(batch, "sqlserver", identifiers=True)
+        if re.match(r"\s*(?:CREATE\s+(?:OR\s+ALTER\s+)?|ALTER\s+)(?:PROCEDURE|PROC|FUNCTION|TRIGGER)\b", masked, re.IGNORECASE):
+            return [batch], False
+        control_flow = bool(re.search(r"(?:^|[;\n])\s*(?:IF\b|WHILE\b|ELSE\b|BEGIN\b(?!\s+(?:TRAN|TRANSACTION)\b)|END\b)", masked, re.IGNORECASE))
+        if control_flow:
+            return [batch], True
+        if self._command_label(batch) in {"EXEC", "EXECUTE"}:
+            return [batch], True
+
+        statements = []
+        for statement in sql_statements(batch, "sqlserver"):
+            code = sql_code_mask(statement, "sqlserver", identifiers=True)
+            starts = list(re.finditer(r"(?im)^[ \t]*(?:DELETE|UPDATE|INSERT|SELECT|WITH|MERGE|CREATE|ALTER|DROP|TRUNCATE|USE|SET|DECLARE|EXEC|EXECUTE)\b", code))
+            fragments = [statement[(match.start() if index else 0):(starts[index + 1].start() if index + 1 < len(starts) else len(statement))].strip() for index, match in enumerate(starts)]
+            if len(fragments) > 1:
+                from sqlglot import parse_one, exp
+                from sqlglot.errors import ParseError
+
+                try:
+                    parsed = [parse_one(fragment, read="tsql") for fragment in fragments]
+                    if all(node is not None and not isinstance(node, exp.Command) for node in parsed):
+                        statements.extend(fragments)
+                        continue
+                except ParseError:
+                    pass
+            statements.append(statement)
+        return statements, False
 
     _FALLBACK_MESSAGES = {
         "success_commands": "Command(s) executed successfully.",
@@ -1543,7 +1688,11 @@ class DatabaseConnector:
             logger.info(f"Detected USE command {new_db}")
             if self.db_type == "sqlserver" and not self._sqlserver_supports_use():
                 self.change_database(new_db)
-                return pd.DataFrame({"Result": [f"Database changed to: {new_db}"]})
+                self._record_command_result(query, 1)
+                frame = pd.DataFrame({"Result": [f"Database changed to: {new_db}"]})
+                frame.attrs["datapyn_command_result"] = True
+                frame.attrs["datapyn_command_results"] = self.get_last_command_results()
+                return frame
 
         # For SQL Server, split on GO and execute each batch separately
         if self.db_type == "sqlserver":
@@ -1844,20 +1993,39 @@ class DatabaseConnector:
         raw_conn = None
         dataframes = []
         errors = []
+        import re
+
+        statement_offset = 0
+        batch_commands = []
+        opaque_batches = []
+        for batch in batches:
+            statements, opaque = self._mssql_feedback_statements(batch)
+            entries = [(statement_offset + index, statement) for index, statement in enumerate(statements, start=1)]
+            statement_offset += len(statements)
+            batch_commands.append(entries)
+            opaque_batches.append(opaque)
 
         try:
             if not self._sqlserver_supports_use():
                 normalized_batches = []
-                for batch in batches:
+                normalized_commands = []
+                normalized_opaque = []
+                for batch, entries, opaque in zip(batches, batch_commands, opaque_batches):
                     use_match = self._match_use_only_command(batch)
                     if use_match:
                         self.change_database(use_match.group(1))
+                        for statement_index, statement in entries:
+                            self._record_command_result(statement, statement_index)
                         continue
                     normalized_batches.append(batch)
+                    normalized_commands.append(entries)
+                    normalized_opaque.append(opaque)
                 batches = normalized_batches
+                batch_commands = normalized_commands
+                opaque_batches = normalized_opaque
 
             if not batches:
-                return pd.DataFrame({"Result": ["Command(s) executed successfully."]})
+                return self._success_message_df("success_commands")
 
             raw_conn = self.engine.raw_connection()
             self._active_raw_conn = raw_conn
@@ -1904,18 +2072,72 @@ class DatabaseConnector:
                     continue  # Continue to next batch (like SSMS)
 
                 # Collect all result sets from this batch
+                pending_commands = list(batch_commands[batch_idx - 1])
+                opaque_batch = opaque_batches[batch_idx - 1]
+                batch_feedback_start = len(self._last_command_results)
+                extra_commands = 0
+                batch_had_data = False
                 while True:
+                    completed_result = None
                     if self._cancelled:
                         dataframes.clear()
                         raise OperationCancelled()
                     try:
-                        if cursor.description:
+                        has_result = self._cursor_has_result_set(cursor)
+                        rows_affected = getattr(cursor, "rowcount", None)
+                        if has_result:
+                            batch_had_data = True
                             columns = [col[0] for col in cursor.description]
                             rows = fetch_rows_chunked(
                                 cursor, is_cancelled=lambda: self._cancelled
                             )
                             df = records_to_dataframe(rows, columns)
                             dataframes.append(df)
+                            rows_affected = getattr(cursor, "rowcount", None)
+
+                        # SQL Server runs the whole batch once (variables,
+                        # temporary tables and deferred errors retain SSMS
+                        # semantics). Consume driver result tokens in order.
+                        candidate = None
+                        for index, (_statement_index, statement) in enumerate([] if opaque_batch else pending_commands):
+                            label = self._command_label(statement)
+                            returns_data = self._is_data_command(statement) or label in {"EXEC", "EXECUTE"} or bool(re.search(r"\bOUTPUT\b", statement, re.IGNORECASE))
+                            if has_result and returns_data:
+                                candidate = index
+                                break
+                            if not has_result and not self._is_data_command(statement):
+                                # These commands need not emit an ODBC token;
+                                # a DML rowcount must not be assigned to SET/USE.
+                                if isinstance(rows_affected, Integral) and rows_affected >= 0 and label in {"SET", "USE", "DECLARE", "PRINT", "BEGIN", "COMMIT", "ROLLBACK"}:
+                                    continue
+                                candidate = index
+                                break
+                        if candidate is not None:
+                            for statement_index, statement in pending_commands[:candidate]:
+                                if not self._is_data_command(statement):
+                                    self._record_command_result(statement, statement_index)
+                            statement_index, statement = pending_commands[candidate]
+                            # OUTPUT can be followed by its own count token.
+                            # Keep it pending when the initial count is unknown.
+                            output_pending = has_result and self._command_label(statement) in {"INSERT", "UPDATE", "DELETE", "MERGE"} and not (isinstance(rows_affected, Integral) and rows_affected >= 0)
+                            pending_commands = pending_commands[candidate if output_pending else candidate + 1:]
+                            if not output_pending and not self._is_data_command(statement):
+                                if isinstance(rows_affected, Integral) and rows_affected >= 0:
+                                    self._record_command_result(statement, statement_index, rows_affected)
+                                else:
+                                    completed_result = (statement, statement_index)
+                        elif not has_result and isinstance(rows_affected, Integral) and rows_affected >= 0 and batch_commands[batch_idx - 1]:
+                            # Procedures/control flow or omitted separators can
+                            # emit more rowcount tokens than parsed commands.
+                            # Preserve every reported count with a neutral
+                            # label rather than assigning it to IF/DECLARE.
+                            base_index = batch_commands[batch_idx - 1][-1][0]
+                            statement_index = base_index + extra_commands + (0 if opaque_batch else 1)
+                            if not (opaque_batch and extra_commands == 0):
+                                for following_index in range(batch_idx, len(batch_commands)):
+                                    batch_commands[following_index] = [(index + 1, statement) for index, statement in batch_commands[following_index]]
+                            self._record_command_result(batch, statement_index, rows_affected, command="SQL")
+                            extra_commands += 1
                     except OperationCancelled:
                         dataframes.clear()
                         raise
@@ -1940,6 +2162,8 @@ class DatabaseConnector:
 
                         if batch_error:
                             break
+                        if completed_result:
+                            self._record_command_result(*completed_result)
                         if not has_next:
                             break
                     except pyodbc.Error as e:
@@ -1959,6 +2183,17 @@ class DatabaseConnector:
                     logger.warning(batch_error)
                     errors.append(batch_error)
                     # Continue to next batch (like SSMS)
+                else:
+                    # SET NOCOUNT and DDL may suppress individual rowcount
+                    # tokens. Successful commands still receive feedback, with
+                    # an unknown count rather than an invented zero.
+                    if opaque_batch:
+                        if len(self._last_command_results) == batch_feedback_start and not batch_had_data:
+                            self._record_command_result(batch, batch_commands[batch_idx - 1][0][0], command="SQL")
+                    else:
+                        for statement_index, statement in pending_commands:
+                            if not self._is_data_command(statement):
+                                self._record_command_result(statement, statement_index)
 
             # Commit after all batches (even if some failed)
             raw_conn.commit()
@@ -1978,12 +2213,7 @@ class DatabaseConnector:
                 else:
                     raise Exception(error_summary)
 
-            if len(dataframes) > 1:
-                return dataframes
-            if dataframes:
-                return dataframes[0]
-
-            return self._success_message_df("success_commands")
+            return self._with_command_results(dataframes, query="\nGO\n".join(batches))
 
         except OperationCancelled:
             raise
@@ -2024,18 +2254,29 @@ class DatabaseConnector:
             
             from datapyn_runtime.sql_context import sql_statements
             frames = []
-            for statement in sql_statements(query, "databricks"):
+            for statement_index, statement in enumerate(sql_statements(query, "databricks"), start=1):
                 if parameters:
                     prepared = prepare_databricks_sql(statement, parameters)
                     cursor.execute(prepared.query, prepared.params)
                 else:
                     cursor.execute(statement)
                 self._ensure_not_cancelled()
-                if cursor.description:
-                    frames.append(self._cursor_to_dataframe(cursor))
-            if frames:
-                return frames[0] if len(frames) == 1 else frames
-            return self._success_message_df("success_commands")
+                rows_affected = getattr(cursor, "rowcount", None)
+                if self._cursor_has_result_set(cursor):
+                    frame = self._cursor_to_dataframe(cursor)
+                    # Delta DML exposes a one-row metrics result rather than a
+                    # DBAPI rowcount. Only DML-generated metrics are messages;
+                    # SELECT num_affected_rows remains ordinary user data.
+                    metrics = {"num_affected_rows", "num_updated_rows", "num_deleted_rows", "num_inserted_rows"}
+                    if (self._command_label(statement) in {"INSERT", "UPDATE", "DELETE", "MERGE"}
+                            and len(frame) == 1 and "num_affected_rows" in frame.columns
+                            and set(frame.columns).issubset(metrics)):
+                        rows_affected = frame["num_affected_rows"].iloc[0]
+                        frame.attrs["datapyn_command_result"] = True
+                    frames.append(frame)
+                if not self._is_data_command(statement) or not self._cursor_has_result_set(cursor):
+                    self._record_command_result(statement, statement_index, rows_affected)
+            return self._with_command_results(frames, query=query)
 
         except OperationCancelled:
             raise
@@ -2118,12 +2359,14 @@ class DatabaseConnector:
         )
         return any(re.match(pattern, head) for pattern in patterns)
 
-    def _execute_postgresql_autocommit_statement(self, statement: str, params: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
+    def _execute_postgresql_autocommit_statement(self, statement: str, params: Optional[Dict[str, Any]] = None, *, statement_index: int = 1) -> pd.DataFrame:
         """Execute PostgreSQL DDL that must run outside a transaction block."""
         with self.engine.connect() as conn:
             autocommit_conn = conn.execution_options(isolation_level="AUTOCOMMIT")
             result = autocommit_conn.execute(text(statement), params or {})
             rows_affected = getattr(result, "rowcount", -1)
+
+        self._record_command_result(statement, statement_index, rows_affected)
 
         if isinstance(rows_affected, int) and rows_affected >= 0:
             return self._success_message_df("success_command_rows", rows=rows_affected)
@@ -2298,20 +2541,26 @@ class DatabaseConnector:
             cursor = None
             try:
                 raw_conn, cursor = self._begin_cancellable_raw_query()
-                if self._is_select_query(cmd):
-                    self._execute_raw_statement(cursor, executable_sql, executable_params)
-                    self._ensure_not_cancelled()
-                    df = self._cursor_to_dataframe(cursor)
-                    logger.info(f"Query executed successfully. Rows returned: {len(df)}")
-                    return df
-
                 self._execute_raw_statement(cursor, executable_sql, executable_params)
                 self._ensure_not_cancelled()
+                is_data_command = self._is_data_command(cmd)
+                if self._cursor_has_result_set(cursor):
+                    df = self._cursor_to_dataframe(cursor)
+                    if not is_data_command:
+                        self._record_command_result(cmd, 1, getattr(cursor, "rowcount", None))
+                        try:
+                            raw_conn.commit()
+                        except Exception:
+                            pass
+                    logger.info(f"Query executed successfully. Rows returned: {len(df)}")
+                    return self._with_command_results([df])
+
+                rows_affected = getattr(cursor, "rowcount", None)
+                self._record_command_result(cmd, 1, rows_affected)
                 try:
                     raw_conn.commit()
                 except Exception:
                     pass
-                rows_affected = cursor.rowcount if hasattr(cursor, "rowcount") else -1
                 if isinstance(rows_affected, int) and rows_affected >= 0:
                     return self._success_message_df("success_command_rows", rows=rows_affected)
                 return self._success_message_df("success_command")
@@ -2323,7 +2572,7 @@ class DatabaseConnector:
         cursor = None
         try:
             raw_conn, cursor = self._begin_cancellable_raw_query()
-            for cmd in commands:
+            for statement_index, cmd in enumerate(commands, start=1):
                 self._ensure_not_cancelled()
 
                 prepared = prepare_generic_sql(cmd, parameters) if parameters else None
@@ -2331,17 +2580,18 @@ class DatabaseConnector:
                 executable_params = prepared.params if prepared else {}
 
                 if self._requires_postgresql_autocommit(cmd):
-                    self._execute_postgresql_autocommit_statement(executable_sql, executable_params)
+                    self._execute_postgresql_autocommit_statement(executable_sql, executable_params, statement_index=statement_index)
                     continue
 
-                if self._is_select_query(cmd):
-                    self._execute_raw_statement(cursor, executable_sql, executable_params)
-                    self._ensure_not_cancelled()
+                self._execute_raw_statement(cursor, executable_sql, executable_params)
+                self._ensure_not_cancelled()
+                is_data_command = self._is_data_command(cmd)
+                if self._cursor_has_result_set(cursor):
                     df = self._cursor_to_dataframe(cursor)
                     logger.info(f"SELECT executed: {len(df)} rows returned")
                     dataframes.append(df)
-                else:
-                    self._execute_raw_statement(cursor, executable_sql, executable_params)
+                if not is_data_command or not self._cursor_has_result_set(cursor):
+                    self._record_command_result(cmd, statement_index, getattr(cursor, "rowcount", None))
 
             try:
                 raw_conn.commit()
@@ -2350,14 +2600,7 @@ class DatabaseConnector:
         finally:
             self._end_cancellable_raw_query(raw_conn, cursor)
 
-        if len(dataframes) > 1:
-            logger.info(f"Returning list with {len(dataframes)} DataFrames")
-            return dataframes
-        if dataframes:
-            logger.info(f"Returning single DataFrame with {len(dataframes[0])} rows")
-            return dataframes[0]
-        logger.info("Commands executed successfully.")
-        return self._success_message_df("success_commands_plural")
+        return self._with_command_results(dataframes, "success_commands_plural", query=query)
 
     def execute_statement(self, statement: str) -> int:
         """

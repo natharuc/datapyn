@@ -20,6 +20,7 @@ from .process_group import initialize_kernel_group, exit_kernel_and_children
 from .language import namespace_snapshot
 from .desktop_services import enable_user_packages
 from .rich_outputs import RichOutputs
+from .sql_commands import command_result, command_results as normalized_commands, frame_command_results, is_command_frame
 
 MAX_OUTPUT_BYTES = 256 * 1024
 from .result_store import ResultStore, MAX_PAGE_ROWS, MAX_RESULT_HANDLES
@@ -292,6 +293,7 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                 old_stdout, old_stderr = sys.stdout, sys.stderr
                 sys.stdout, sys.stderr = CapturedStream(capture, "stdout"), CapturedStream(capture, "stderr")
                 results, rich_outputs, error, download_result = [], [], None, None
+                command_results = []
                 execution_connection = None
                 previous_context = None
                 previous_search_path = None
@@ -330,9 +332,28 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                                 options=download["options"], on_progress=progress,
                             )
                         else:
-                            value = connector.execute_query(params["code"], parameters=parameters or None)
+                            def command_completed(value):
+                                result = command_result(value)
+                                if result is not None:
+                                    command_results.append(result)
+                                    send({"command_result": result, "job_id": job_id})
+
+                            previous_callback = getattr(connector, "command_result_callback", None)
+                            connector.command_result_callback = command_completed
+                            try:
+                                value = connector.execute_query(params["code"], parameters=parameters or None)
+                            finally:
+                                # Read before metadata probes can execute another SQL
+                                # statement and replace the connector's snapshot.
+                                getter = getattr(connector, "get_last_command_results", None)
+                                if callable(getter):
+                                    command_results = normalized_commands(getter())
+                                connector.command_result_callback = previous_callback
                             values = value if isinstance(value, list) else [value]
-                            for index, frame in enumerate(values):
+                            metadata = frame_command_results(values)
+                            if metadata is not None:
+                                command_results = metadata
+                            for index, frame in enumerate(frame for frame in values if not is_command_frame(frame)):
                                 name = params.get("variable_name") or "df"
                                 if index:
                                     name = f"{name}{index}"
@@ -376,6 +397,7 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                     "status": "failed" if error else "succeeded",
                     "duration_ms": round((time.perf_counter() - started) * 1000, 3),
                     "results": results,
+                    "command_results": command_results,
                     "variables": describe_variables(namespace),
                 }
                 if params.get("block_id"):

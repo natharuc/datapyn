@@ -22,7 +22,7 @@ export interface DataActionsProps {
   defaultOpenFolder?:boolean;onOpenFolderChange?:(openFolder:boolean)=>void;
   availableConnections?: ExportConnection[]; currentConnectionId?: string; currentDatabase?: string; currentSchema?: string;
   onInsertSql?: (code: string) => void;
-  hideImport?: boolean; hideChart?: boolean; onTableExported?: () => void;
+  hideImport?: boolean; hideChart?: boolean; hideResultActions?: boolean; onTableExported?: () => void;
 }
 export function DataModal({ title, children, onClose }: {title: string; children: React.ReactNode; onClose: () => void}) {
   useLocale();
@@ -51,7 +51,7 @@ export function DataModal({ title, children, onClose }: {title: string; children
   </div>, host.owner.body);
 }
 export function DataActions({sessionId, result, connectionType, disabled, view, onImported, onChart, onMessage, initialExportSettings, onExportSettingsChange,
-  defaultOpenFolder=true, onOpenFolderChange, availableConnections=[], currentConnectionId, currentDatabase, currentSchema, onInsertSql, hideImport=false, hideChart=false, onTableExported}: DataActionsProps) {
+  defaultOpenFolder=true, onOpenFolderChange, availableConnections=[], currentConnectionId, currentDatabase, currentSchema, onInsertSql, hideImport=false, hideChart=false, hideResultActions=false, onTableExported}: DataActionsProps) {
   useLocale();
   const formId = useId();
   const [dialog, setDialog] = useState<"import" | "export" | "table" | "sql" | "summary">();
@@ -180,11 +180,11 @@ export function DataActions({sessionId, result, connectionType, disabled, view, 
   const submit = (operationId: string) => dialog === "import" ? importFile() : dialog === "table" ? exportTable(operationId) : dialog === "sql" ? previewSql(operationId) : dialog === "export" ? destination === "clipboard" ? exportClipboard(operationId) : exportFile(operationId) : runtime.request<ResultSummary>("result.summary",source()).then(setSummary);
   return <div className="data-actions">
     {!hideImport&&<button disabled={disabled || busy} onClick={() => {begin("import");setPath("");}}><FileUp size={13}/>{t("Importar dados")}</button>}
-    <button disabled={disabled || busy || !result} onClick={() => begin("export")}><Download size={13}/>{t("Exportar")}</button>
+    {!hideResultActions && <><button disabled={disabled || busy || !result} onClick={() => begin("export")}><Download size={13}/>{t("Exportar")}</button>
     <button disabled={disabled || busy || !result || (!connectionType && !availableConnections.length)} onClick={() => begin("table")}><Database size={13}/>{t("Para tabela")}</button>
     <button disabled={disabled || busy || !result} onClick={() => begin("sql")}><Code2 size={13}/>{t("Gerar SQL")}</button>
     <button disabled={disabled || busy || !result} onClick={() => begin("summary")}><Sigma size={13}/>{t("Resumo")}</button>
-    {!hideChart&&<button disabled={disabled || busy || !result} onClick={onChart}><BarChart3 size={13}/>{t("Gráfico")}</button>}
+    {!hideChart&&<button disabled={disabled || busy || !result} onClick={onChart}><BarChart3 size={13}/>{t("Gráfico")}</button>}</>}
     {dialog && <DataModal title={t(dialog === "import" ? "Importar arquivo de dados" : dialog === "table" ? "Exportar para tabela" : dialog === "sql" ? "Gerar script SQL" : dialog === "summary" ? "Resumo dos dados" : "Exportar resultado")} onClose={close}>
       <form id={formId} className="data-form" onSubmit={event => {event.preventDefault();if(canSubmit)void action(submit);}}>
         <fieldset disabled={busy} className="data-fieldset">

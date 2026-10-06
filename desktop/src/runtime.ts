@@ -6,6 +6,7 @@ export type Language = "sql" | "python";
 export type Primitive = null | string | number | boolean;
 export interface Column { name: string; dtype: string }
 export interface ResultRef { result_id: string; variable_name: string; columns: Column[]; row_count: number }
+export interface SqlCommandResult { statement_index: number; command: string; rows_affected: number | null }
 export interface Variable { name: string; type: string; preview: string }
 export interface LanguageContextUpdate {
   session_id: string; block_id?: string; connection_id?: string; database?: string; schema?: string; version: number;
@@ -40,6 +41,7 @@ export interface ExecutionFinished {
   scope_inherited?: boolean;
   duration_ms: number; error?: string; results: ResultRef[]; variables: Variable[];
   rich_outputs?: RichOutput[];
+  command_results?: SqlCommandResult[];
   context_change?: ExecutionContextChange;
   notification?: NotificationResult;
   notification_error?: string;

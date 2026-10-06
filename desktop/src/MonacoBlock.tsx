@@ -119,7 +119,7 @@ for (const language of ["sql", "python"]) monaco.languages.registerDocumentForma
   },
 });
 
-interface Props { id: string; code: string; language: Language; height: number; onChange: (code: string) => void; onFocus: () => void; preferences?: EditorPreferences; onCursor?: (line: number, column: number) => void;onFontSizeChange?:(size:number)=>void;onReady?:(id:string)=>void }
+interface Props { id: string; code: string; language: Language; height: number|"100%"; onChange: (code: string) => void; onFocus: () => void; preferences?: EditorPreferences; onCursor?: (line: number, column: number) => void;onFontSizeChange?:(size:number)=>void;onReady?:(id:string)=>void }
 
 /** Editor lifetime and model lifetime differ: switching tabs preserves undo and cursor. */
 export const MonacoBlock = memo(function MonacoBlock({ id, code, language, height, onChange, onFocus, preferences, onCursor,onFontSizeChange,onReady }: Props) {

@@ -22,6 +22,7 @@ from .configurations import ConfigurationTransfer
 from .desktop_services import DesktopServices
 from .pynia import PyniaService
 from . import profiles
+from .sql_commands import command_result, command_results
 
 MAX_SESSIONS = 16
 MAX_QUEUED_JOBS = 64
@@ -41,6 +42,7 @@ class Job:
     request_id: int | None = None
     job_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     started_at: float = 0.0
+    command_results: list[dict] = field(default_factory=list)
 
 
 class SessionRuntime:
@@ -183,6 +185,11 @@ class SessionRuntime:
         try:
             while True:
                 message = connection.recv()
+                if "command_result" in message:
+                    # Record immediately on the reader, even while cancellation
+                    # takes precedence over queued output/completion events.
+                    self._receive_command_result(message)
+                    continue
                 while not self._closed and connection is self._events:
                     try:
                         incoming.put(message, timeout=0.1)
@@ -199,6 +206,15 @@ class SessionRuntime:
                 self._reader_error = f"Kernel response could not be decoded ({type(exc).__name__})"
         finally:
             self._wake.set()
+
+    def _receive_command_result(self, message):
+        with self._lock:
+            job = self._active
+            if not job or job.method != "execution.run" or message.get("job_id") != job.job_id:
+                return
+            result = command_result(message.get("command_result"))
+            if result is not None:
+                job.command_results.append(result)
 
     def _stop_process(self):
         process = self._process
@@ -242,6 +258,7 @@ class SessionRuntime:
                 "duration_ms": round((time.monotonic() - job.started_at) * 1000, 3) if job.started_at else 0,
                 "error": message,
                 "results": [],
+                "command_results": command_results(job.command_results),
                 "variables": [],
             }
             from .notifications import capture_completion
@@ -251,6 +268,7 @@ class SessionRuntime:
 
     def _emit_finished(self, payload, prepared=None):
         # The local completion is delivered before scheduling any external IO.
+        payload.setdefault("command_results", [])
         self.emit({"event": "execution.finished", "payload": payload})
         if prepared is not None and self.deliver_notification is not None:
             try:
@@ -267,6 +285,7 @@ class SessionRuntime:
     def _reset_kernel(self, reason: str, active: Job | None, stale: list[Job]):
         self._stop_process()
         with self._lock:
+            self._active = None
             self.language_contexts.clear()
             self.language_variables.clear()
             self._context_requests.clear()
@@ -288,6 +307,9 @@ class SessionRuntime:
         self._launch()
 
     def _receive(self, message: dict):
+        if "command_result" in message:
+            self._receive_command_result(message)
+            return
         with self._lock:
             # A cancellation command takes precedence over an unconsumed result.
             if self._pending_reset is not None:
@@ -376,7 +398,6 @@ class SessionRuntime:
                     reset = self._pending_reset
                     if reset is not None:
                         self._pending_reset = None
-                        self._active = None
                 if reset is not None:
                     self._reset_kernel(*reset)
                     continue
@@ -394,7 +415,6 @@ class SessionRuntime:
                     self._restart_times.append(now)
                     with self._lock:
                         active, stale = self._active, list(self._queue)
-                        self._active = None
                         self._queue.clear()
                     if len(self._restart_times) >= 3 and now - self._restart_times[-3] < 10:
                         raise RuntimeError("Session worker repeatedly failed to start")
@@ -421,9 +441,10 @@ class SessionRuntime:
         finally:
             with self._lock:
                 active, queued = self._active, list(self._queue)
-                self._active = None
                 self._queue.clear()
             self._stop_process()
+            with self._lock:
+                self._active = None
             for job in ([active] if active else []) + queued:
                 self._finish_interrupted(job, "cancelled", "Session closed or unavailable")
 

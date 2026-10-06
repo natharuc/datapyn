@@ -1,4 +1,4 @@
-import { errorText, isRuntimeEvent, type ExecutionContextChange, type ExecutionFinished, type Language, type ResultRef, type RuntimeEvent, type RuntimeInfo, type RuntimeTransport, type Variable,type RichOutput } from "./runtime";
+import { errorText, isRuntimeEvent, type ExecutionContextChange, type ExecutionFinished, type Language, type ResultRef, type RuntimeEvent, type RuntimeInfo, type RuntimeTransport, type Variable,type RichOutput, type SqlCommandResult } from "./runtime";
 import type { NativeDocumentRecord, NativeWorkspaceState } from "./nativeDrafts";
 import { flushEditorViewStates,restoreEditorViewState, selectedCode, subscribeEditorViewStates } from "./editorRegistry";
 import type { QueueCompletion } from "./executionNotifications";
@@ -29,10 +29,18 @@ export interface SessionConnectionState {
   scope?: {database?:string;schema?:string};
 }
 interface ConnectionResponse { connection?: ConnectionConfig; config?: ConnectionConfig; database?: string; schema?: string }
+export interface CommandExecution {
+  executionId: string; blockId?: string; blockName: string;
+  commands: SqlCommandResult[]; status: ExecutionFinished["status"];
+  durationMs: number; error?: string; hasResults: boolean;
+}
+export interface ExecutionOutput { executionId: string; kind: "commands" | "results" | "rich"; resultId?: string }
 export interface SessionDocument {
   id: string; title: string; blocks: Block[]; focusedBlockId: string;
   results: ResultRef[]; variables: Variable[]; images: Array<{ data: string; mime: string }>;
   richOutputs?:RichOutput[];
+  commandExecutions?: CommandExecution[];
+  executionOutput?: ExecutionOutput;
   logs: LogLine[]; busy: boolean; currentExecutionId?: string; currentBlockId?: string; resultRevision: number;
   connection?: ConnectionConfig; filePath?: string; modified: boolean;
   savedConnectionId?: string; database?: string; schema?: string; maximizedBlockId?: string;
@@ -53,7 +61,7 @@ export const newBlock = (language: Language = "sql", code = ""): Block => ({
 export const newSession = (title = "Análise 1"): SessionDocument => {
   const block = newBlock();
   return { id: newId(), title, blocks: [block], focusedBlockId: block.id,
-    results: [], variables: [], images: [], logs: [], busy: false, resultRevision: 0, modified: false, extras: {} };
+    results: [], variables: [], images: [], commandExecutions: [], logs: [], busy: false, resultRevision: 0, modified: false, extras: {} };
 };
 
 function object(value: unknown): Record<string, unknown> {
@@ -185,13 +193,15 @@ export function applyRuntimeEvent(session: SessionDocument, event: RuntimeEvent)
   if (event.event === "namespace.changed") return {...session,variables:event.payload.variables,results:event.payload.results,resultRevision:session.resultRevision+1};
   if (event.event === "session.error") {
     return { ...session, busy: false, currentExecutionId: undefined, currentBlockId: undefined,
-      results: [], variables: [], images: [], richOutputs:[], connection: undefined, connectionState:{...session.connectionState,phase:"error",error:event.payload.error},runtimeError: event.payload.error,
+      results: [], variables: [], images: [], richOutputs:[], commandExecutions:[], executionOutput:undefined, connection: undefined, connectionState:{...session.connectionState,phase:"error",error:event.payload.error},runtimeError: event.payload.error,
       notice: `Runtime desta sessão indisponível: ${event.payload.error}. Salve a análise, feche esta aba e reabra para criar uma nova sessão.`,
       blocks: session.blocks.map((block) => ["running", "queued", "cancelling"].includes(block.status) ? { ...block, results:undefined, status: "failed", error: event.payload.error } : {...block,results:undefined}),
       logs: appendLog(session, "stderr", event.payload.error + "\n") };
   }
   if (event.event === "session.reset") {
+    const lastCommands = session.commandExecutions?.at(-1);
     return { ...session, results: [], variables: [], images: [], richOutputs:[], connection: undefined,connectionState:undefined,
+      executionOutput: lastCommands ? {executionId:lastCommands.executionId,kind:"commands"} : undefined,
       notice: "Runtime da sessão reiniciado. Variáveis e conexão foram descartadas; reconecte antes de executar SQL.",
       blocks: session.blocks.map((block) => ["running", "queued", "cancelling"].includes(block.status) ? { ...block, results:undefined, status: "cancelled" } : {...block,results:undefined}),
       logs: appendLog(session, "system", "Sessão reiniciada: namespace e conexão descartados.\n") };
@@ -207,7 +217,17 @@ export function applyRuntimeEvent(session: SessionDocument, event: RuntimeEvent)
   const payload = event.payload;
   session = applyExecutionContextChange(session, session.currentBlockId, payload.context_change);
   const resultRefs = payload.results ?? [];
+  const runningBlock = session.blocks.find(block => block.id === session.currentBlockId);
+  const commands = payload.command_results ?? [];
+  const commandExecution: CommandExecution | undefined = commands.length ? {
+    executionId: payload.execution_id, blockId: session.currentBlockId, blockName: runningBlock?.block_name ?? "",
+    commands, status: payload.status, durationMs: payload.duration_ms, error: payload.error, hasResults: resultRefs.length > 0,
+  } : undefined;
   return { ...session,
+    commandExecutions: commandExecution ? [...(session.commandExecutions ?? []).filter(item => item.executionId !== payload.execution_id), commandExecution] : session.commandExecutions,
+    executionOutput: payload.rich_outputs?.length ? {executionId:payload.execution_id,kind:"rich"}
+      : resultRefs.length && payload.status !== "failed" ? {executionId:payload.execution_id,kind:"results",resultId:resultRefs.at(-1)?.result_id}
+      : commands.length ? {executionId:payload.execution_id,kind:"commands"} : session.executionOutput,
     blocks: session.blocks.map(block => block.id === session.currentBlockId ? { ...block, status: payload.status, duration_ms: payload.duration_ms, error: payload.error, results: payload.results } : block),
     results: payload.status === "failed" ? [] : resultRefs.length ? resultRefs : session.results,
     resultRevision: session.resultRevision + (payload.status === "succeeded" ? 1 : 0),
@@ -640,7 +660,7 @@ export class WorkspaceController {
     const runnable = queue.filter((block) => block.code.trim() && (!block.cell_type || block.cell_type === "code"));
     if (!runnable.length) { this.message("Escreva código no bloco antes de executar."); return; }
     this.cancelRequests.delete(sessionId);
-    this.patchSession(sessionId, (session) => ({ ...session, busy: true, executionStartedAt: Date.now(), notice: undefined,
+    this.patchSession(sessionId, (session) => ({ ...session, busy: true, executionStartedAt: Date.now(), notice: undefined, commandExecutions: [], executionOutput: undefined,
       blocks: session.blocks.map((block) => runnable.some((item) => item.id === block.id) ? { ...block, status: "queued", error: undefined } : block) }));
     let succeeded = true, failedError: string | undefined, cancelled = false;
     let lastBlock = runnable[0], lastExecutionId = newId();
@@ -731,7 +751,7 @@ export class WorkspaceController {
       this.completions.clear();
       this.setState({ ...this.state, runtimeStatus: "unavailable", runtimeInfo: undefined, message,
         sessions: this.state.sessions.map((session) => ({ ...session, busy: false, currentExecutionId: undefined, currentBlockId: undefined,
-          connection: undefined, connectionState:{...session.connectionState,...(session.connectionState?.phase==="ready"?{scope:{database:session.database,schema:session.schema}}:{}),phase:"error",error:message},variables: [], results: [], images: [], richOutputs:[], periodicSeconds:undefined, runtimeError: undefined, notice: "Runtime encerrado. As variáveis e conexões foram descartadas.",
+          connection: undefined, connectionState:{...session.connectionState,...(session.connectionState?.phase==="ready"?{scope:{database:session.database,schema:session.schema}}:{}),phase:"error",error:message},variables: [], results: [], images: [], richOutputs:[], commandExecutions:[], executionOutput:undefined, periodicSeconds:undefined, runtimeError: undefined, notice: "Runtime encerrado. As variáveis e conexões foram descartadas.",
           blocks: session.blocks.map((block) => block.status === "running" || block.status === "cancelling" ? { ...block, results:undefined, status: "failed", error: message } : block.status === "queued" ? { ...block, results:undefined, status: "cancelled" } : {...block,results:undefined}) })) });
       return;
     }
@@ -762,7 +782,7 @@ export class WorkspaceController {
     this.completions.delete(event.payload.execution_id);
     completion.resolve(event.payload);
   }
-  clearResults(sessionId: string) { this.patchSession(sessionId, (session) => ({ ...session, results: [], images: [],richOutputs:[], logs: [],blocks:session.blocks.map(b=>({...b,results:undefined})) })); }
+  clearResults(sessionId: string) { this.patchSession(sessionId, (session) => ({ ...session, results: [], images: [],richOutputs:[], commandExecutions:[], executionOutput:undefined, logs: [],blocks:session.blocks.map(b=>({...b,results:undefined})) })); }
   closeResult(sessionId:string,resultId:string) {
     this.patchSession(sessionId,s=>({...s,results:s.results.filter(r=>r.result_id !== resultId),blocks:s.blocks.map(b=>({...b,results:b.results?.filter(r=>r.result_id !== resultId)}))}));
     void this.transport.request("result.release",{session_id:sessionId,result_id:resultId}).catch(error=>this.message(errorText(error)));
