@@ -501,5 +501,12 @@
   "Este build não tem uma chave de atualização Tauri configurada.":"This build has no Tauri update key configured.",
   "Este build não tem o canal exclusivo do DataPyn Tauri configurado.":"This build has no isolated DataPyn Tauri update channel configured.",
   "No Linux, abra o DataPyn pelo AppImage ou pelo launcher do pacote para usar atualizações automáticas.":"On Linux, open DataPyn through the AppImage or package launcher to use automatic updates.",
-  "Não foi possível determinar a pasta desta instalação para atualizar o DataPyn Tauri.":"Unable to determine this installation's folder for the DataPyn Tauri update."
+  "Não foi possível determinar a pasta desta instalação para atualizar o DataPyn Tauri.":"Unable to determine this installation's folder for the DataPyn Tauri update.",
+  "Mensagens de execução":"Execution messages",
+  "Mensagens":"Messages",
+  "Bloco {number}":"Block {number}",
+  "Comando executado.":"Command executed.",
+  "{rows} linha afetada.":"{rows} row affected.",
+  "{rows} linhas afetadas.":"{rows} rows affected.",
+  "Erro na execução.":"Execution error."
 }

@@ -1,6 +1,6 @@
 import type { SessionDocument } from "./workspace";
 
-export interface OutputReveal { panel: "results" | "output"; sessionId: string; rich: boolean }
+export interface OutputReveal { panel: "results" | "output"; sessionId: string; rich: boolean; commands?: boolean; resultId?: string }
 
 /** Observe every store transition, including background sessions, without replaying saved output. */
 export class OutputRevealTracker {
@@ -22,6 +22,8 @@ export class OutputRevealTracker {
       if (!before || before === session) continue;
       const execution = session.currentExecutionId;
       let rich = false, results = false, failed = false;
+      const previousCommands = new Set(before.commandExecutions?.map(item => item.executionId));
+      const commands = Boolean(session.commandExecutions?.some(item => !previousCommands.has(item.executionId)));
       if ((session.richOutputs?.length || session.images.length) && (session.richOutputs !== before.richOutputs || session.images !== before.images)) {
         const previousArtifacts = new Set(before.richOutputs?.map(output => output.artifact_id).filter(Boolean)), previousOutputs = new Set(before.richOutputs);
         const previousImages = new Map<string, Set<string>>();
@@ -44,7 +46,8 @@ export class OutputRevealTracker {
       if (execution && results) this.resultsExecution.set(session.id, execution);
       if (execution && rich) this.richExecution.set(session.id, execution);
       if (session.id === activeId) {
-        if (rich || results) reveal = { panel: "results", sessionId: session.id, rich };
+        if (rich || results) reveal = { panel: "results", sessionId: session.id, rich, resultId: results ? session.results.at(-1)?.result_id : undefined };
+        else if (commands) reveal = { panel: "results", sessionId: session.id, rich: false, commands: true };
         else if (failed) reveal = { panel: "output", sessionId: session.id, rich: false };
       }
     }
