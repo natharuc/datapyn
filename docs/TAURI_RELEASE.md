@@ -18,7 +18,7 @@ autenticação seguem os requisitos descritos em [TAURI_RUNTIME_DISTRIBUTION.md]
 
 ## Canal e versões
 
-A versão Tauri atual é `1.0.2`, independentemente da versão PyQt6. Para uma nova
+A versão Tauri atual é `1.0.3`, independentemente da versão PyQt6. Para uma nova
 release, altere em conjunto `desktop/package.json`,
 `desktop/src-tauri/Cargo.toml`, `desktop/src-tauri/tauri.conf.json` e os respectivos
 lockfiles. Valide com `node scripts/tauri/release.mjs verify-version tauri-vX.Y.Z`.
@@ -94,8 +94,8 @@ diferentes, que o publicador recusa para uma versão já publicada.
 Também é possível publicar por push de um tag próprio no commit validado:
 
 ```bash
-git tag tauri-v1.0.2 <commit-validado>
-git push origin tauri-v1.0.2
+git tag tauri-v1.0.3 <commit-validado>
+git push origin tauri-v1.0.3
 ```
 
 Um push de tag Tauri ou execução manual com `publish: true` habilita publicação.
@@ -182,7 +182,7 @@ sobrescrita pelo seed.
 
 ```bash
 node --test scripts/tauri/common.test.mjs scripts/tauri/release.test.mjs scripts/tauri/linux-package.test.mjs scripts/tauri/publish.test.mjs scripts/tauri/windows-prerequisites.test.mjs scripts/tauri/smoke-installed.test.mjs
-node scripts/tauri/release.mjs verify-version tauri-v1.0.2
+node scripts/tauri/release.mjs verify-version tauri-v1.0.3
 ```
 
 O teste que realmente monta e inspeciona um DEB roda no Linux. Os testes do
