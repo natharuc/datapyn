@@ -421,9 +421,12 @@ def test_databricks_temp_export_uses_actual_dialect_types_without_forbidden_prop
         def exec_driver_sql(self, statement):
             statements.append(statement)
             return Rows()
-        def execute(self, statement, parameters):
-            statements.append(str(statement.compile(dialect=DatabricksDialect())))
-            inserted.extend(parameters)
+        def execute(self, statement, parameters=None):
+            compiled = statement.compile(dialect=DatabricksDialect())
+            statements.append(str(compiled))
+            assert parameters is None
+            inserted.extend([{column: compiled.params[f"{column}_m{index}"] for column in ("id", "text")}
+                             for index in range(len(statement._multi_values[0]))])
     class Engine:
         dialect = DatabricksDialect()
         pool = StaticPool(creator=lambda: None)

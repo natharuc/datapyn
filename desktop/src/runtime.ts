@@ -1,6 +1,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { NotificationResult } from "./NotificationsDialog";
+import type { DataImportProgress } from "./dataImport";
 
 export type Language = "sql" | "python";
 export type Primitive = null | string | number | boolean;
@@ -59,6 +60,7 @@ export type RuntimeEvent =
   | { event: "namespace.changed"; payload: {session_id:string;variables:Variable[];results:ResultRef[]} }
   | { event: "language.context_updated"; payload: LanguageContextUpdate }
   | { event: "result.export_progress"; payload: ResultExportProgress }
+  | { event: "data.import_progress"; payload: DataImportProgress }
   | { event: "backend.exited"; payload: { message: string } };
 
 export function isRuntimeEvent(value: unknown): value is RuntimeEvent {
@@ -75,6 +77,10 @@ export function isRuntimeEvent(value: unknown): value is RuntimeEvent {
     && Boolean(payload.variables && typeof payload.variables === "object" && !Array.isArray(payload.variables));
   if (event === "result.export_progress") return typeof payload.operation_id === "string" && Boolean(payload.operation_id)
     && ["preparing", "writing", "completed", "cancelled"].includes(String(payload.phase))
+    && typeof payload.current === "number" && Number.isFinite(payload.current) && payload.current >= 0
+    && typeof payload.total === "number" && Number.isFinite(payload.total) && payload.total >= 0;
+  if (event === "data.import_progress") return typeof payload.operation_id === "string" && Boolean(payload.operation_id)
+    && ["reading", "registering", "completed", "cancelled"].includes(String(payload.phase))
     && typeof payload.current === "number" && Number.isFinite(payload.current) && payload.current >= 0
     && typeof payload.total === "number" && Number.isFinite(payload.total) && payload.total >= 0;
   if (typeof payload.execution_id !== "string") return false;

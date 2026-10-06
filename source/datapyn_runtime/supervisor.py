@@ -62,6 +62,7 @@ class SessionRuntime:
         self._states: OrderedDict[str, str] = OrderedDict()
         self._context = multiprocessing.get_context("spawn")
         self._export_cancel = self._context.Event()
+        self._import_cancel = self._context.Event()
         self._process = None
         self._group = None
         self._commands = None
@@ -89,6 +90,10 @@ class SessionRuntime:
                 pending = ([self._active] if self._active else []) + list(self._queue)
                 if any(job.method in EXPORT_METHODS and job.params.get("operation_id") == operation_id for job in pending):
                     raise RuntimeErrorResponse("duplicate_operation", "operation_id must be unique among pending exports")
+            if method == "data.import" and operation_id:
+                pending = ([self._active] if self._active else []) + list(self._queue)
+                if any(job.method == "data.import" and job.params.get("operation_id") == operation_id for job in pending):
+                    raise RuntimeErrorResponse("duplicate_operation", "operation_id must be unique among pending imports")
             if method == "execution.run":
                 execution_id = params["execution_id"]
                 if execution_id in self._states:
@@ -149,12 +154,31 @@ class SessionRuntime:
             self.emit({"id": queued.request_id, "error": {"code": "cancelled", "message": "Export cancelled before starting"}})
         return {"operation_id": operation_id, "status": "cancelled"}
 
+    def cancel_import(self, operation_id):
+        queued = None
+        with self._lock:
+            if self._active and self._active.method == "data.import" and self._active.params.get("operation_id") == operation_id:
+                self._import_cancel.set()
+                return {"operation_id": operation_id, "status": "cancelling"}
+            for job in self._queue:
+                if job.method == "data.import" and job.params.get("operation_id") == operation_id:
+                    queued = job
+                    self._queue.remove(job)
+                    break
+        if queued is None:
+            return {"operation_id": operation_id, "status": "already_finished"}
+        self.emit({"event": "data.import_progress", "payload": {"session_id": self.session_id,
+                   "operation_id": operation_id, "phase": "cancelled", "current": 0, "total": 0}})
+        if queued.request_id is not None:
+            self.emit({"id": queued.request_id, "error": {"code": "cancelled", "message": "Import cancelled before starting"}})
+        return {"operation_id": operation_id, "status": "cancelled"}
+
     def _launch(self):
         commands_recv, commands_send = self._context.Pipe(duplex=False)
         events_recv, events_send = self._context.Pipe(duplex=False)
         process = self._context.Process(
             target=kernel_main,
-            args=(self.session_id, commands_recv, events_send, self.idle_timeout, self._export_cancel),
+            args=(self.session_id, commands_recv, events_send, self.idle_timeout, self._export_cancel, self._import_cancel),
             name=f"datapyn-kernel-{self.session_id}",
         )
         try:
@@ -426,6 +450,8 @@ class SessionRuntime:
                         job.started_at = time.monotonic()
                         if job.method in EXPORT_METHODS:
                             self._export_cancel.clear()
+                        if job.method == "data.import":
+                            self._import_cancel.clear()
                         self._active = job
                         if job.method == "execution.run":
                             self._states[job.params["execution_id"]] = "running"
@@ -975,6 +1001,8 @@ class Supervisor:
             return None
         if method == "result.export_cancel":
             return self._session(params).cancel_export(self._identifier(params.get("operation_id"), "operation_id"))
+        if method == "data.import_cancel":
+            return self._session(params).cancel_import(self._identifier(params.get("operation_id"), "operation_id"))
         if method in {"data.import", "variable.inspect", "variable.delete", "result.export", "result.export_text", "result.summary", "result.chart", "result.chart_export", "result.artifact_write", "result.export_table", "document.read", "document.script_export", "variable.archive.list", "variable.archive.export", "variable.archive.import"}:
             if params.get("operation_id") is not None:
                 self._identifier(params["operation_id"], "operation_id")

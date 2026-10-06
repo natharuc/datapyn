@@ -151,7 +151,7 @@ def _watch_parent():
         exit_kernel_and_children()
 
 
-def kernel_main(session_id: str, commands, events, idle_timeout=300, export_cancel=None):
+def kernel_main(session_id: str, commands, events, idle_timeout=300, export_cancel=None, import_cancel=None):
     initialize_kernel_group()
     # C extensions, os.write() and child subprocesses must never inherit the
     # NDJSON protocol descriptors. Python print() is streamed separately below.
@@ -530,39 +530,49 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                     operation_id = params.get("operation_id")
                     def export_progress(update):
                         if operation_id:
-                            emit("result.export_progress", {"session_id": session_id, "operation_id": operation_id, **update})
+                            event = "data.import_progress" if method == "data.import" else "result.export_progress"
+                            emit(event, {"session_id": session_id, "operation_id": operation_id, **update})
                     if method == "result.export_table":
                         previous_connector, previous_key, previous_context = connector, pool.active_key, context_key
                         previous_context_params = context_params
                         connection_names = ("db_engine", "db_type", "db_database", "db_host", "db_username", "db_schema")
                         previous_variables = {name: namespace[name] for name in connection_names if name in namespace}
+                        destination_activated = False
                         try:
                             routed = dict(params)
                             routed.pop("schema", None)
                             if params.get("connection_schema"):
                                 routed["schema"] = params["connection_schema"]
                             activate(routed)
+                            destination_activated = True
                             result = data_dispatch(method, params, namespace, store, connector=connector,
                                                    progress=export_progress, cancelled=export_cancel.is_set if export_cancel else None)
-                            for key, explorer in pool.explorers.items():
-                                if key[0] == pool.active_key[0]:
-                                    explorer.cache.clear()
-                                    explorer.column_cache.clear()
-                            publish_context(invalidated=True)
                         finally:
-                            connector, context_key = previous_connector, previous_context
-                            context_params = previous_context_params
-                            pool.active_key = previous_key if previous_key in pool.items else None
-                            for name in connection_names:
-                                namespace.pop(name, None)
-                            namespace.update(previous_variables)
-                            if connector is not None and "db_engine" in previous_variables:
-                                namespace["db_engine"] = connector.engine
+                            try:
+                                if destination_activated:
+                                    # CREATE can persist even when a later INSERT
+                                    # fails/cancels. Refresh the destination before
+                                    # restoring the editor's connection context.
+                                    for key, explorer in pool.explorers.items():
+                                        if key[0] == pool.active_key[0]:
+                                            explorer.cache.clear()
+                                            explorer.column_cache.clear()
+                                    publish_context(invalidated=True)
+                            finally:
+                                connector, context_key = previous_connector, previous_context
+                                context_params = previous_context_params
+                                pool.active_key = previous_key if previous_key in pool.items else None
+                                for name in connection_names:
+                                    namespace.pop(name, None)
+                                namespace.update(previous_variables)
+                                if connector is not None and "db_engine" in previous_variables:
+                                    namespace["db_engine"] = connector.engine
                     elif method == "variable.inspect" and params.get("variable_name") == "__namespace__":
                         result = {"variables": describe_variables(namespace)}
                     else:
+                        cancellation = import_cancel if method == "data.import" else export_cancel
                         result = data_dispatch(method, params, namespace, store, connector=connector,
-                                               progress=export_progress, cancelled=export_cancel.is_set if export_cancel else None)
+                                               progress=export_progress, cancelled=cancellation.is_set if cancellation else None)
                     if method in {"data.import", "variable.delete", "variable.archive.import"}:
                         snapshot_dirty = True
                         store.invalidate_views()
