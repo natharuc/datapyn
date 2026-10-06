@@ -4,6 +4,8 @@ import { flushEditorViewStates,restoreEditorViewState, selectedCode, subscribeEd
 import type { QueueCompletion } from "./executionNotifications";
 import type { NotificationContext } from "./NotificationsDialog";
 import { completionConnectionScope, inheritsSessionScope } from "./sessionCompletion";
+import { dataImportPending, type DataImportOptions, type DataImportState } from "./dataImport";
+import { importedDataCode } from "./importCode";
 
 export type BlockStatus = "idle" | "queued" | "running" | "cancelling" | "succeeded" | "failed" | "cancelled";
 export interface Block {
@@ -47,7 +49,10 @@ export interface SessionDocument {
   periodicSeconds?: number; executionStartedAt?: number; lastDurationMs?: number;
   notice?: string; runtimeError?: string; extras: Record<string, unknown>;
   connectionState?: SessionConnectionState;
+  dataImport?: DataImportState;
 }
+export interface ImportedData { result: ResultRef; variables: Variable[]; options?: DataImportOptions; code?: string }
+export interface ImportDataSettings { options?: DataImportOptions; variableName?: string; overwrite?: boolean; addBlock?: boolean }
 export interface WorkspaceState {
   sessions: SessionDocument[]; activeId: string; runtimeStatus: "connecting" | "ready" | "unavailable";
   runtimeInfo?: RuntimeInfo; message: string;
@@ -146,7 +151,7 @@ export function encodeDocument(session: SessionDocument): Record<string, unknown
 }
 
 export function eventBelongsToSession(session: SessionDocument, event: RuntimeEvent): boolean {
-  if (event.event === "backend.exited" || event.event === "language.context_updated" || event.event === "result.export_progress" || event.event === "notifications.delivery_finished") return false;
+  if (event.event === "backend.exited" || event.event === "language.context_updated" || event.event === "result.export_progress" || event.event === "data.import_progress" || event.event === "notifications.delivery_finished") return false;
   if (event.payload.session_id !== session.id) return false;
   return event.event === "session.reset" || event.event === "session.error" || event.event === "session.ready" || event.event === "namespace.changed" || event.payload.execution_id === session.currentExecutionId;
 }
@@ -187,7 +192,7 @@ export function applyExecutionContextChange(session: SessionDocument, blockId: s
 
 export function applyRuntimeEvent(session: SessionDocument, event: RuntimeEvent): SessionDocument {
   if (!isRuntimeEvent(event)) return session;
-  if (event.event === "backend.exited" || event.event === "language.context_updated" || event.event === "result.export_progress" || event.event === "notifications.delivery_finished") return session;
+  if (event.event === "backend.exited" || event.event === "language.context_updated" || event.event === "result.export_progress" || event.event === "data.import_progress" || event.event === "notifications.delivery_finished") return session;
   if (!eventBelongsToSession(session, event)) return session;
   if (event.event === "session.ready") return session;
   if (event.event === "namespace.changed") return {...session,variables:event.payload.variables,results:event.payload.results,resultRevision:session.resultRevision+1};
@@ -266,6 +271,7 @@ export class WorkspaceController {
   private readonly runtimeSessions = new Set<string>();
   private readonly creatingSessions = new Map<string, Promise<void>>();
   private readonly connectingSessions = new Map<string, {key:string; task?:Promise<ConnectionResponse>}>();
+  private readonly importingSessions = new Map<string, Promise<ImportedData>>();
   private readonly completions = new Map<string, Completion>();
   private initialization?: Promise<void>;
   private runtimeGeneration = 0;
@@ -301,6 +307,7 @@ export class WorkspaceController {
     }),activeIndex:Math.max(0,this.state.sessions.findIndex(session=>session.id===this.state.activeId))};
   }
   restoreSnapshot(snapshot: {documents?:NativeDocumentRecord[];activeIndex?:number}) {
+    if(this.importingSessions.size)throw new Error("Aguarde ou cancele as importações antes de trocar de workspace.");
     if(this.state.sessions.some(s=>s.busy))throw new Error("Aguarde ou cancele as execuções antes de trocar de workspace.");
     for(const timer of this.periodicTimers.values())clearTimeout(timer);this.periodicTimers.clear();
     this.runtimeGeneration++;this.runtimeSessions.clear();this.creatingSessions.clear();this.connectingSessions.clear();this.cancelRequests.clear();
@@ -432,6 +439,46 @@ export class WorkspaceController {
     if (!Array.isArray(tabs)) return [this.importDocument(document,title,path)];
     return tabs.map((tab,index) => this.importDocument(tab, String(object(tab).title ?? `${title} ${index+1}`)));
   }
+  /** One import per kernel; other tabs and the editor stay responsive. */
+  importData(sessionId: string, path: string, settings: ImportDataSettings = {}): Promise<ImportedData> {
+    if(this.editingLocked)return Promise.reject(new Error("Aguarde a troca de workspace antes de importar."));
+    const previous=this.importingSessions.get(sessionId), generation=this.runtimeGeneration;
+    const task=(async()=>{
+      if(previous)await previous.catch(()=>{});
+      const session=this.session(sessionId);
+      if(!session||generation!==this.runtimeGeneration)throw new Error("A aba foi encerrada durante a importação.");
+      if(session.busy)throw new Error("Aguarde a execução antes de importar dados nesta aba.");
+      const operationId=newId(), options={delimiter:null,...settings.options};
+      const current=()=>generation===this.runtimeGeneration&&this.session(sessionId)?.dataImport?.operationId===operationId;
+      this.patchSession(sessionId,s=>({...s,dataImport:{operationId,path,phase:"preparing",current:0,total:0}}));
+      try {
+        await this.ensureSession(sessionId);
+        if(!current())throw new Error("A aba foi encerrada durante a importação.");
+        if(this.session(sessionId)?.dataImport?.phase==="cancelling")throw new Error("Import cancelled");
+        this.patchSession(sessionId,s=>({...s,dataImport:{...s.dataImport!,phase:"reading"}}));
+        const imported=await this.transport.request<ImportedData>("data.import",{session_id:sessionId,operation_id:operationId,path,variable_name:settings.variableName,overwrite:settings.overwrite,options});
+        if(!current())throw new Error("A aba foi encerrada durante a importação.");
+        const code=importedDataCode(path,imported.result.variable_name,imported.options ?? options);
+        this.patchSession(sessionId,s=>({...s,dataImport:undefined,results:[...s.results.filter(result=>result.result_id!==imported.result.result_id),imported.result],variables:imported.variables,resultRevision:s.resultRevision+1,executionOutput:undefined,
+          ...(settings.addBlock===false?{}:{blocks:[...s.blocks,newBlock("python",code)],modified:true})}));
+        return {...imported,code};
+      } catch(failure) {
+        if(current())this.patchSession(sessionId,s=>({...s,dataImport:{...s.dataImport!,phase:/\bimport cancelled\b/i.test(errorText(failure))?"cancelled":"error",error:errorText(failure)}}));
+        throw failure;
+      }
+    })();
+    const tracked=task.finally(()=>{if(this.importingSessions.get(sessionId)===tracked)this.importingSessions.delete(sessionId);});
+    this.importingSessions.set(sessionId,tracked);return tracked;
+  }
+  async cancelImport(sessionId: string) {
+    const state=this.session(sessionId)?.dataImport;
+    if(!dataImportPending(state)||!state||state.phase==="cancelling")return;
+    this.patchSession(sessionId,s=>({...s,dataImport:{...state,phase:"cancelling"}}));
+    if(state.phase==="preparing")return;
+    try {await this.transport.request("data.import_cancel",{session_id:sessionId,operation_id:state.operationId});}
+    catch(failure){this.patchSession(sessionId,s=>s.dataImport?.operationId===state.operationId?{...s,dataImport:{...s.dataImport,phase:state.phase,error:errorText(failure)}}:s);throw failure;}
+  }
+  clearImportStatus(sessionId: string) {this.patchSession(sessionId,s=>dataImportPending(s.dataImport)?s:{...s,dataImport:undefined});}
   duplicateSession(id: string) {
     const original = this.session(id); if (!original) return;
     const copy = this.importDocument(encodeDocument(original),`${original.title} (cópia)`);
@@ -470,6 +517,7 @@ export class WorkspaceController {
     });
   }
   async closeSession(id: string) {
+    if(this.importingSessions.has(id))throw new Error("Aguarde ou cancele a importação antes de fechar esta aba.");
     if (this.session(id)?.busy) throw new Error("Cancele a execução antes de fechar esta aba.");
     this.stopPeriodic(id);
     this.connectingSessions.delete(id);
@@ -502,7 +550,7 @@ export class WorkspaceController {
   private establishConnection(sessionId:string,target:{key:string;name?:string;connectionId?:string},params:Record<string,unknown>,fallback?:ConnectionConfig):Promise<ConnectionResponse> {
     const session=this.session(sessionId);
     if(!session)return Promise.reject(new Error("Aba encerrada."));
-    if(session.busy)return Promise.reject(new Error("Aguarde a execução para trocar a conexão."));
+    if(session.busy||this.importingSessions.has(sessionId))return Promise.reject(new Error("Aguarde a execução ou importação para trocar a conexão."));
     const pending=this.connectingSessions.get(sessionId);
     if(pending)return pending.key===target.key ? pending.task! : Promise.reject(new Error("Uma conexão já está em andamento nesta aba."));
     const generation=this.runtimeGeneration,operation:{key:string;task?:Promise<ConnectionResponse>}={key:target.key};
@@ -544,6 +592,7 @@ export class WorkspaceController {
     }
   }
   async disconnect(sessionId: string) {
+    if(this.importingSessions.has(sessionId))throw new Error("Aguarde a importação antes de desconectar.");
     if (this.session(sessionId)?.busy) throw new Error("Aguarde a execução antes de desconectar.");
     if(this.connectingSessions.has(sessionId))throw new Error("Aguarde a conexão antes de desconectar.");
     await this.ensureSession(sessionId); await this.transport.request("connection.disconnect", { session_id: sessionId });
@@ -568,7 +617,7 @@ export class WorkspaceController {
     const seconds = this.session(sessionId)?.periodicSeconds; if (!seconds) return;
     this.periodicTimers.set(sessionId, setTimeout(() => {
       if (!this.session(sessionId)?.periodicSeconds) return;
-      if (this.session(sessionId)?.busy) { this.schedulePeriodic(sessionId); return; }
+      if (this.session(sessionId)?.busy||this.importingSessions.has(sessionId)) { this.schedulePeriodic(sessionId); return; }
       void this.runAll(sessionId).catch(error => { this.message(errorText(error)); this.stopPeriodic(sessionId); });
     }, seconds * 1000));
   }
@@ -586,6 +635,7 @@ export class WorkspaceController {
     return this.initialization;
   }
   async retryRuntime() {
+    if(this.importingSessions.size)throw new Error("Aguarde a importação antes de reiniciar o runtime.");
     if (this.state.sessions.some((session) => session.busy)) throw new Error("Aguarde a execução antes de reiniciar o runtime.");
     this.initialization = undefined;
     this.setState({ ...this.state, runtimeStatus: "connecting", message: "Reconectando ao runtime Python…" });
@@ -651,6 +701,7 @@ export class WorkspaceController {
     return this.runQueue(sessionId,[{...block,code:selection ?? block.code,export:exportOptions}]);
   }
   private async runQueue(sessionId: string, queue: Block[]) {
+    if(this.importingSessions.has(sessionId))throw new Error("Aguarde a importação antes de executar nesta aba.");
     const workspaceId = this.workspaceIdentity;
     const session = this.session(sessionId);
     if (session?.runtimeError) throw new Error(session.notice ?? session.runtimeError);
@@ -743,6 +794,11 @@ export class WorkspaceController {
   }
   onRuntimeEvent(event: RuntimeEvent) {
     if (!isRuntimeEvent(event)) return;
+    if(event.event==="data.import_progress"){
+      const progress=event.payload;
+      this.patchSession(progress.session_id,s=>s.dataImport?.operationId!==progress.operation_id||s.dataImport.phase==="cancelling"||progress.phase==="completed"?s:{...s,dataImport:{...s.dataImport,phase:progress.phase,current:progress.current,total:progress.total}});
+      return;
+    }
     if (event?.event === "backend.exited") {
       const message = event.payload.message || "O runtime Python foi encerrado.";
       for (const timer of this.periodicTimers.values()) clearTimeout(timer); this.periodicTimers.clear();
@@ -752,6 +808,7 @@ export class WorkspaceController {
       this.setState({ ...this.state, runtimeStatus: "unavailable", runtimeInfo: undefined, message,
         sessions: this.state.sessions.map((session) => ({ ...session, busy: false, currentExecutionId: undefined, currentBlockId: undefined,
           connection: undefined, connectionState:{...session.connectionState,...(session.connectionState?.phase==="ready"?{scope:{database:session.database,schema:session.schema}}:{}),phase:"error",error:message},variables: [], results: [], images: [], richOutputs:[], commandExecutions:[], executionOutput:undefined, periodicSeconds:undefined, runtimeError: undefined, notice: "Runtime encerrado. As variáveis e conexões foram descartadas.",
+          dataImport:session.dataImport?{...session.dataImport,phase:"error",error:message}:undefined,
           blocks: session.blocks.map((block) => block.status === "running" || block.status === "cancelling" ? { ...block, results:undefined, status: "failed", error: message } : block.status === "queued" ? { ...block, results:undefined, status: "cancelled" } : {...block,results:undefined}) })) });
       return;
     }

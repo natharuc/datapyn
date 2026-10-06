@@ -9,6 +9,9 @@ import { runtime, errorText, type ResultRef, type Variable } from "./runtime";
 import type { DataView, ResultSummary } from "./dataTypes";
 import {normalizeExportSettings, type ExportSettings} from "./exportSettings";
 import {importedDataCode} from "./importCode";
+import {readImportProgress, type DataImportState} from "./dataImport";
+import {DataImportStatus} from "./DataImportStatus";
+import type {ImportedData, ImportDataSettings} from "./workspace";
 import {getFocusedDocument} from "./documentWindows";
 import { clipboardFormat, DEFAULT_FORMAT_EXPORT_SETTINGS, EXPORT_FORMATS, exportOptions, exportPath, exportProgressPercent, exportSource, readExportProgress, temporaryTableName,
   type ExportConnection, type ExportDestination, type ExportFormat, type ExportProgress, type ExportTextResult, type FormatExportSettings } from "./dataExport";
@@ -17,6 +20,8 @@ import "./dataActions.css";
 export interface DataActionsProps {
   sessionId: string; result?: ResultRef; connectionType?: string; disabled?: boolean; view?: DataView;
   onImported: (result: ResultRef, variables: Variable[], generatedCode?: string) => void;
+  onImportData?: (path: string, settings: ImportDataSettings) => Promise<ImportedData>;
+  importState?: DataImportState; onCancelImport?: () => Promise<void>;
   onChart: () => void; onMessage: (message: string) => void;
   initialExportSettings?: Partial<ExportSettings>; onExportSettingsChange?: (settings: ExportSettings) => void;
   defaultOpenFolder?:boolean;onOpenFolderChange?:(openFolder:boolean)=>void;
@@ -51,7 +56,7 @@ export function DataModal({ title, children, onClose }: {title: string; children
   </div>, host.owner.body);
 }
 export function DataActions({sessionId, result, connectionType, disabled, view, onImported, onChart, onMessage, initialExportSettings, onExportSettingsChange,
-  defaultOpenFolder=true, onOpenFolderChange, availableConnections=[], currentConnectionId, currentDatabase, currentSchema, onInsertSql, hideImport=false, hideChart=false, hideResultActions=false, onTableExported}: DataActionsProps) {
+  defaultOpenFolder=true, onOpenFolderChange, availableConnections=[], currentConnectionId, currentDatabase, currentSchema, onInsertSql, hideImport=false, hideChart=false, hideResultActions=false, onTableExported, onImportData, importState, onCancelImport}: DataActionsProps) {
   useLocale();
   const formId = useId();
   const [dialog, setDialog] = useState<"import" | "export" | "table" | "sql" | "summary">();
@@ -67,6 +72,7 @@ export function DataActions({sessionId, result, connectionType, disabled, view, 
   const [ifExists, setIfExists] = useState("fail"), [chunksize, setChunksize] = useState(1000);
   const [selected, setSelected] = useState(false), [summary, setSummary] = useState<ResultSummary>(), [sqlPreview, setSqlPreview] = useState<ExportTextResult>();
   const [progress, setProgress] = useState<ExportProgress>(), [cancelling, setCancelling] = useState(false);
+  const [localImport,setLocalImport]=useState<DataImportState>();
   const operation = useRef<{id: string; sessionId: string; cancellable: boolean; cancelled?: boolean}>();
   const owner = useRef({sessionId, resultId: result?.result_id}); owner.current = {sessionId, resultId: result?.result_id};
   const mounted = useRef(true), busyRef = useRef(false);
@@ -86,6 +92,8 @@ export function DataActions({sessionId, result, connectionType, disabled, view, 
     void runtime.subscribe(event => {
       const update = readExportProgress(event), active = operation.current;
       if (update && active?.id === update.operation_id && active.sessionId === update.session_id && mounted.current) {active.cancelled = update.phase === "cancelled"; setProgress(update);}
+      const imported=readImportProgress(event);
+      if(imported&&active?.id===imported.operation_id&&active.sessionId===imported.session_id&&mounted.current){active.cancelled=imported.phase==="cancelled";setLocalImport(prior=>prior?{...prior,phase:prior.phase==="cancelling"?"cancelling":imported.phase==="completed"?"registering":imported.phase,current:imported.current,total:imported.total}:undefined);}
     }).then(unsubscribe => { if (disposed) unsubscribe(); else cleanup = unsubscribe; }).catch(() => {});
     return () => { disposed = true; cleanup?.(); };
   }, []);
@@ -112,9 +120,9 @@ export function DataActions({sessionId, result, connectionType, disabled, view, 
     setBusy(true); setError(""); setCancelling(false); setProgress(undefined);
     try { await task(id); }
     catch (failure) {
-      if (operation.current?.cancelled || /\bexport cancelled\b/i.test(errorText(failure))) {
+      if (operation.current?.cancelled || /\b(?:export|import) cancelled\b/i.test(errorText(failure))) {
         if (mounted.current) {setError("");setProgress(prior=>prior?{...prior,phase:"cancelled"}:undefined);}
-        onMessage(t("Exportação cancelada."));
+        onMessage(t(dialog==="import"?"Importação cancelada.":"Exportação cancelada."));
       } else if (mounted.current && owner.current.sessionId === origin.sessionId && owner.current.resultId === origin.resultId) {setProgress(undefined);setError(errorText(failure));}
       else onMessage(errorText(failure));
     }
@@ -135,10 +143,20 @@ export function DataActions({sessionId, result, connectionType, disabled, view, 
     const chosen = await open({multiple: false, filters: [{name: t("Dados"), extensions: ["csv", "tsv", "txt", "json", "xlsx", "xls", "parquet"]}]});
     if (typeof chosen === "string") { setPath(chosen); setVariableName(chosen.split(/[\\/]/).at(-1)?.replace(/\.[^.]+$/, "").toLowerCase().replace(/[^\p{L}\p{N}_]+/gu, "_") ?? "df"); if (chosen.toLowerCase().endsWith(".tsv")) setDelimiter("\t"); }
   }
-  async function importFile() {
-    const imported = await runtime.request<{result: ResultRef; variables: Variable[]}>("data.import", {session_id: sessionId, path, variable_name: variableName || undefined, overwrite, options: {delimiter: delimiter || null, encoding, decimal}});
-    onImported(imported.result, imported.variables, importedDataCode(path, imported.result.variable_name, {delimiter: delimiter || null, encoding, decimal}));
-    onMessage(t("Arquivo importado: {name} · {rows} linhas", {name: imported.result.variable_name, rows: imported.result.row_count.toLocaleString()})); setDialog(undefined);
+  async function importFile(operationId: string) {
+    const options={delimiter:delimiter||null,encoding,decimal};
+    setLocalImport({operationId,path,phase:"reading",current:0,total:0});
+    try {
+      const imported=onImportData?await onImportData(path,{variableName:variableName||undefined,overwrite,options,addBlock:false}):await runtime.request<ImportedData>("data.import",{session_id:sessionId,operation_id:operationId,path,variable_name:variableName||undefined,overwrite,options});
+      onImported(imported.result,imported.variables,imported.code??importedDataCode(path,imported.result.variable_name,imported.options??options));
+      onMessage(t("Arquivo importado: {name} · {rows} linhas", {name: imported.result.variable_name, rows: imported.result.row_count.toLocaleString()}));setDialog(undefined);
+    }finally{if(mounted.current)setLocalImport(undefined);}
+  }
+  async function cancelImportFile() {
+    const active=operation.current;if(!active||cancelling)return;
+    setCancelling(true);setLocalImport(prior=>prior?{...prior,phase:"cancelling"}:prior);
+    try {if(onCancelImport)await onCancelImport();else await runtime.request("data.import_cancel",{session_id:active.sessionId,operation_id:active.id});}
+    catch(failure){setError(errorText(failure));setCancelling(false);setLocalImport(prior=>prior?{...prior,phase:"reading"}:prior);}
   }
   async function writeClipboard(text: string) {
     const clipboard = getFocusedDocument().defaultView?.navigator.clipboard;
@@ -177,7 +195,7 @@ export function DataActions({sessionId, result, connectionType, disabled, view, 
   const csvForm = dialog === "import" && /\.(csv|tsv|txt)$/i.test(path) || dialog === "export" && ["csv","tsv","txt"].includes(format);
   const canSubmit = !busy && !(dialog === "import" && !path) && !((dialog === "table" || sqlForm) && !table.trim()) && !(dialog === "export" && format === "parquet" && destination === "clipboard");
   const percent = exportProgressPercent(progress);
-  const submit = (operationId: string) => dialog === "import" ? importFile() : dialog === "table" ? exportTable(operationId) : dialog === "sql" ? previewSql(operationId) : dialog === "export" ? destination === "clipboard" ? exportClipboard(operationId) : exportFile(operationId) : runtime.request<ResultSummary>("result.summary",source()).then(setSummary);
+  const submit = (operationId: string) => dialog === "import" ? importFile(operationId) : dialog === "table" ? exportTable(operationId) : dialog === "sql" ? previewSql(operationId) : dialog === "export" ? destination === "clipboard" ? exportClipboard(operationId) : exportFile(operationId) : runtime.request<ResultSummary>("result.summary",source()).then(setSummary);
   return <div className="data-actions">
     {!hideImport&&<button disabled={disabled || busy} onClick={() => {begin("import");setPath("");}}><FileUp size={13}/>{t("Importar dados")}</button>}
     {!hideResultActions && <><button disabled={disabled || busy || !result} onClick={() => begin("export")}><Download size={13}/>{t("Exportar")}</button>
@@ -208,9 +226,10 @@ export function DataActions({sessionId, result, connectionType, disabled, view, 
         {dialog==="sql"&&sqlPreview&&<div className="data-sql-preview"><div><strong>{t("Prévia SQL")}</strong><span>{sqlPreview.row_count.toLocaleString()} {t("linhas")}</span></div><textarea readOnly aria-label={t("Prévia SQL")} value={sqlPreview.text.slice(0,64000)} spellCheck={false}/>{sqlPreview.text.length>64000&&<small>{t("A prévia mostra os primeiros 64 mil caracteres. Copiar, salvar e inserir usam o script completo.")}</small>}<div className="data-preview-actions"><button type="button" disabled={busy} onClick={()=>void action(async()=>{await writeClipboard(sqlPreview.text);onMessage(t("Script SQL copiado."));})}><Clipboard size={13}/>{t("Copiar SQL")}</button><button type="button" disabled={busy} onClick={()=>void action(exportFile)}><Download size={13}/>{t("Salvar SQL…")}</button>{onInsertSql&&<button type="button" disabled={busy} onClick={()=>{onInsertSql(sqlPreview.text);setDialog(undefined);}}><Code2 size={13}/>{t("Inserir em novo bloco")}</button>}</div></div>}
         {dialog === "summary" && summary && <div className="data-summary"><p>{summary.row_count.toLocaleString()} {t("linhas ·")} {summary.column_count} {t("colunas")}{summary.columns_truncated && ` · ${t("primeiras 200 colunas")}`}</p>{summary.columns.map(column=><article key={column.name}><strong>{column.name} <small>{column.dtype}</small></strong><dl>{Object.entries(column).filter(([key])=>["count","null_count","distinct","min","max","sum","mean","median","std"].includes(key)).map(([key,value])=><div key={key}><dt>{t({count:"Linhas",null_count:"Nulos",distinct:"Distintos",min:"Mínimo",max:"Máximo",sum:"Soma",mean:"Média",median:"Mediana",std:"Desvio padrão"}[key]??key)}</dt><dd>{value===null?"—":String(value)}</dd></div>)}</dl>{column.sampled&&<small>{t("Estatísticas de texto calculadas sobre as primeiras")} {column.sample_rows?.toLocaleString()} {t("linhas.")}</small>}{column.top&&<p className="data-top-values">{column.top.map(item=>`${item.value}: ${item.count}`).join(" · ")}</p>}</article>)}</div>}
         {progress&&<div className="data-export-progress" role="status" aria-live="polite"><div><span>{t(cancelling?"Cancelando exportação…":progress.phase==="preparing"?"Preparando exportação…":progress.phase==="cancelled"?"Exportação cancelada.":progress.phase==="completed"?"Exportação concluída.":"Exportando…")}</span><span>{progress.total?`${progress.current.toLocaleString()} / ${progress.total.toLocaleString()}${percent===undefined?"":` · ${percent}%`}`:""}</span></div><progress max={100} value={percent}/></div>}
+        {dialog==="import"&&busy&&<DataImportStatus state={onImportData?importState??localImport:localImport}/>}
         {error&&<p className="data-error" role="alert">{t(error)}</p>}
       </form>
-      <footer>{busy&&operation.current?.cancellable?<button disabled={cancelling} onClick={()=>void cancelExport()}>{t(cancelling?"Cancelando…":"Cancelar exportação")}</button>:<button disabled={busy} onClick={close}>{t("Fechar")}</button>}<button type="submit" form={formId} className="primary-button" disabled={!canSubmit}>{busy&&<LoaderCircle size={14} className="spin"/>}{t(dialog==="import"?"Importar":dialog==="summary"?"Calcular":dialog==="sql"?"Gerar prévia":dialog==="export"&&destination==="clipboard"?"Copiar":"Exportar")}</button></footer>
+      <footer>{busy&&dialog==="import"&&localImport?<button disabled={cancelling} onClick={()=>void cancelImportFile()}>{t(cancelling?"Cancelando…":"Cancelar importação")}</button>:busy&&operation.current?.cancellable?<button disabled={cancelling} onClick={()=>void cancelExport()}>{t(cancelling?"Cancelando…":"Cancelar exportação")}</button>:<button disabled={busy} onClick={close}>{t("Fechar")}</button>}<button type="submit" form={formId} className="primary-button" disabled={!canSubmit}>{busy&&<LoaderCircle size={14} className="spin"/>}{t(dialog==="import"?"Importar":dialog==="summary"?"Calcular":dialog==="sql"?"Gerar prévia":dialog==="export"&&destination==="clipboard"?"Copiar":"Exportar")}</button></footer>
     </DataModal>}
   </div>;
 }

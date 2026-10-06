@@ -21,6 +21,29 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_REQUEST_BYTES: usize = 24 * 1024 * 1024;
 type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>;
 
+async fn wait_for_response(
+    method: &str,
+    deadline: tokio::time::Instant,
+    receiver: oneshot::Receiver<Result<Value, String>>,
+) -> Result<Value, String> {
+    // Large files and database uploads can legitimately take hours. They have
+    // operation IDs, progress and explicit cancellation. A transport write is
+    // still bounded above; disconnecting Python fails every pending receiver.
+    if matches!(method, "data.import" | "result.export_table") {
+        return receiver
+            .await
+            .unwrap_or_else(|_| Err("Python runtime disconnected".into()));
+    }
+    match tokio::time::timeout_at(deadline, receiver).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) => Err("Python runtime disconnected".into()),
+        Err(_) => Err(
+            "Python request timed out; the execution may still be running. Use Cancel to stop it."
+                .into(),
+        ),
+    }
+}
+
 #[derive(Default)]
 pub struct Backend {
     client: Mutex<Option<Arc<RuntimeClient>>>,
@@ -121,6 +144,7 @@ fn allowed_method(method: &str) -> bool {
             | "connection.test_cancel"
             | "connection.idle_timeout"
             | "data.import"
+            | "data.import_cancel"
             | "variable.inspect"
             | "variable.delete"
             | "variable.archive.list"
@@ -355,16 +379,13 @@ impl RuntimeClient {
             }
             return Err(error);
         }
-        match tokio::time::timeout_at(deadline, receiver).await {
-            Ok(Ok(result)) => result,
-            Ok(Err(_)) => Err("Python runtime disconnected".into()),
-            Err(_) => {
-                if let Ok(mut pending) = self.pending.lock() {
-                    pending.remove(&id);
-                }
-                Err("Python request timed out; the execution may still be running. Use Cancel to stop it.".into())
+        let response = wait_for_response(&method, deadline, receiver).await;
+        if response.is_err() {
+            if let Ok(mut pending) = self.pending.lock() {
+                pending.remove(&id);
             }
         }
+        response
     }
 
     fn stop(&self) {
@@ -809,6 +830,58 @@ mod tests {
     }
 
     #[test]
+    fn large_data_operations_can_finish_after_the_normal_request_deadline() {
+        tauri::async_runtime::block_on(async {
+            for method in ["data.import", "result.export_table"] {
+                let (sender, receiver) = oneshot::channel();
+                let deadline = tokio::time::Instant::now() + Duration::from_millis(10);
+                let producer = tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(30)).await;
+                    sender.send(Ok(json!({"rows": 1_000_000}))).unwrap();
+                });
+                assert_eq!(
+                    wait_for_response(method, deadline, receiver).await.unwrap()["rows"],
+                    1_000_000
+                );
+                producer.await.unwrap();
+            }
+            let (sender, receiver) = oneshot::channel();
+            let result = wait_for_response(
+                "system.info",
+                tokio::time::Instant::now() + Duration::from_millis(10),
+                receiver,
+            )
+            .await;
+            assert!(result.unwrap_err().contains("timed out"));
+            drop(sender);
+        });
+    }
+
+    #[test]
+    fn pending_imports_surface_cancellation_and_disconnection_without_a_timeout() {
+        tauri::async_runtime::block_on(async {
+            let (sender, receiver) = oneshot::channel();
+            sender.send(Err("Import cancelled".into())).unwrap();
+            assert_eq!(
+                wait_for_response("data.import", tokio::time::Instant::now(), receiver)
+                    .await
+                    .unwrap_err(),
+                "Import cancelled"
+            );
+            let (sender, receiver) = oneshot::channel();
+            drop(sender);
+            assert!(wait_for_response(
+                "result.export_table",
+                tokio::time::Instant::now(),
+                receiver
+            )
+            .await
+            .unwrap_err()
+            .contains("disconnected"));
+        });
+    }
+
+    #[test]
     fn malformed_and_error_responses_do_not_become_success() {
         assert_eq!(
             decode_response(&json!({"result":{"ok":true}})).unwrap(),
@@ -829,6 +902,7 @@ mod tests {
         assert!(allowed_method("result.export_text"));
         assert!(allowed_method("result.column_values"));
         assert!(allowed_method("result.export_cancel"));
+        assert!(allowed_method("data.import_cancel"));
         assert!(allowed_method("result.export_table"));
         assert!(allowed_method("variable.archive.export"));
         assert!(allowed_method("variable.archive.import"));

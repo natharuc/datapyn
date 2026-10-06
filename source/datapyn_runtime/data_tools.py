@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import codecs
+import csv
+import io
 import itertools
 import json
 import keyword
@@ -10,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
+import time
 
 from .values import describe_variables, preview, scalar
 
@@ -182,32 +186,132 @@ def _rectangular_selection(frame, rectangles, pd):
     return selected
 
 
-def import_data(params, namespace, store):
+class _ImportControl:
+    """Report file bytes, without guessing percentages for native Excel reads."""
+
+    def __init__(self, total, progress, cancelled):
+        self.total = total
+        self.progress = progress
+        self.cancelled = cancelled or (lambda: False)
+        self.current = 0
+        self.last = 0.0
+        self.phase = None
+        self.notify(0, force=True)
+
+    def notify(self, current, phase="reading", force=False):
+        first_bytes = self.current == 0 and current > 0
+        self.current = min(self.total, max(self.current, current))
+        now = time.monotonic()
+        changed = phase != self.phase
+        self.phase = phase
+        if self.progress and (force or changed or first_bytes or now - self.last >= .1):
+            self.progress({"phase": phase, "current": self.current, "total": self.total})
+            self.last = now
+
+    def check(self):
+        if self.cancelled():
+            from .export_control import ExportCancelled
+            self.notify(self.current, "cancelled", force=True)
+            raise ExportCancelled("Import cancelled")
+
+
+class _ImportReader(io.BufferedReader):
+    """Keep pandas' single C-parser pass and dtype inference cancellable."""
+
+    def __init__(self, path, control):
+        super().__init__(open(path, "rb", buffering=0))
+        self.control = control
+
+    def _read(self, size, reader):
+        self.control.check()
+        # C/TextIOWrapper normally requests 256 KiB; bound unusual requests as
+        # well, so cancellation does not wait for a full-file Python read.
+        size = min(size, 256 * 1024) if size >= 0 else 256 * 1024
+        data = reader(size)
+        self.control.notify(self.tell())
+        self.control.check()
+        return data
+
+    def read(self, size=-1):
+        return self._read(size, super().read)
+
+    def read1(self, size=-1):
+        return self._read(size, super().read1)
+
+
+def _csv_delimiter(path, encoding, control):
+    """Detect common delimiters on at most 64 KiB, never use Python per row."""
+    control.check()
+    with open(path, "rb") as source:
+        sample = source.read(64 * 1024)
+    control.check()
+    # The bounded sample may finish inside a multibyte character or CSV row.
+    text = codecs.getincrementaldecoder(encoding)().decode(sample, final=False)
+    if len(sample) < control.total and "\n" in text:
+        text = text.rsplit("\n", 1)[0]
+    for candidate in (text, text.splitlines()[0] if text.splitlines() else ""):
+        try:
+            return csv.Sniffer().sniff(candidate, delimiters=",;\t|").delimiter
+        except csv.Error:
+            pass
+    # A single-column CSV has no separator. Restricting detection prevents
+    # Sniffer from mistaking a letter in its header for a delimiter.
+    return ","
+
+
+def import_data(params, namespace, store, progress=None, cancelled=None):
     path = Path(params["path"]).expanduser().resolve(strict=True)
+    if not path.is_file():
+        raise ValueError("Choose a data file")
     name = _variable_name(params.get("variable_name"), path)
     if name in RUNTIME_VARIABLES:
         raise ValueError("This variable belongs to the runtime")
+    if name in namespace and not params.get("overwrite", False):
+        raise ValueError(f"Variable {name} already exists; choose another name or enable replacement")
     options = params.get("options") or {}
+    if not isinstance(options, dict):
+        raise ValueError("Import options must be an object")
+    control = _ImportControl(path.stat().st_size, progress, cancelled)
+    control.check()
     extension = path.suffix.lower()
+    resolved_options = None
     if extension in {".csv", ".tsv", ".txt"}:
         delimiter = options.get("delimiter", "\t" if extension == ".tsv" else ";")
         if delimiter is not None and (not isinstance(delimiter, str) or len(delimiter) != 1):
             raise ValueError("Delimiter must be one character or null for automatic detection")
-        frame = store.pd.read_csv(path, sep=delimiter, encoding=options.get("encoding", "utf-8-sig"),
-                                  decimal=options.get("decimal", "."), engine="python" if delimiter is None else "c")
+        encoding = options.get("encoding", "utf-8-sig")
+        if delimiter is None:
+            delimiter = _csv_delimiter(path, encoding, control)
+        with _ImportReader(path, control) as source:
+            frame = store.pd.read_csv(source, sep=delimiter, encoding=encoding,
+                                      decimal=options.get("decimal", "."), engine="c")
+        resolved_options = {"delimiter": delimiter, "encoding": encoding, "decimal": options.get("decimal", ".")}
     elif extension in {".xlsx", ".xls"}:
         import fastexcel
-        frame = fastexcel.read_excel(str(path)).load_sheet(options.get("sheet", 0)).to_pandas()
+        book = fastexcel.read_excel(str(path))
+        control.check()
+        sheet = book.load_sheet(options.get("sheet", 0))
+        control.check()
+        frame = sheet.to_pandas()
     elif extension == ".parquet":
         frame = store.pd.read_parquet(path)
     elif extension == ".json":
         frame = store.pd.read_json(path, orient=options.get("orient", "records"))
     else:
         raise ValueError(f"Unsupported data format: {extension}")
-    if name in namespace and not params.get("overwrite", False):
-        raise ValueError(f"Variable {name} already exists; choose another name or enable replacement")
+    control.check()
+    control.notify(control.total, "registering", force=True)
+    control.check()
+    # Registration and namespace publication form the commit boundary. Do not
+    # accept cancellation between them: register can evict an older handle at
+    # the store limit, so rolling back only the new handle would lose results.
+    result = store.register(frame, name)
     namespace[name] = frame
-    return {"variable_name": name, "result": store.register(frame, name), "variables": describe_variables(namespace)}
+    response = {"variable_name": name, "result": result, "variables": describe_variables(namespace)}
+    if resolved_options is not None:
+        response["options"] = resolved_options
+    control.notify(control.total, "completed", force=True)
+    return response
 
 
 def inspect_variable(params, namespace, store):
@@ -521,7 +625,9 @@ def _prepared_python(code, shared):
 
 
 def dispatch(method, params, namespace, store, connector=None, progress=None, cancelled=None):
-    handlers = {"data.import": import_data, "variable.inspect": inspect_variable,
+    if method == "data.import":
+        return import_data(params, namespace, store, progress, cancelled)
+    handlers = {"variable.inspect": inspect_variable,
                 "variable.delete": delete_variable,
                 "result.summary": summarize_result, "result.chart": build_chart}
     if method in handlers:

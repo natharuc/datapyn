@@ -17,11 +17,25 @@ A referência é o comportamento dos exportadores PyQt6, incluindo a escolha do 
 
 CSV mantém os defaults importados do PyQt6, incluindo UTF-8 com BOM, Windows-1252/Latin-1, decimal e separador. XLSX usa escrita sequencial, mantém valores de precisão elevada como texto e impede que dados de texto sejam interpretados como fórmulas. JSON oferece orientação, indentação e registros por linha. Parquet oferece compressão configurável.
 
+## Importação de arquivos
+
+Arrastar CSV/Excel ou usar Importar dados mostra o arquivo e a etapa atual antes da leitura, com progresso por bytes para CSV/TSV/TXT. Excel, Parquet e JSON usam progresso indeterminado enquanto o leitor nativo trabalha; preparar o resultado também é uma etapa indeterminada. Erros aparecem na mesma área. A importação preserva o layout e os blocos maximizados; a preferência de maximizar o primeiro bloco se aplica somente à abertura de documentos/scripts.
+
+A leitura permanece no kernel da análise. CSV automático detecta o separador numa amostra de até 64 KiB e usa o parser C do pandas em uma passagem, mantendo a inferência dos tipos. O código Python gerado recebe o separador detectado. A interface recebe metadados e páginas do resultado, sem transportar o arquivo inteiro pelo WebView.
+
+Importações na mesma aba são serializadas; outras abas continuam disponíveis. Cancelar usa o ID da operação e preserva os dados anteriores, sem reiniciar a sessão. Excel observa o cancelamento entre chamadas nativas, sem interromper uma chamada de leitura/conversão em andamento. Variável e resultado são publicados juntos ao concluir; um cancelamento recebido após essa publicação não desfaz uma importação concluída.
+
 ## Temporárias e contexto de conexão
 
 SQL Server reconhece `#nome` e `##nome`; os demais dialetos usam a opção de tabela temporária. A temporária pertence à conexão física do kernel da análise. A conexão deve permanecer disponível para os próximos blocos que utilizem o mesmo perfil/banco/schema. Desconectar ou reiniciar o kernel encerra essa conexão e suas temporárias locais. Tabelas globais SQL Server seguem o ciclo de vida definido pelo servidor.
 
 No Databricks, tabelas temporárias requerem Databricks SQL compatível ou Runtime 18.1+. A geração de transações também depende das capacidades do destino; conferir as restrições para DDL/temporárias antes de executar um script com transação. Referências oficiais: [temporárias](https://docs.databricks.com/aws/en/tables/temporary-tables), [BEGIN TRANSACTION](https://docs.databricks.com/aws/en/sql/language-manual/sql-ref-syntax-txn-begin).
+
+O envio Databricks usa INSERT parametrizado com várias linhas por requisição, limitado no cliente a 1.000 linhas, 10.000 parâmetros e aproximadamente 4 MiB por lote. Esses limites controlam a memória e o intervalo entre atualizações de progresso; uma linha individual maior é enviada isoladamente. `executemany` do conector Databricks executa uma requisição sequencial por linha e não é usado nesse caminho. A otimização vale para tabelas temporárias e permanentes.
+
+Cancelar solicita o cancelamento da chamada SQL em andamento. Databricks pode manter lotes já concluídos; a mensagem informa essa contagem e a conexão continua retida quando possui temporárias. Dedicated/single-user compute e ambientes sem suporte recebem erro explícito de capacidade. A ação nunca transforma silenciosamente uma temporária em tabela permanente.
+
+Importações e envios para tabela podem ultrapassar dois minutos: o host mantém a espera até a resposta, cancelamento ou desconexão do runtime. O limite de transporte continua protegendo escritas bloqueadas no pipe.
 
 Nomes de objetos são escapados por dialeto. Campos de tabela aceitam nomes qualificados e identificadores entre aspas; aspas permitem um ponto literal no nome. O Object Explorer oferece SELECT limitado, todas as colunas, COUNT, CREATE e DROP protegido + CREATE, além de copiar `tabela.coluna` e inserir WHERE/GROUP BY/ORDER BY.
 

@@ -445,5 +445,14 @@
   "Texto px": "Text px",
   "Título px": "Title px",
   "X combinado": "Unified X",
-  "Área %": "Area %"
+  "Área %": "Area %",
+  "Preparando importação…": "Preparing import…",
+  "Preparando dados…": "Preparing data…",
+  "Cancelando importação…": "Cancelling import…",
+  "Importação cancelada.": "Import cancelled.",
+  "Falha ao importar arquivo": "Unable to import file",
+  "Lendo arquivo…": "Reading file…",
+  "Importando dados…": "Importing data…",
+  "Cancelar importação": "Cancel import",
+  "Finalize as execuções e importações antes de transferir configurações.": "Finish executions and imports before transferring settings."
 }
