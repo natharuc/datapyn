@@ -35,10 +35,14 @@ export function databaseIconType(dbType?: string | null): DatabaseType | undefin
 }
 
 /** Adjacent connection labels make the mark decorative; label standalone use. */
-export function DatabaseIcon({ dbType, size = 16, label, fallbackColor }: { dbType?: string | null; size?: number; label?: string; fallbackColor?: string }) {
+export function DatabaseIcon({ dbType, size = 16, label, color }: { dbType?: string | null; size?: number; label?: string; color?: string }) {
   const type = databaseIconType(dbType), asset = type ? databaseIconAssets[type] : undefined;
-  return <span className="database-icon" data-database={type} style={{ width: size, height: size, color: fallbackColor }} role={label ? "img" : undefined} aria-label={label} aria-hidden={label ? undefined : true}>
-    {asset ? asset.dark === asset.light
+  const configuredColor = color?.trim() || undefined;
+  // Mask the original SVG silhouette so a connection/group color applies to every mark.
+  // Uncolored connections retain the brand's theme-specific assets.
+  return <span className="database-icon" data-database={type} style={{ width: size, height: size, color: configuredColor }} role={label ? "img" : undefined} aria-label={label} aria-hidden={label ? undefined : true}>
+    {asset && configuredColor ? <span className="database-icon-mask" aria-hidden="true" />
+      : asset ? asset.dark === asset.light
       ? <img src={asset.light} alt="" aria-hidden="true" />
       : <><img className="database-icon-dark" src={asset.dark} alt="" aria-hidden="true" /><img className="database-icon-light" src={asset.light} alt="" aria-hidden="true" /></>
       : <Database size={size} aria-hidden="true" />}
