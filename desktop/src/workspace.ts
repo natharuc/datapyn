@@ -250,7 +250,8 @@ export interface WorkspaceStorage { getItem(key: string): string | null; setItem
 const STORAGE_KEY = "datapyn.desktop.documents.v1";
 const STORAGE_INDEX_KEY = "datapyn.desktop.documents.v2";
 const storageDocumentKey=(id:string)=>`${STORAGE_INDEX_KEY}.${id}`;
-export interface WorkspaceControllerOptions {nativePersistence?:boolean}
+export interface WorkspaceControllerOptions {nativePersistence?:boolean;maximizeFirstBlock?:boolean}
+export interface NewSessionOptions {inheritConnection?:boolean;sourceSessionId?:string}
 
 function portableChanged(next:SessionDocument,previous:SessionDocument):boolean {
   if(next===previous)return false;
@@ -271,6 +272,9 @@ export class WorkspaceController {
   private readonly runtimeSessions = new Set<string>();
   private readonly creatingSessions = new Map<string, Promise<void>>();
   private readonly connectingSessions = new Map<string, {key:string; task?:Promise<ConnectionResponse>}>();
+  /** Credentials for manually configured connections never enter persisted documents. */
+  private readonly transientConnections = new Map<string,ConnectionConfig>();
+  private readonly directConnectionTargets = new Set<string>();
   private readonly importingSessions = new Map<string, Promise<ImportedData>>();
   private readonly completions = new Map<string, Completion>();
   private initialization?: Promise<void>;
@@ -280,6 +284,7 @@ export class WorkspaceController {
   private readonly cancelRequests = new Set<string>();
   private readonly periodicTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private sharedDelimiter = "{{name}}";
+  private maximizeFirstBlock = false;
   private readonly nativeRecords=new Map<string,NativeDocumentRecord>();
   private readonly nativeSources=new Map<string,SessionDocument>();
   private readonly editorViews=new Map<string,Record<string,unknown>>();
@@ -294,6 +299,7 @@ export class WorkspaceController {
   isEditingLocked(){return this.editingLocked;}
   private unsubscribeEditorViews?:()=>void;
   setSharedDelimiter(delimiter: string) { this.sharedDelimiter = delimiter; }
+  setNewSessionPreferences(preferences:{maximizeFirstBlock:boolean}) {this.maximizeFirstBlock=preferences.maximizeFirstBlock;}
   onQueueFinished?: (session: SessionDocument, success: boolean, completion: QueueCompletion) => void;
   nativeSnapshot():NativeWorkspaceState {
     flushEditorViewStates();
@@ -310,7 +316,7 @@ export class WorkspaceController {
     if(this.importingSessions.size)throw new Error("Aguarde ou cancele as importações antes de trocar de workspace.");
     if(this.state.sessions.some(s=>s.busy))throw new Error("Aguarde ou cancele as execuções antes de trocar de workspace.");
     for(const timer of this.periodicTimers.values())clearTimeout(timer);this.periodicTimers.clear();
-    this.runtimeGeneration++;this.runtimeSessions.clear();this.creatingSessions.clear();this.connectingSessions.clear();this.cancelRequests.clear();
+    this.runtimeGeneration++;this.runtimeSessions.clear();this.creatingSessions.clear();this.connectingSessions.clear();this.transientConnections.clear();this.directConnectionTargets.clear();this.cancelRequests.clear();
     this.nativeRecords.clear();this.nativeSources.clear();this.editorViews.clear();
     const seenBlocks=new Set<string>(),seenSessions=new Set<string>();
     const sessions=(snapshot.documents ?? []).map(entry=>{
@@ -327,12 +333,13 @@ export class WorkspaceController {
       }
       this.nativeRecords.set(s.id,{...entry,title:s.title,filePath:s.filePath,sessionId:s.id,editorViewState:this.editorViews.get(s.id)});this.nativeSources.set(s.id,s);return s;
     });
-    if(!sessions.length)sessions.push(newSession());
+    if(!sessions.length)sessions.push(this.applyNewSessionLayout(newSession()));
     this.setState({...this.state,sessions,activeId:sessions[snapshot.activeIndex ?? 0]?.id ?? sessions[0].id},true);
   }
 
   constructor(private readonly transport: RuntimeTransport, private readonly storage?: WorkspaceStorage,private readonly options:WorkspaceControllerOptions={}) {
-    const sessions=[newSession()];
+    this.maximizeFirstBlock=options.maximizeFirstBlock===true;
+    const sessions=[this.applyNewSessionLayout(newSession())];
     this.state = { sessions, activeId: sessions[0].id, runtimeStatus: "connecting", message: "Iniciando runtime Python…" };
     this.state.sessions.forEach(session=>{this.dirtyBrowserDocuments.add(session.id);session.blocks.forEach(block=>this.blockOwners.set(block.id,session.id));});
     if(!options.nativePersistence){const snapshot=this.readBrowserSnapshot();if(snapshot?.documents){try{this.restoreSnapshot(snapshot);}catch{/* Preserve the unreadable source without blocking preview startup. */}}}
@@ -362,7 +369,7 @@ export class WorkspaceController {
     const saved=this.readBrowserSnapshot();if(!saved?.documents?.length)return false;
     this.restoreSnapshot({documents:saved.documents,activeIndex:saved.activeIndex});return true;
   }
-  dispose(){this.unsubscribeEditorViews?.();this.unsubscribeEditorViews=undefined;if(this.persistTimer)clearTimeout(this.persistTimer);for(const timer of this.periodicTimers.values())clearTimeout(timer);this.periodicTimers.clear();}
+  dispose(){this.connectingSessions.clear();this.transientConnections.clear();this.directConnectionTargets.clear();this.unsubscribeEditorViews?.();this.unsubscribeEditorViews=undefined;if(this.persistTimer)clearTimeout(this.persistTimer);for(const timer of this.periodicTimers.values())clearTimeout(timer);this.periodicTimers.clear();}
 
   getSnapshot = () => this.state;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
@@ -422,14 +429,51 @@ export class WorkspaceController {
     this.patchSession(sessionId, (session) => ({ ...session, modified: true, blocks: session.blocks.map((block) => block.id === id ? { ...block, ...update } : block) }));
   }
   renameSession(id: string, title: string) { if (title.trim()) this.patchSession(id, (session) => ({ ...session, title: title.trim(), modified: true })); }
-  createSession() {
-    const session = newSession(`Análise ${this.state.sessions.length + 1}`);
+  private applyNewSessionLayout(session:SessionDocument):SessionDocument {
+    if(!this.maximizeFirstBlock)return session;
+    const first=session.blocks[0];
+    return {...session,focusedBlockId:first.id,maximizedBlockId:first.id,blocks:first.collapsed?session.blocks.map((block,index)=>index===0?{...block,collapsed:false}:block):session.blocks};
+  }
+  private inheritConnection(session:SessionDocument,source:SessionDocument,useFocusedBlock=true,preserveDocumentContext=false):SessionDocument {
+    const block=useFocusedBlock?source.blocks.find(item=>item.id===source.focusedBlockId):undefined;
+    const scope=block?completionConnectionScope(source,block):{connectionId:source.savedConnectionId,database:source.database,schema:source.schema};
+    const pending=source.connectionState;
+    const intended=pending && pending.phase!=="ready" && (pending.connectionId || this.directConnectionTargets.has(source.id));
+    const routed=block?.connection_id!==undefined && block.connection_id!==(intended?pending?.connectionId:source.savedConnectionId);
+    const changing=!routed && pending && pending.phase!=="ready"?pending:undefined;
+    const directTarget=changing && this.directConnectionTargets.has(source.id)?this.transientConnections.get(source.id):undefined;
+    const connectionId=directTarget?undefined:changing?.connectionId ?? scope.connectionId;
+    const config=directTarget ?? (!connectionId?this.transientConnections.get(source.id)??source.connection:undefined);
+    if(!connectionId && !config)return session;
+    const inheritedDatabase=directTarget?changing?.scope?.database??directTarget.database:changing?.connectionId?changing.scope?.database:scope.database;
+    const inheritedSchema=directTarget?changing?.scope?.schema??directTarget.schema:changing?.connectionId?changing.scope?.schema:scope.schema;
+    const database=preserveDocumentContext?session.database??inheritedDatabase:inheritedDatabase;
+    const schema=preserveDocumentContext?session.schema??(session.database===undefined || session.database===inheritedDatabase?inheritedSchema:undefined):inheritedSchema;
+    const sameConnection=!directTarget && connectionId===source.savedConnectionId;
+    const name=changing?.name ?? (sameConnection?String(source.extras.connection_name ?? source.connection?.name ?? pending?.name ?? ""):(typeof block?.connection_name==="string"?block.connection_name:undefined));
+    if(config)this.transientConnections.set(session.id,{...config,database:database??config.database,schema:schema??config.schema});
+    return {...session,savedConnectionId:connectionId,database,schema,connectionState:{phase:"preparing",connectionId,name,scope:{database,schema}},
+      extras:{...session.extras,connection_name:name,...(sameConnection?{connection_group:source.extras.connection_group}:{})}};
+  }
+  private prepareNewSessionConnection(session:SessionDocument) {
+    const task=session.savedConnectionId?this.connectSaved(session.id,session.savedConnectionId,String(session.extras.connection_name??""),{database:session.database,schema:session.schema})
+      :this.transientConnections.has(session.id)?this.connect(session.id,this.transientConnections.get(session.id)!):undefined;
+    if(task)void task.catch(()=>{/* The target tab retains its authentication error and retry controls. */});
+  }
+  createSession(options:NewSessionOptions={}) {
+    let session = this.applyNewSessionLayout(newSession(`Análise ${this.state.sessions.length + 1}`));
+    const source=this.session(options.sourceSessionId);
+    if(options.inheritConnection!==false && source)session=this.inheritConnection(session,source);
     this.setState({ ...this.state, sessions: [...this.state.sessions, session], activeId: session.id });
+    this.prepareNewSessionConnection(session);
     return session;
   }
-  importDocument(document: unknown, title: string, path?: string) {
-    const session = decodeDocument(document, title); session.filePath = path;
+  importDocument(document: unknown, title: string, path?: string,options:NewSessionOptions={}) {
+    let session = this.applyNewSessionLayout(decodeDocument(document, title)); session.filePath = path;
+    const source=this.session(options.sourceSessionId);
+    if(options.inheritConnection && source && !session.savedConnectionId && !session.extras.connection_name)session=this.inheritConnection(session,source,true,true);
     this.setState({ ...this.state, sessions: [...this.state.sessions, session], activeId: session.id });
+    if(options.inheritConnection)this.prepareNewSessionConnection(session);
     this.message(`Aberto: ${title}`);
     return session;
   }
@@ -482,7 +526,8 @@ export class WorkspaceController {
   duplicateSession(id: string) {
     const original = this.session(id); if (!original) return;
     const copy = this.importDocument(encodeDocument(original),`${original.title} (cópia)`);
-    this.patchSession(copy.id,s=>({...s,title:`${original.title} (cópia)`,modified:true}));return copy;
+    this.patchSession(copy.id,s=>({...this.inheritConnection(s,original,false),title:`${original.title} (cópia)`,modified:true}));
+    this.prepareNewSessionConnection(this.session(copy.id)!);return this.session(copy.id);
   }
   saved(id: string, path: string, savedDocument: Record<string, unknown>) {
     this.patchSession(id, (session) => ({ ...session, filePath: path, title: path.split(/[\\/]/).at(-1) ?? session.title,
@@ -521,10 +566,12 @@ export class WorkspaceController {
     if (this.session(id)?.busy) throw new Error("Cancele a execução antes de fechar esta aba.");
     this.stopPeriodic(id);
     this.connectingSessions.delete(id);
+    this.transientConnections.delete(id);
+    this.directConnectionTargets.delete(id);
     if (this.runtimeSessions.has(id)) await this.transport.request("session.close", { session_id: id });
     this.runtimeSessions.delete(id);
     let sessions = this.state.sessions.filter((session) => session.id !== id);
-    if (!sessions.length) sessions = [newSession()];
+    if (!sessions.length) sessions = [this.applyNewSessionLayout(newSession())];
     this.setState({ ...this.state, sessions, activeId: this.state.activeId === id ? sessions[0].id : this.state.activeId });
   }
   reorderBlock(sessionId: string, blockId: string, beforeId: string) {
@@ -554,7 +601,10 @@ export class WorkspaceController {
     const pending=this.connectingSessions.get(sessionId);
     if(pending)return pending.key===target.key ? pending.task! : Promise.reject(new Error("Uma conexão já está em andamento nesta aba."));
     const generation=this.runtimeGeneration,operation:{key:string;task?:Promise<ConnectionResponse>}={key:target.key};
-    const scope={...(typeof params.database==="string"?{database:params.database}:{}),...(typeof params.schema==="string"?{schema:params.schema}:{})};
+    if(target.connectionId){this.directConnectionTargets.delete(sessionId);this.transientConnections.delete(sessionId);}
+    else if(fallback){this.directConnectionTargets.add(sessionId);this.transientConnections.set(sessionId,{...fallback});}
+    const scopeParams=target.connectionId?params:{...fallback,...params};
+    const scope={...(typeof scopeParams.database==="string"?{database:scopeParams.database}:{}),...(typeof scopeParams.schema==="string"?{schema:scopeParams.schema}:{})};
     const targetState={name:target.name,connectionId:target.connectionId,...(Object.keys(scope).length?{scope}:{})};
     this.connectingSessions.set(sessionId,operation);
     const current=()=>generation===this.runtimeGeneration&&this.connectingSessions.get(sessionId)===operation&&Boolean(this.session(sessionId));
@@ -568,9 +618,11 @@ export class WorkspaceController {
         if(!current())throw new Error("A conexão foi interrompida.");
         const config=response.config??response.connection??fallback;
         const {password:_password,...safeConfig}=config??{};
+        if(target.connectionId)this.transientConnections.delete(sessionId);
+        else if(config)this.transientConnections.set(sessionId,{...fallback??config});
         this.patchSession(sessionId,s=>({...s,savedConnectionId:target.connectionId,connection:config?{...safeConfig,database:response.database??config.database,schema:response.schema??config.schema} as ConnectionConfig:undefined,
           database:response.database??config?.database,schema:response.schema??config?.schema,notice:undefined,
-          connectionState:{...targetState,phase:"ready",name:target.name??config?.name},
+          connectionState:{...targetState,phase:"ready",name:target.name??config?.name,...(!target.connectionId?{scope:{database:response.database??config?.database,schema:response.schema??config?.schema}}:{})},
           extras:target.connectionId?s.extras:{...s.extras,connection_name:undefined,connection_group:undefined}}));
         return response;
       }catch(error){
@@ -589,6 +641,9 @@ export class WorkspaceController {
       const {database,schema}=session;
       // Apply restored focus before authentication, not just in the frontend.
       await this.connectSaved(sessionId,session.savedConnectionId,String(session.extras.connection_name??""),{database,schema});
+    }else if(session && !session.connection && this.transientConnections.has(sessionId)){
+      const config=this.transientConnections.get(sessionId)!;
+      await this.connect(sessionId,{...config,database:session.database??config.database,schema:session.schema??config.schema});
     }
   }
   async disconnect(sessionId: string) {
@@ -596,6 +651,8 @@ export class WorkspaceController {
     if (this.session(sessionId)?.busy) throw new Error("Aguarde a execução antes de desconectar.");
     if(this.connectingSessions.has(sessionId))throw new Error("Aguarde a conexão antes de desconectar.");
     await this.ensureSession(sessionId); await this.transport.request("connection.disconnect", { session_id: sessionId });
+    this.transientConnections.delete(sessionId);
+    this.directConnectionTargets.delete(sessionId);
     this.patchSession(sessionId, s => ({ ...s, connection: undefined, connectionState:undefined,savedConnectionId: undefined, database: undefined, schema: undefined,extras:{...s.extras,connection_name:undefined,connection_group:undefined} }));
   }
   setContext(sessionId: string, context: { database?: string; schema?: string }, blockId?: string) {

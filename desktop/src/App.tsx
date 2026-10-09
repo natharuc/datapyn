@@ -89,7 +89,7 @@ const RichResults=lazy(()=>import("./RichResults").then(m=>({default:m.RichResul
 
 let storage: WorkspaceStorage | undefined;
 try { storage = localStorage; } catch { /* Desktop still supports explicit save. */ }
-export const workspace = new WorkspaceController(runtime, storage, {nativePersistence:isDesktop()});
+export const workspace = new WorkspaceController(runtime, storage, {nativePersistence:isDesktop(),maximizeFirstBlock:loadPreferences().maximizeFirstBlock});
 const reportMessage = (message: string) => workspace.message(message);
 function blockConnectionConfig(session:SessionDocument,block:Block) {
   const id=block.connection_id ?? session.savedConnectionId;
@@ -355,6 +355,7 @@ export function App() {
     root.style.setProperty("--editor-font", preferences.editorFont);
     setLocale(preferences.locale);
     workspace.setSharedDelimiter(preferences.sharedDelimiter);
+    workspace.setNewSessionPreferences({maximizeFirstBlock:preferences.maximizeFirstBlock});
     root.style.setProperty("--left-width", `${preferences.leftWidth}px`); root.style.setProperty("--right-width", `${preferences.rightWidth}px`);
     try { savePreferences({ ...preferences, leftVisible, rightVisible, resultHeight }); } catch { /* Explicit .dpw saves remain available. */ }
   }, [preferences, leftVisible, rightVisible, resultHeight]);
@@ -366,6 +367,8 @@ export function App() {
     return()=>{current=false;};
   }, [session.id, session.savedConnectionId,state.runtimeStatus,profile?.active_id,switchingProfile]);
   const applyProfile=(loaded:ProfileState,defaults:ConfigurationDefaults={})=>{
+    const prefs=normalizePreferences((loaded.state?.preferences ?? (loaded.state || profile ? DEFAULT_PREFERENCES : preferences)) as Partial<Preferences>);
+    workspace.setNewSessionPreferences({maximizeFirstBlock:prefs.maximizeFirstBlock});
     chartSources.current.clear();
     workspaceExtras.current=Object.fromEntries(Object.entries(loaded.state ?? {}).filter(([key])=>!["documents","activeIndex","preferences","shortcuts","layout","saved_at","revision"].includes(key)));
     updateConfigurationDefaults(mergeConfigurationDefaults(defaults,(workspaceExtras.current.imported_defaults ?? {}) as ConfigurationDefaults));
@@ -374,7 +377,6 @@ export function App() {
     outputRevealAllowed.current=false;outputReveals.current.clear();setVisibleDockPanels([]);
     state.sessions.forEach(s=>s.blocks.forEach(b=>disposeModel(b.id)));
     if(loaded.state?.documents)workspace.restoreSnapshot(loaded.state);else if(profile)workspace.restoreSnapshot({});else workspace.restoreBrowserDraftMigration();
-    const prefs=normalizePreferences((loaded.state?.preferences ?? DEFAULT_PREFERENCES) as Partial<Preferences>);
     if(loaded.state || profile){setPreferences(prefs);setLeftVisible(prefs.leftVisible);setRightVisible(prefs.rightVisible);setResultHeight(prefs.resultHeight);setShortcuts({...DEFAULT_SHORTCUTS,...loaded.state?.shortcuts} as Record<Command,string>);}
     setDockLayout(loaded.state?.layout?.docking);
     const restoredPanel=loaded.state?.layout?.panel;setPanel(isBottomPanel(restoredPanel) ? restoredPanel : "results");setRightPanel(loaded.state?.layout?.rightPanel === "pynia" ? "pynia" : "variables");
@@ -449,7 +451,7 @@ export function App() {
     setActiveChart(chart.id);activateBottom("results");
   };
   const connectSaved = useCallback(async (connection: SavedConnection, newTab = false) => {
-    const target = newTab ? workspace.createSession() : workspace.session(); if (!target) return;
+    const target = newTab ? workspace.createSession({inheritConnection:false}) : workspace.session(); if (!target) return;
     await workspace.connectSaved(target.id, connection.id, connection.name);
     workspace.patchSession(target.id, s => ({ ...s, connection: {...(s.connection??connection.config),name:connection.name},extras:{...s.extras,connection_name:connection.name,connection_group:connections.getSnapshot().catalog.groups.find(g=>g.id === connection.group_id)?.name ?? ""} }));
     setExplorerRefresh(n => n + 1);
@@ -482,9 +484,9 @@ export function App() {
           const document=await runtime.request<unknown>("workspace.read",{path});
           workspace.importDocuments(document,path.split(/[\\/]/).at(-1) ?? "Análise",path);
         } else if (["sql","py","ipynb"].includes(extension ?? "")) {
-          const target=workspace.createSession();await workspace.ensureSession(target.id);
+          const target=workspace.createSession({inheritConnection:false});await workspace.ensureSession(target.id);
           const document=await runtime.request<Record<string,unknown>>("document.read",{session_id:target.id,path});
-          const imported=workspace.importDocument({...document,original_file_type:extension},path.split(/[\\/]/).at(-1) ?? "Análise",path);
+          const imported=workspace.importDocument({...document,original_file_type:extension},path.split(/[\\/]/).at(-1) ?? "Análise",path,{inheritConnection:true,sourceSessionId:dataTargetId});
           await workspace.closeSession(target.id);
           workspace.activate(imported.id);
         } else {
@@ -495,10 +497,9 @@ export function App() {
           if(workspace.getSnapshot().activeId===target.id)setActiveChart(undefined);
         }
         rememberFile(path);
-        const target=workspace.session();if(target && ["dpw","sql","py","ipynb"].includes(extension??"") && preferences.maximizeFirstBlock) workspace.maximizeBlock(target.id,target.blocks[0].id);
       } catch(failure) { reportMessage(/\bimport cancelled\b/i.test(errorText(failure))?t("Importação cancelada."):`${path}: ${errorText(failure)}`); }
     }
-  },[preferences.maximizeFirstBlock,activateBottom]);
+  },[activateBottom]);
   const openDocument = useCallback(async () => {
     if (!isDesktop()) throw new Error("Abrir arquivos está disponível no aplicativo desktop.");
     const paths = await open({ multiple: true, filters: [{ name: "DataPyn, scripts e dados", extensions: ["dpw","sql","py","ipynb","csv","tsv","json","parquet","xlsx","xls"] }] });
@@ -551,14 +552,13 @@ export function App() {
   const commands = useRef<(command: Command) => void>(() => {});
   commands.current = (command) => {
     if(!profile || editingLocked)return;
+    if(command==="newSession" || command==="newTab"){workspace.createSession();return;}
     const current = workspace.session(); if (!current) return;
     switch (command) {
       case "run": runCurrent(); break;
       case "runAdvance": runCurrent(true); break;
       case "runAll": run(workspace.runAll(current.id)); break;
       case "addBlock": addBlock(); break;
-      case "newSession": workspace.createSession(); break;
-      case "newTab": workspace.createSession(); break;
       case "closeSession": run(closeSession(current.id)); break;
       case "save": run(saveDocument()); break;
       case "saveAs": run(saveDocument(true)); break;
