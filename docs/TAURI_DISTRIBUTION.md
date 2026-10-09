@@ -110,4 +110,7 @@ reconhecido/Gatekeeper; assinatura ad hoc não substitui notarização.
 
 Referências: [updater Tauri](https://v2.tauri.app/plugin/updater/),
 [instalador Windows](https://v2.tauri.app/distribute/windows-installer/),
+[associações Tauri](https://v2.tauri.app/reference/config/#fileassociation),
+[associação de arquivos Microsoft](https://learn.microsoft.com/en-us/windows/win32/shell/fa-best-practices),
+[aplicativos padrão Windows](https://support.microsoft.com/en-us/windows/apps/change-default-apps-in-windows),
 [releases GitHub](https://docs.github.com/en/rest/releases/releases#create-a-release).

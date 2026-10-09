@@ -63,6 +63,15 @@
         "description": "SQL and Python workspace",
         "role": "Editor",
         "mimeType": "application/x-datapyn-tauri-workspace"
+      },
+      {
+        "ext": [
+          "sql"
+        ],
+        "name": "SQL script",
+        "description": "SQL script",
+        "role": "Editor",
+        "mimeType": "application/sql"
       }
     ]
   },

@@ -1,6 +1,22 @@
 {
   "bundle": {
     "targets": ["nsis"],
+    "fileAssociations": [
+      {
+        "ext": ["dpw"],
+        "name": "app.datapyn.tauri.dpw",
+        "description": "DataPyn workspace",
+        "role": "Editor",
+        "mimeType": "application/x-datapyn-tauri-workspace"
+      },
+      {
+        "ext": ["sql"],
+        "name": "app.datapyn.tauri.sql",
+        "description": "SQL script",
+        "role": "Editor",
+        "mimeType": "application/sql"
+      }
+    ],
     "windows": {
       "webviewInstallMode": { "type": "offlineInstaller" },
       "nsis": {

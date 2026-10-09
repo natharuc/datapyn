@@ -64,6 +64,86 @@ function Get-DataPynOdbcFingerprint {
     return [ordered]@{ name = $name; path = $path; sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash }
 }
 
+function Read-DataPynAssociationValues {
+    param([string]$Path, [Microsoft.Win32.RegistryHive]$Hive = 'CurrentUser')
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($Hive, 'Registry64')
+    try {
+        $key = $base.OpenSubKey($Path)
+        if ($null -eq $key) { return $null }
+        try {
+            $values = [ordered]@{}
+            foreach ($name in ($key.GetValueNames() | Sort-Object)) { $values[$name] = $key.GetValue($name) }
+            return $values
+        } finally { $key.Dispose() }
+    } finally { $base.Dispose() }
+}
+
+function Set-DataPynCiAssociationValue {
+    param([string]$Path, [string]$Name, [AllowNull()]$Value)
+    $null = Assert-DataPynHostedWindowsRunner
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey('CurrentUser', 'Registry64')
+    try {
+        $key = $base.CreateSubKey($Path)
+        try {
+            if ($null -eq $Value) { $key.DeleteValue($Name, $false) }
+            else { $key.SetValue($Name, $Value, 'String') }
+        } finally { $key.Dispose() }
+    } finally { $base.Dispose() }
+}
+
+function Remove-DataPynCiAssociationFixture {
+    param([string]$FixtureProgId, [System.Collections.IDictionary]$PreviousDefaults)
+    $null = Assert-DataPynHostedWindowsRunner
+    if ($FixtureProgId -notmatch '^DataPynTauri\.Ci\.Editor\.[0-9a-f]{32}$') { throw 'Invalid isolated association fixture.' }
+    foreach ($extension in @('sql', 'dpw')) {
+        $previous = $PreviousDefaults[$extension]
+        $value = if ($null -ne $previous -and $previous.Contains('')) { [string]$previous[''] } else { $null }
+        Set-DataPynCiAssociationValue -Path ('Software\Classes\.' + $extension) -Name '' -Value $value
+    }
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey('CurrentUser', 'Registry64')
+    try { $base.DeleteSubKeyTree(('Software\Classes\' + $FixtureProgId), $false) } finally { $base.Dispose() }
+}
+
+function Assert-DataPynInstalledAssociations {
+    param([string]$MainPath, [string]$SqlDefault, [string]$DpwDefault, [System.Collections.IDictionary]$UserChoices)
+    $command = '"' + $MainPath + '" "%1"'
+    $capabilities = 'Software\DataPynTauri\Capabilities'
+    $registration = Read-DataPynAssociationValues -Path 'Software\RegisteredApplications'
+    if ($registration['DataPyn Tauri'] -ne $capabilities) { throw 'DataPyn is absent from Windows Default Apps.' }
+    $types = Read-DataPynAssociationValues -Path ($capabilities + '\FileAssociations')
+    foreach ($extension in @('sql', 'dpw')) {
+        $progId = 'app.datapyn.tauri.' + $extension
+        if ($types['.' + $extension] -ne $progId) { throw "Missing Default Apps capability: .$extension" }
+        $registeredCommand = Read-DataPynAssociationValues -Path ('Software\Classes\' + $progId + '\shell\open\command')
+        if ($registeredCommand[''] -ne $command) { throw "File opening command is not quoted correctly for .$extension." }
+        $openWith = Read-DataPynAssociationValues -Path ('Software\Classes\.' + $extension + '\OpenWithProgids')
+        if ($null -eq $openWith -or -not $openWith.Contains($progId)) { throw "DataPyn is absent from Open With for .$extension." }
+        $choice = Read-DataPynAssociationValues -Path ('Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.' + $extension + '\UserChoice')
+        if (($choice | ConvertTo-Json -Compress) -ne $UserChoices[$extension]) { throw "Protected UserChoice changed for .$extension." }
+    }
+    foreach ($pair in @(@('sql', $SqlDefault), @('dpw', $DpwDefault))) {
+        $values = Read-DataPynAssociationValues -Path ('Software\Classes\.' + $pair[0])
+        if ([string]$values[''] -ne [string]$pair[1]) { throw "Unexpected file default for .$($pair[0])." }
+    }
+}
+
+function Assert-DataPynRemovedAssociations {
+    param([string]$SqlDefault, [string]$DpwDefault, [System.Collections.IDictionary]$UserChoices)
+    foreach ($pair in @(@('sql', $SqlDefault), @('dpw', $DpwDefault))) {
+        $extension = $pair[0]
+        $progId = 'app.datapyn.tauri.' + $extension
+        $values = Read-DataPynAssociationValues -Path ('Software\Classes\.' + $extension)
+        $currentDefault = if ($null -ne $values) { [string]$values[''] } else { '' }
+        if ($currentDefault -ne [string]$pair[1]) { throw "Uninstall overwrote another application's .$extension default." }
+        if ($null -ne (Read-DataPynAssociationValues -Path ('Software\Classes\' + $progId))) { throw "Uninstall retained the .$extension ProgID." }
+        $openWith = Read-DataPynAssociationValues -Path ('Software\Classes\.' + $extension + '\OpenWithProgids')
+        if ($null -ne $openWith -and $openWith.Contains($progId)) { throw "Uninstall retained the .$extension Open With entry." }
+        $choice = Read-DataPynAssociationValues -Path ('Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.' + $extension + '\UserChoice')
+        if (($choice | ConvertTo-Json -Compress) -ne $UserChoices[$extension]) { throw "Uninstall modified protected .$extension UserChoice." }
+    }
+    if ($null -ne (Read-DataPynAssociationValues -Path 'Software\DataPynTauri\Capabilities')) { throw 'Uninstall retained Default Apps capabilities.' }
+}
+
 function Invoke-DataPynCiProcess {
     param([string]$FilePath, [string[]]$Arguments, [string]$LogBase, [int[]]$SuccessCodes = @(0))
     $null = Assert-DataPynHostedWindowsRunner
@@ -156,7 +236,23 @@ function Invoke-DataPynWindowsInstallationSmoke {
         $previousEnvironment[$key] = [System.Environment]::GetEnvironmentVariable($key)
         [System.Environment]::SetEnvironmentVariable($key, $stateEnvironment[$key])
     }
+    $associationDefaults = @{}
+    $userChoices = @{}
+    foreach ($extension in @('sql', 'dpw')) {
+        $associationDefaults[$extension] = Read-DataPynAssociationValues -Path ('Software\Classes\.' + $extension)
+        $userChoices[$extension] = Read-DataPynAssociationValues -Path ('Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.' + $extension + '\UserChoice') | ConvertTo-Json -Compress
+    }
+    $dpwMachine = Read-DataPynAssociationValues -Path 'Software\Classes\.dpw' -Hive LocalMachine
+    $dpwDefault = if ($null -ne $associationDefaults['dpw']) { [string]$associationDefaults['dpw'][''] } else { '' }
+    $dpwMachineDefault = if ($null -ne $dpwMachine) { [string]$dpwMachine[''] } else { '' }
+    if (-not $dpwDefault -and -not $dpwMachineDefault -and $userChoices['dpw'] -eq 'null') { $dpwDefault = 'app.datapyn.tauri.dpw' }
+    $fixtureProgId = 'DataPynTauri.Ci.Editor.' + [Guid]::NewGuid().ToString('N')
+    $legacyAssociationAbsent = $null -eq (Read-DataPynAssociationValues -Path 'Software\Classes\DataPyn workspace')
     try {
+        # Seed another editor ONLY after the disposable-runner guard above.
+        # This is registry acceptance, not launching Explorer or either GUI.
+        Set-DataPynCiAssociationValue -Path ('Software\Classes\' + $fixtureProgId + '\shell\open\command') -Name '' -Value '"C:\Windows\System32\notepad.exe" "%1"'
+        Set-DataPynCiAssociationValue -Path 'Software\Classes\.sql' -Name '' -Value $fixtureProgId
         $installationAttempted = $true
         $null = Invoke-DataPynCiProcess -FilePath $InstallerPath -Arguments (Get-DataPynSilentInstallArguments $installDirectory) `
             -LogBase (Join-Path $testRoot 'setup') -SuccessCodes @(0, 3010)
@@ -177,6 +273,12 @@ function Invoke-DataPynWindowsInstallationSmoke {
                 throw 'DataPyn was registered as a machine installation instead of currentUser.'
             }
         }
+        Assert-DataPynInstalledAssociations -MainPath $main -SqlDefault $fixtureProgId -DpwDefault $dpwDefault -UserChoices $userChoices
+        # /UPDATE follows the automatic-updater path and must not claim SQL or
+        # corrupt a default on reinstall. /D remains the final argument.
+        $null = Invoke-DataPynCiProcess -FilePath $InstallerPath -Arguments (@('/UPDATE') + (Get-DataPynSilentInstallArguments $installDirectory)) `
+            -LogBase (Join-Path $testRoot 'update-associations') -SuccessCodes @(0, 3010)
+        Assert-DataPynInstalledAssociations -MainPath $main -SqlDefault $fixtureProgId -DpwDefault $dpwDefault -UserChoices $userChoices
         # Run only the installed headless sidecar. Never open the desktop GUI.
         foreach ($smoke in @('smoke_runtime.py', 'smoke_parity.py', 'smoke_persistence.py', 'smoke_distribution.py')) {
             $script = Join-Path $repository ('scripts/tauri/' + $smoke)
@@ -187,6 +289,27 @@ function Invoke-DataPynWindowsInstallationSmoke {
         $null = Invoke-DataPynCiProcess -FilePath $uninstaller -Arguments (Get-DataPynSilentUninstallArguments $installDirectory) `
             -LogBase (Join-Path $testRoot 'uninstall')
         $uninstalled = $true
+        $dpwAfterUninstall = if ($dpwDefault -eq 'app.datapyn.tauri.dpw') { '' } else { $dpwDefault }
+        Assert-DataPynRemovedAssociations -SqlDefault $fixtureProgId -DpwDefault $dpwAfterUninstall -UserChoices $userChoices
+        if ($legacyAssociationAbsent) {
+            # Simulate the DPW registration from Tauri 1.0.3, including its
+            # upstream backup. Verify repair, then a user changing editors.
+            Set-DataPynCiAssociationValue -Path 'Software\Classes\DataPyn workspace\shell\open\command' -Name '' -Value ($main + ' "%1"')
+            Set-DataPynCiAssociationValue -Path 'Software\Classes\.dpw' -Name 'DataPyn workspace_backup' -Value 'Previous.Editor'
+            Set-DataPynCiAssociationValue -Path 'Software\Classes\.dpw' -Name '' -Value 'DataPyn workspace'
+            $uninstalled = $false
+            $null = Invoke-DataPynCiProcess -FilePath $InstallerPath -Arguments (Get-DataPynSilentInstallArguments $installDirectory) `
+                -LogBase (Join-Path $testRoot 'legacy-associations') -SuccessCodes @(0, 3010)
+            Assert-DataPynInstalledAssociations -MainPath $main -SqlDefault $fixtureProgId -DpwDefault 'DataPyn workspace' -UserChoices $userChoices
+            $legacyCommand = Read-DataPynAssociationValues -Path 'Software\Classes\DataPyn workspace\shell\open\command'
+            if ($legacyCommand[''] -ne ('"' + $main + '" "%1"')) { throw 'The old DPW handler was not repaired on upgrade.' }
+            Set-DataPynCiAssociationValue -Path 'Software\Classes\.dpw' -Name '' -Value $fixtureProgId
+            $null = Invoke-DataPynCiProcess -FilePath $uninstaller -Arguments (Get-DataPynSilentUninstallArguments $installDirectory) `
+                -LogBase (Join-Path $testRoot 'legacy-uninstall-associations')
+            $uninstalled = $true
+            Assert-DataPynRemovedAssociations -SqlDefault $fixtureProgId -DpwDefault $fixtureProgId -UserChoices $userChoices
+            if ($null -ne (Read-DataPynAssociationValues -Path 'Software\Classes\DataPyn workspace')) { throw 'The old Tauri DPW handler survived uninstall.' }
+        }
         foreach ($path in @($main, $sidecar)) {
             if (Test-Path -LiteralPath $path) { throw "Uninstall preserved an application executable: $path" }
         }
@@ -208,6 +331,7 @@ function Invoke-DataPynWindowsInstallationSmoke {
         if ($legacyAfter -ne $legacyBefore) { throw 'The PyQt installer identity was changed by Tauri.' }
         [ordered]@{ status = 'passed'; product = $productName; version = $configuration.version;
                     installed_sidecar_smokes = 4; scope = 'currentUser'; odbc_preserved = $true;
+                    sql_dpw_associations = $true; existing_defaults_preserved = $true; protected_user_choices_preserved = $true;
                     pyqt_identity_preserved = $true; logs = $testRoot } | ConvertTo-Json -Compress | Write-Host
     } finally {
         if ($installationAttempted -and -not $uninstalled -and (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
@@ -218,6 +342,7 @@ function Invoke-DataPynWindowsInstallationSmoke {
         }
         # RUNNER_TEMP is owned/cleaned by GitHub. Keep logs; never recursively
         # delete a computed installation path or uninstall a shared driver.
+        Remove-DataPynCiAssociationFixture -FixtureProgId $fixtureProgId -PreviousDefaults $associationDefaults
         foreach ($key in $previousEnvironment.Keys) {
             [System.Environment]::SetEnvironmentVariable($key, $previousEnvironment[$key])
         }

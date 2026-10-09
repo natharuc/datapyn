@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -77,4 +77,29 @@ test("installer acceptance refuses user/self-hosted machines and preserves NSIS 
     assert.ok(report.install.includes("/S"));
     assert.ok(report.uninstall.includes("/S"));
   } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("SQL and DPW use isolated Windows ProgIDs and the guarded association hook", async () => {
+  const config = JSON.parse(await readFile(join(repoRoot, "desktop/src-tauri/tauri.conf.json"), "utf8"));
+  const windows = JSON.parse(await readFile(join(repoRoot, "desktop/src-tauri/tauri.windows.conf.json"), "utf8"));
+  assert.deepEqual(new Set(config.bundle.fileAssociations.flatMap(item => item.ext)), new Set(["dpw", "sql"]));
+  assert.deepEqual(windows.bundle.fileAssociations.map(item => [item.ext, item.name]), [
+    [["dpw"], "app.datapyn.tauri.dpw"], [["sql"], "app.datapyn.tauri.sql"],
+  ]);
+  const hooks = await readFile(join(repoRoot, "desktop/src-tauri/windows/odbc.nsh"), "utf8");
+  assert.ok(hooks.includes('!include "${__FILEDIR__}\\file-associations.nsh"'));
+  const associations = await readFile(join(repoRoot, "desktop/src-tauri/windows/file-associations.nsh"), "utf8");
+  const mutations = associations.split(/\r?\n/).filter(line => /^\s*(WriteReg|DeleteReg)/.test(line));
+  assert.ok(mutations.length > 0);
+  assert.ok(mutations.every(line => !/UserChoice|FileExts/.test(line)), "Protected per-user choices must remain untouched");
+  assert.ok(associations.includes("$\\\"$INSTDIR\\${MAINBINARYNAME}.exe$\\\" $\\\"%1$\\\""));
+});
+
+test("association acceptance detects regressions using only a mocked registry", { skip: process.platform !== "win32" }, async () => {
+  const { stdout } = await promisify(execFile)("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
+    join(repoRoot, "scripts", "tauri", "windows-associations.test.ps1"),
+    "-ScriptPath", join(repoRoot, "scripts", "tauri", "smoke_windows_installation.ps1")], { windowsHide: true });
+  const cases = Object.fromEntries(JSON.parse(stdout.trim()).map(item => [item.scenario, item]));
+  for (const scenario of ["valid-registration", "valid-uninstall-preserves-other-editor", "valid-uninstall-removes-unclaimed-extension"]) assert.equal(cases[scenario].accepted, true);
+  for (const scenario of ["unquoted-executable", "missing-capability", "missing-open-with", "changed-user-choice", "claimed-existing-default"]) assert.equal(cases[scenario].rejected, true);
 });
