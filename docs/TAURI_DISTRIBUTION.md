@@ -26,6 +26,22 @@ de pedir consentimento e permissão de administrador apenas para esse driver.
 Atualizações com o driver presente não repetem a instalação. O uninstall não
 remove drivers compartilhados nem dados do usuário.
 
+O Setup registra `.sql` e `.dpw` com ícone, comando de abertura, `Abrir com` e
+`Aplicativos padrão` no Windows. Quando não há aplicativo associado, o DataPyn
+passa a ser o handler padrão. Instalação, reinstalação e atualização preservam
+associações existentes e a preferência protegida `UserChoice`: se outro editor
+já é o padrão, escolha DataPyn em **Configurações > Aplicativos > Aplicativos
+padrão**. O Windows 10/11 exige essa escolha pelo usuário; o instalador não
+altera hashes nem apaga preferências para contornar essa proteção.
+
+O comando de abertura preserva caminhos com espaços e acentos e entrega SQL/DPW
+à instância existente, inclusive durante a splash. A atualização mantém o
+handler DPW das versões Tauri 1.0.0–1.0.3. A desinstalação remove apenas registros
+que ainda apontam para essa instalação e preserva outro editor escolhido depois.
+O pipeline valida esses registros, a reinstalação `/UPDATE` e a desinstalação em
+runner Windows descartável, sem abrir a GUI. As associações e seus identificadores
+Tauri permanecem separados dos registros históricos PyQt6.
+
 No ZIP, mantenha os dois executáveis juntos. WebView2 e ODBC são pré-requisitos do
 portátil; o Setup os prepara. Atualizar o ZIP usa o NSIS na mesma pasta, preservando
 o caminho e registrando a instalação no Windows.
@@ -43,7 +59,7 @@ do usuário. O pipeline verifica o sidecar novamente depois da assinatura.
 ## Identidade e armazenamento
 
 - Nome: `DataPyn Tauri`; identificador: `app.datapyn.tauri`.
-- Versão independente: `1.0.3`, sem alterar a numeração do PyQt6.
+- Versão independente: `1.0.4`, sem alterar a numeração do PyQt6.
 - Windows: `%LOCALAPPDATA%/app.datapyn.tauri`.
 - macOS: `~/Library/Application Support/app.datapyn.tauri`.
 - Linux: `$XDG_DATA_HOME/app.datapyn.tauri` ou `~/.local/share/app.datapyn.tauri`.
@@ -110,4 +126,7 @@ reconhecido/Gatekeeper; assinatura ad hoc não substitui notarização.
 
 Referências: [updater Tauri](https://v2.tauri.app/plugin/updater/),
 [instalador Windows](https://v2.tauri.app/distribute/windows-installer/),
+[associações Tauri](https://v2.tauri.app/reference/config/#fileassociation),
+[associação de arquivos Microsoft](https://learn.microsoft.com/en-us/windows/win32/shell/fa-best-practices),
+[aplicativos padrão Windows](https://support.microsoft.com/en-us/windows/apps/change-default-apps-in-windows),
 [releases GitHub](https://docs.github.com/en/rest/releases/releases#create-a-release).

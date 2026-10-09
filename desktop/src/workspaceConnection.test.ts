@@ -94,7 +94,7 @@ describe("opening a tab connection",()=>{
   });
   it("restores the active connection before reporting readiness and preserves restored database/schema focus",async()=>{
     const {controller,transport,session}=setup();controller.patchSession(session.id,s=>({...s,savedConnectionId:"a",database:"RESTORED",schema:"sales",extras:{connection_name:"Saved"}}));
-    const other=controller.createSession();controller.patchSession(other.id,s=>({...s,savedConnectionId:"b"}));controller.activate(session.id);
+    const other=controller.createSession({inheritConnection:false});controller.patchSession(other.id,s=>({...s,savedConnectionId:"b"}));controller.activate(session.id);
     let ready=false;const task=controller.prepareSession(session.id).then(()=>{ready=true;});
     await vi.waitFor(()=>expect(transport.connections).toHaveLength(1));expect(ready).toBe(false);
     expect(transport.calls("connection.connect")[0].params).toEqual({session_id:session.id,connection_id:"a",database:"RESTORED",schema:"sales"});

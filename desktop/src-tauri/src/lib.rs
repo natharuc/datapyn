@@ -737,12 +737,46 @@ pub fn run() {
 mod update_tests {
     use super::updater_channel;
     use super::{
-        buffer_startup_files, collect_opened_files, local_asset, local_popout,
+        buffer_startup_files, collect_files, collect_opened_files, local_asset, local_popout,
         logical_popout_layout, native_popout_label, popout_outer_position, update_status,
         SplashPhase, SplashSnapshot,
     };
     use serde_json::json;
     use std::sync::{Arc, Barrier, Mutex};
+
+    #[test]
+    fn associated_sql_and_workspace_arguments_resolve_spaces_unicode_and_relative_paths() {
+        let directory =
+            std::env::temp_dir().join(format!("datapyn-file-associations-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let sql = directory.join("Análise com espaços.SQL");
+        let workspace = directory.join("Outra análise.DPW");
+        std::fs::write(&sql, "select 1").unwrap();
+        std::fs::write(&workspace, "{}").unwrap();
+        let args = vec![
+            "C:\\Program Files\\DataPyn Tauri\\datapyn-desktop.exe".into(),
+            sql.to_string_lossy().to_string(),
+            workspace.file_name().unwrap().to_string_lossy().to_string(),
+            "absent.sql".into(),
+            directory.to_string_lossy().to_string(),
+        ];
+        // Startup and single-instance callbacks both use this argument collector.
+        let files = collect_files(&args, &directory.to_string_lossy());
+        let expected: Vec<_> = [sql.clone(), workspace.clone()]
+            .iter()
+            .map(|path| {
+                let canonical = path.canonicalize().unwrap().to_string_lossy().to_string();
+                canonical
+                    .strip_prefix("\\\\?\\")
+                    .unwrap_or(&canonical)
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(files, expected);
+        std::fs::remove_file(sql).unwrap();
+        std::fs::remove_file(workspace).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+    }
 
     #[test]
     fn finder_file_urls_decode_unicode_and_spaces_and_ignore_remote_urls() {

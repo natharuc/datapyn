@@ -1,5 +1,12 @@
 .database-icon { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; vertical-align: middle; color: var(--muted); }
 .database-icon img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.database-icon[data-database=sqlserver] { --database-icon-source: url("./assets/databases/sqlserver.svg"); }
+.database-icon[data-database=postgresql] { --database-icon-source: url("./assets/databases/postgresql.svg"); }
+.database-icon[data-database=mysql] { --database-icon-source: url("./assets/databases/mysql.svg"); }
+.database-icon[data-database=mariadb] { --database-icon-source: url("./assets/databases/mariadb.svg"); }
+.database-icon[data-database=databricks] { --database-icon-source: url("./assets/databases/databricks.svg"); }
+.database-icon[data-database=sqlite] { --database-icon-source: url("./assets/databases/sqlite.svg"); }
+.database-icon-mask { display: block; width: 100%; height: 100%; background-color: currentColor; mask-image: var(--database-icon-source); mask-repeat: no-repeat; mask-position: center; mask-size: contain; mask-mode: alpha; -webkit-mask-image: var(--database-icon-source); -webkit-mask-repeat: no-repeat; -webkit-mask-position: center; -webkit-mask-size: contain; }
 .database-icon .database-icon-light { display: none; }
 :root[data-theme=light] .database-icon .database-icon-dark { display: none; }
 :root[data-theme=light] .database-icon .database-icon-light { display: block; }

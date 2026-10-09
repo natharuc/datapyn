@@ -1,5 +1,6 @@
 ; Microsoft ODBC is embedded in the Tauri installer; never invoke the PyQt installer.
 !include LogicLib.nsh
+!include "${__FILEDIR__}\file-associations.nsh"
 !include "${__FILEDIR__}\..\..\..\build\windows-prerequisites\odbc-artifact.nsh"
 !define DATAPYN_ODBC_SCRIPT "${__FILEDIR__}\install-odbc.ps1"
 
