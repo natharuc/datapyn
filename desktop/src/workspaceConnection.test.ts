@@ -42,6 +42,37 @@ function setup(){const transport=new ConnectionTransport(),controller=new Worksp
 afterEach(()=>{controllers.splice(0).forEach(controller=>controller.dispose());});
 
 describe("opening a tab connection",()=>{
+  it("uses a saved credential reference for an edited connection without replacing its draft or persisting the reference",async()=>{
+    const {controller,transport,session}=setup();
+    const draft:ConnectionConfig={...config,password:undefined,ssh:{enabled:true,host:"vps.example",port:22,username:"ssh-user",auth_method:"password"}};
+    const task=controller.connect(session.id,draft,"saved-ssh",false);
+    await vi.waitFor(()=>expect(transport.connections).toHaveLength(1));
+    expect(transport.calls("connection.connect")[0].params).toEqual({session_id:session.id,config:draft,credential_connection_id:"saved-ssh",resolve_database_password:false});
+    transport.connections[0].resolve({config:draft});await task;
+    expect(controller.session()!.savedConnectionId).toBeUndefined();
+    expect(JSON.stringify(controller.nativeSnapshot())).not.toContain("saved-ssh");
+    const inherited=controller.createSession();
+    await vi.waitFor(()=>expect(transport.connections).toHaveLength(2));
+    expect(transport.calls("connection.connect")[1].params).toMatchObject({session_id:inherited.id,credential_connection_id:"saved-ssh",resolve_database_password:false,config:draft});
+    transport.connections[1].resolve({config:draft});await controller.prepareSession(inherited.id);
+    await controller.disconnect(inherited.id);
+    const direct=controller.connect(inherited.id,draft);
+    await vi.waitFor(()=>expect(transport.connections).toHaveLength(3));
+    expect(transport.calls("connection.connect")[2].params).not.toHaveProperty("credential_connection_id");
+    transport.connections[2].resolve({config:draft});await direct;
+  });
+  it("excludes SSH credentials from connection metadata and persisted drafts",async()=>{
+    const {controller,transport,session}=setup();
+    const ssh={enabled:true,host:"vps.example",port:22,username:"ssh-user",auth_method:"private_key" as const,password:"ssh-secret",passphrase:"key-secret",private_key_path:"C:/keys/id_ed25519"};
+    const task=controller.connectSaved(session.id,"ssh-connection");
+    await vi.waitFor(()=>expect(transport.connections).toHaveLength(1));
+    transport.connections[0].resolve({...connected,config:{...config,ssh}});await task;
+    expect(controller.session()!.connection?.ssh).toMatchObject({host:"vps.example",private_key_path:"C:/keys/id_ed25519"});
+    expect(controller.session()!.connection?.ssh).not.toHaveProperty("password");
+    expect(controller.session()!.connection?.ssh).not.toHaveProperty("passphrase");
+    expect(JSON.stringify(controller.nativeSnapshot())).not.toContain("ssh-secret");
+    expect(JSON.stringify(controller.nativeSnapshot())).not.toContain("key-secret");
+  });
   it("shows preparation immediately, waits for authentication and retains driver-resolved focus without secrets",async()=>{
     const {controller,transport,session}=setup();transport.createGate=deferred();
     const task=controller.connectSaved(session.id,"esim","ESIM");

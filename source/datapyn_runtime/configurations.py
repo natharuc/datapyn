@@ -28,7 +28,8 @@ MAX_TOTAL_BYTES = 32 * 1024 * 1024
 MAX_FILES = 128
 EXCLUDED = {"sessions.json", "workspace.json", "workspace_state.json", "workspace-state.json", "session_store.db",
             "session_store.db-shm", "session_store.db-wal", "profiles.json", "workspace_profiles.json", "workspaces.ini", "notificationsecrets.ini",
-            "notifications.json", "snapshot_settings.json", "pynia_settings.json", "package_sources.json", "configuration_defaults.json"}
+            "notifications.json", "snapshot_settings.json", "pynia_settings.json", "package_sources.json", "configuration_defaults.json",
+            "ssh_known_hosts.json", "ssh-known-hosts.json"}
 CATEGORIES = {"connections.json": "connections", "shortcuts.json": "shortcuts", "datapyn.ini": "preferences",
               "pyniasettings.ini": "pynia", "mainwindow.ini": "legacy_layout", "dockinglayout.ini": "legacy_layout",
               "csvexport.ini": "export", "exportsettings.ini": "export", "packagemanager.ini": "packages",
@@ -346,7 +347,7 @@ class ConfigurationTransfer:
         blobs = {}
         if self.archive.exists():
             for entry in sorted(self.archive.iterdir()):
-                if entry.is_file() and not entry.is_symlink():
+                if entry.is_file() and not entry.is_symlink() and entry.name.casefold() not in {"ssh_known_hosts.json", "ssh-known-hosts.json"}:
                     blobs[entry.name] = entry.read_bytes()
         def name_for(lower):
             return next((name for name in blobs if name.lower() == lower), None)

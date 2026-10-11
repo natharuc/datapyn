@@ -2,6 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { NotificationResult } from "./NotificationsDialog";
 import type { DataImportProgress } from "./dataImport";
+import { cancelSshHostTrust, requestSshHostTrust, SshHostTrustCancelledError, type SshHostKeyDetails } from "./sshHostTrust";
 
 export type Language = "sql" | "python";
 export type Primitive = null | string | number | boolean;
@@ -99,14 +100,83 @@ export class BackendUnavailableError extends Error {
   constructor() { super("Execução indisponível no navegador. Abra o aplicativo DataPyn para usar o runtime Python."); }
 }
 
+export class RuntimeRequestError extends Error {
+  constructor(readonly code: string, message: string, readonly details?: Record<string, unknown>) { super(message); }
+}
+
+export function runtimeRequestError(error: unknown): Error {
+  if (error instanceof Error) return error;
+  if (error && typeof error === "object" && !Array.isArray(error)) {
+    const value = error as Record<string, unknown>;
+    if (typeof value.message === "string") return new RuntimeRequestError(typeof value.code === "string" ? value.code : "runtime_error", value.message,
+      value.details && typeof value.details === "object" && !Array.isArray(value.details) ? value.details as Record<string, unknown> : undefined);
+  }
+  return new Error(typeof error === "string" ? error : "O runtime não concluiu a solicitação.");
+}
+
+function hostKeyDetails(value?: Record<string, unknown>): SshHostKeyDetails | undefined {
+  if (!value || typeof value.host !== "string" || !value.host || value.host.length > 256
+    || !Number.isInteger(value.port) || Number(value.port) < 1 || Number(value.port) > 65535
+    || typeof value.key_type !== "string" || !/^ssh-|^ecdsa-/.test(value.key_type)
+    || typeof value.public_key !== "string" || value.public_key.length > 32768 || !/^[A-Za-z0-9+/]+={0,2}$/.test(value.public_key)
+    || typeof value.fingerprint !== "string" || !/^SHA256:[A-Za-z0-9+/]{43}=?$/.test(value.fingerprint)) return;
+  return { host: value.host, port: Number(value.port), key_type: value.key_type, public_key: value.public_key, fingerprint: value.fingerprint };
+}
+
+/** Cancellation also invalidates a challenge that arrives after a tab/test closes. */
+export function createRuntimeRequester(call: <T>(method: string, params: Record<string, unknown>) => Promise<T>) {
+  const pending = new Set<{ key?: string; cancelled: boolean }>();
+  const key = (params: Record<string, unknown>) => typeof params.test_id === "string" ? `test:${params.test_id}`
+    : typeof params.session_id === "string" ? `session:${params.session_id}` : undefined;
+  const cancel = (operationKey?: string) => {
+    for (const operation of pending) if (operationKey === undefined || operation.key === operationKey) operation.cancelled = true;
+    cancelSshHostTrust(operationKey);
+  };
+  async function request<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+    if (["connection.test_cancel", "session.close", "connection.disconnect", "execution.cancel"].includes(method)) cancel(key(params));
+    else if (method === "workspace.profiles.select") cancel();
+    const operation = { key: key(params), cancelled: false };
+    pending.add(operation);
+    const current = () => { if (operation.cancelled) throw new SshHostTrustCancelledError(); };
+    try {
+      try {
+        const result=await call<T>(method, params);
+        if(method==="connection.connect" || method==="connection.test")current();
+        return result;
+      }
+      catch (failure) {
+        const error = runtimeRequestError(failure);
+        const details = error instanceof RuntimeRequestError && error.code === "ssh_host_key_unknown" ? hostKeyDetails(error.details) : undefined;
+        if (!details || method === "ssh.host_key.trust") throw error;
+        current();
+        await requestSshHostTrust(details, { operationKey: operation.key });
+        current();
+        await call("ssh.host_key.trust", { details });
+        current();
+        const result=await call<T>(method, params);
+        current();
+        return result;
+      }
+    } catch (error) { throw runtimeRequestError(error); }
+    finally { pending.delete(operation); }
+  }
+  const receiveEvent=(event:RuntimeEvent)=>{
+    if(event.event==="backend.exited")cancel();
+    else if(event.event==="session.reset" || event.event==="session.error")cancel(`session:${event.payload.session_id}`);
+  };
+  return { request, cancel,receiveEvent };
+}
+
+const requester = createRuntimeRequester(<T>(method: string, params: Record<string, unknown>) => invoke<T>("backend_request", { method, params }));
+
 export const runtime: RuntimeTransport = {
   async request<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
     if (!isTauri()) throw new BackendUnavailableError();
-    return invoke<T>("backend_request", { method, params });
+    return requester.request<T>(method, params);
   },
   async subscribe(callback): Promise<UnlistenFn> {
     if (!isTauri()) return () => {};
-    return listen<unknown>("runtime-event", ({ payload }) => { if (isRuntimeEvent(payload)) callback(payload); });
+    return listen<unknown>("runtime-event", ({ payload }) => { if (isRuntimeEvent(payload)) { requester.receiveEvent(payload); callback(payload); } });
   },
 };
 

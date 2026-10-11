@@ -543,7 +543,7 @@ async fn backend_request(
     state: State<'_, runtime::Backend>,
     method: String,
     params: Option<Value>,
-) -> Result<Value, String> {
+) -> Result<Value, runtime::RuntimeRequestError> {
     require_local_window(&window, &["main"])?;
     state
         .request(app, method, params.unwrap_or_else(|| serde_json::json!({})))

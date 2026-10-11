@@ -116,6 +116,9 @@ def connect(config: dict):
     if db_type == "databricks" and config.get("databricks_auth_mode") == "oauth":
         config = {**config, "password": ""}
     if db_type == "sqlite":
+        if (config.get("ssh") or {}).get("enabled"):
+            from .ssh_tunnel import SshTunnelError
+            raise SshTunnelError("SQLite cannot use an SSH tunnel", code="ssh_database_unsupported")
         return SQLiteConnector(str(config.get("database") or ":memory:"))
 
     from src.database.database_connector import DatabaseConnector
@@ -144,7 +147,11 @@ def connect(config: dict):
             connector.connection_params["schema"] = str(config["schema"])
         return connector
     except BaseException:
-        connector.disconnect()
+        try:
+            connector.disconnect()
+        except Exception:
+            # Cleanup cannot hide the original SSH identity/authentication error.
+            pass
         raise
 
 
@@ -220,6 +227,24 @@ class ConnectorPool:
         if self.default_active_key == key:
             self.default_active_key = None
 
+    @staticmethod
+    def _ssh_connection_expired(connector, config):
+        """Only SSH engines need transport liveness checks on cache reuse."""
+        tunnel = getattr(connector, "_ssh_tunnel", None)
+        ssh = config.get("ssh") or {}
+        saved = getattr(connector, "_connection_config", {}) or {}
+        connector_ssh = saved.get("ssh") or {} if isinstance(saved, dict) else {}
+        uses_ssh = (isinstance(ssh, dict) and ssh.get("enabled")
+                    or isinstance(connector_ssh, dict) and connector_ssh.get("enabled") or tunnel is not None)
+        if not uses_ssh:
+            return False
+        # force_disconnect clears the object as well as the engine. The saved
+        # pool configuration still identifies it as an SSH connection.
+        if tunnel is None or not tunnel.is_alive():
+            return True
+        connected = getattr(connector, "is_connected", None)
+        return callable(connected) and not connected()
+
     def reindex_active(self, context, params):
         """Move a changed session without reconnecting or keeping an old alias."""
         old_key = self.active_key
@@ -279,8 +304,17 @@ class ConnectorPool:
             identifier = self.default_id
         if config is None:
             if self.active_key is not None and not params.get("database") and not params.get("schema"):
-                return self.items[self.active_key]
-            raise ConnectionError("Connect this session to a database first")
+                current = self.items[self.active_key]
+                if not self._ssh_connection_expired(current, self.configs.get(self.active_key, {})):
+                    return current
+                # A block-only connection may have no default configuration.
+                # Recreate its physical transport instead of returning a dead cache.
+                config = self.configs[self.active_key]
+                identifier = self.active_key[0]
+                if identifier == "transient":
+                    identifier = None
+            else:
+                raise ConnectionError("Connect this session to a database first")
         config = dict(config)
         database_override = params.get("database")
         schema_override = params.get("schema")
@@ -312,6 +346,21 @@ class ConnectorPool:
                 if self._key(identifier, stored) == key:
                     key = candidate
                     break
+        was_default = False
+        if key in self.items:
+            existing = self.items[key]
+            if self._ssh_connection_expired(existing, self.configs.get(key, config)):
+                was_default = self.default_active_key == key
+                self.items.pop(key)
+                self._forget(key)
+                if self.active_key == key:
+                    self.active_key = None
+                try:
+                    existing.disconnect()
+                except Exception:
+                    # Disposal must not replace a new authentication/connection
+                    # error, nor cause a disconnected cached engine to succeed.
+                    pass
         if key not in self.items:
             if len(self.items) >= 8:
                 evict = next((item for item, existing in self.items.items()
@@ -333,7 +382,7 @@ class ConnectorPool:
             self.items.move_to_end(key)
         self.active_key = key
         self.last_used[key] = time.monotonic()
-        if default or (params.get("scope_inherited") and self.default_active_key is None):
+        if default or was_default or (params.get("scope_inherited") and self.default_active_key is None):
             self.default_config = dict(config)
             self.default_id = identifier
             self.default_active_key = key
@@ -352,16 +401,23 @@ class ConnectorPool:
         return self.explorers[self.active_key]
 
     def disconnect(self, identifier=None):
+        failure = None
         for key, connector in list(self.items.items()):
             if identifier is None or key[0] == identifier:
-                connector.disconnect()
-                del self.items[key]
-                self._forget(key)
-                if self.active_key == key:
-                    self.active_key = None
+                try:
+                    connector.disconnect()
+                except Exception as exc:
+                    failure = failure or exc
+                finally:
+                    del self.items[key]
+                    self._forget(key)
+                    if self.active_key == key:
+                        self.active_key = None
         if identifier is None or identifier == self.default_id:
             self.default_config = None
             self.default_id = None
+        if failure is not None:
+            raise failure
 
     def touch_active(self):
         if self.active_key is not None:
@@ -392,17 +448,69 @@ class ConnectorPool:
         return list(dict.fromkeys(closed))
 
 
-def test_connection(params):
+def database_credential_identity(config):
+    """An authentication endpoint remains stable when changing database/schema focus."""
+    from .connection_catalog import ssh_identity
+
+    ssh = config.get("ssh") or {}
+    tunnel = (True, *ssh_identity(config)) if ssh.get("enabled") else (False,)
+    return (str(config.get("db_type") or "").lower(), str(config.get("host") or "").strip().casefold(),
+            int(config.get("port") or 0), str(config.get("username") or ""),
+            config.get("sqlserver_auth_mode") or "sql_password", bool(config.get("use_windows_auth")),
+            config.get("databricks_auth_mode") or "token", tunnel)
+
+
+def connection_test_config(params, *, match_database_identity=False):
+    """Merge draft form values without sending old SSH secrets to a new server."""
+    from copy import deepcopy
+    from .connection_catalog import SECRET_KEYS, ssh_identity
+
     config = params.get("_connection_config") or params.get("config")
     if not isinstance(config, dict):
         raise ValueError("config must be an object")
-    config = dict(config)
+    config = deepcopy(config)
+    resolve_password = params.get("resolve_database_password", True)
+    if not isinstance(resolve_password, bool):
+        raise ValueError("resolve_database_password must be a boolean")
+    draft = params.get("config")
+    same_database = not match_database_identity or not isinstance(draft, dict) or database_credential_identity(config) == database_credential_identity(draft)
+    if not resolve_password or not same_database:
+        for key in SECRET_KEYS:
+            config.pop(key, None)
+    elif isinstance(draft, dict):
+        for secret, key_path in (("sslpassword", "sslkey"), ("ssl_key_password", "ssl_key")):
+            if config.get(key_path) != draft.get(key_path):
+                config.pop(secret, None)
+    if match_database_identity and isinstance(draft, dict) and "ssh" not in draft:
+        config.pop("ssh", None)
     if params.get("_connection_config") and isinstance(params.get("config"), dict):
         for key, value in params["config"].items():
-            if key not in {"password", "token", "access_token", "client_secret"} or value:
+            if key == "ssh":
+                if not isinstance(value, dict):
+                    raise ValueError("ssh must be an object")
+                previous = config.get("ssh") or {}
+                same = ssh_identity(config) == ssh_identity({"ssh": value})
+                merged = deepcopy(previous) if same else {}
+                for field, item in value.items():
+                    if field not in SECRET_KEYS or item:
+                        merged[field] = deepcopy(item)
+                config["ssh"] = merged
+            elif key not in SECRET_KEYS or value:
                 config[key] = value
     if params.get("password") is not None:
         config["password"] = str(params["password"])
+    if "ssh" in config:
+        for key in ("password", "passphrase"):
+            value = params.get(f"ssh_{key}")
+            if value:
+                config["ssh"][key] = str(value)
+        auth = config["ssh"].get("auth_method", "password")
+        config["ssh"].pop("passphrase" if auth == "password" else "password", None)
+    return config
+
+
+def test_connection(params):
+    config = connection_test_config(params)
     connector = connect(config)
     try:
         return {"success": True, "db_type": connector.db_type, "message": "Connection established"}

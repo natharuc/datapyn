@@ -13,6 +13,16 @@ function auth(config: ConnectionConfig) { return config.use_windows_auth ? "wind
 const pgSchema = (value: string) => /^[a-z_][a-z0-9_$]*$/.test(value) ? value : `"${value.replace(/"/g, '""')}"`;
 const pgOptions = (value: string) => `-csearch_path=${pgSchema(value).replace(/[\\\s]/g, character => `\\${character}`)}`;
 function parsePgSchema(value: string) { return /^"(?:[^"]|"")*"$/.test(value) ? value.slice(1, -1).replace(/""/g, '"') : value; }
+const pgTlsFields = ["sslmode", "sslrootcert", "sslcert", "sslkey"] as const;
+const pgTlsMode = (value: string): NonNullable<ConnectionConfig["sslmode"]> => {
+  const normalized = value.toLowerCase().replace(/[\s_-]/g, "");
+  const modes = { disable: "disable", allow: "allow", prefer: "prefer", require: "require", verifyca: "verify-ca", verifyfull: "verify-full" } as const;
+  const mode = modes[normalized as keyof typeof modes]; if (!mode) throw new Error("Modo TLS PostgreSQL inválido."); return mode;
+};
+function pgQuery(config: ConnectionConfig): Array<[string, string]> {
+  return [...(config.schema ? [["options", pgOptions(config.schema)] as [string, string]] : []),
+    ...pgTlsFields.filter(field => Boolean(config[field])).map(field => [field, config[field]!] as [string, string])];
+}
 
 export function connectionStringFormats(config: ConnectionConfig): Array<{ id: ConnectionStringFormat; label: string }> {
   return [...(config.db_type === "databricks" || config.database.includes("?") ? [] : [{ id: "uri" as const, label: "URI · SQLAlchemy" }]),
@@ -43,7 +53,13 @@ function nativeString(config: ConnectionConfig, include: boolean, odbc = false):
   }
   return pairs([[kind === "postgresql" ? "Host" : "Server", config.host], ["Port", String(config.port || defaults[kind])],
     ["Database", config.database], [kind === "postgresql" ? "Username" : "User ID", config.username], ["Password", secret],
-    ...(kind === "postgresql" && config.schema ? [["Search Path", pgSchema(config.schema)] as [string, string]] : [])]);
+    ...(kind === "postgresql" && config.schema ? [["Search Path", pgSchema(config.schema)] as [string, string]] : []),
+    ...(kind === "postgresql" ? pgTlsFields.filter(field => Boolean(config[field])).map(field => {
+      const names = { sslmode: "SSL Mode", sslrootcert: "Root Certificate", sslcert: "SSL Certificate", sslkey: "SSL Key" };
+      // libpq require + an explicit CA verifies the chain; Npgsql Require does not.
+      const mode = config.sslmode === "require" && config.sslrootcert ? "verify-ca" : config.sslmode;
+      return [names[field], field === "sslmode" ? ({ disable: "Disable", allow: "Allow", prefer: "Prefer", require: "Require", "verify-ca": "VerifyCA", "verify-full": "VerifyFull" }[mode!]) : config[field]!] as [string, string];
+    }) : [])]);
 }
 
 /** Credentials are only formatted from caller-provided transient data; no storage, logging or requests. */
@@ -57,7 +73,8 @@ export function formatConnectionString(config: ConnectionConfig, format: Connect
     if (kind === "sqlserver") return `mssql+pyodbc:///?odbc_connect=${enc(nativeString(config, includePassword, true))}`;
     const scheme = kind === "postgresql" ? "postgresql+psycopg2" : kind === "mariadb" ? "mariadb+pymysql" : "mysql+pymysql";
     const host = config.host.includes(":") && !config.host.startsWith("[") ? `[${config.host}]` : config.host;
-    const scope = kind === "postgresql" && config.schema ? `?options=${enc(pgOptions(config.schema))}` : "";
+    const query = kind === "postgresql" ? pgQuery(config) : [];
+    const scope = query.length ? `?${query.map(([key, value]) => `${key}=${enc(value)}`).join("&")}` : "";
     // SQLAlchemy decodes user/password, but keeps the database portion literal.
     return `${scheme}://${enc(config.username)}:${enc(password(config, includePassword))}@${host}:${config.port || defaults[kind]}/${config.database}${scope}`;
   }
@@ -66,7 +83,8 @@ export function formatConnectionString(config: ConnectionConfig, format: Connect
     if (kind === "sqlserver") return `import pyodbc\n\nconnection = pyodbc.connect(${literal(nativeString(config, includePassword, true))})`;
     if (kind === "databricks") return `from databricks import sql\n\nconnection = sql.connect(\n    server_hostname=${literal(config.host)},\n    http_path=${literal(config.http_path ?? "")},\n    ${config.databricks_auth_mode === "oauth" ? 'auth_type="databricks-oauth"' : `access_token=${literal(password(config, includePassword))}`},\n    catalog=${literal(config.database)},\n    schema=${literal(config.schema ?? "default")},\n)`;
     const dialect = kind === "postgresql" ? "postgresql+psycopg2" : kind === "mariadb" ? "mariadb+pymysql" : "mysql+pymysql";
-    return `from sqlalchemy import URL, create_engine\n\nurl = URL.create(\n    ${literal(dialect)},\n    username=${literal(config.username)},\n    password=${literal(password(config, includePassword))},\n    host=${literal(config.host)},\n    port=${config.port || defaults[kind]},\n    database=${literal(config.database)},\n${kind === "postgresql" && config.schema ? `    query={"options": ${literal(pgOptions(config.schema))}},\n` : ""})\nengine = create_engine(url)`;
+    const query = kind === "postgresql" ? pgQuery(config) : [];
+    return `from sqlalchemy import URL, create_engine\n\nurl = URL.create(\n    ${literal(dialect)},\n    username=${literal(config.username)},\n    password=${literal(password(config, includePassword))},\n    host=${literal(config.host)},\n    port=${config.port || defaults[kind]},\n    database=${literal(config.database)},\n${query.length ? `    query={${query.map(([key, value]) => `${literal(key)}: ${literal(value)}`).join(", ")}},\n` : ""})\nengine = create_engine(url)`;
   }
   const names = kind === "sqlserver" ? ["Microsoft.Data.SqlClient", "SqlConnection"] : kind === "postgresql" ? ["Npgsql", "NpgsqlConnection"] : kind === "sqlite" ? ["Microsoft.Data.Sqlite", "SqliteConnection"] : kind === "databricks" ? ["System.Data.Odbc", "OdbcConnection"] : ["MySqlConnector", "MySqlConnection"];
   return `using ${names[0]};\n\nusing var connection = new ${names[1]}(${literal(nativeString(config, includePassword))});\nconnection.Open();`;
@@ -116,11 +134,15 @@ export function parseConnectionString(input: string, selectedKind: ConnectionCon
     const pathStart = text.indexOf("/", text.indexOf("://") + 3), queryStart = text.indexOf("?", pathStart);
     const database = pathStart >= 0 ? text.slice(pathStart + 1, queryStart >= 0 ? queryStart : undefined) : "";
     if (!url.hostname || !database) fail();
-    const config = { ...base(kind), host: url.hostname.replace(/^\[|\]$/g, ""), port: port(url.port, kind), database: scheme.includes("+") ? database : decode(database), username: decode(url.username), password: decode(url.password) };
+    const config: ConnectionConfig = { ...base(kind), host: url.hostname.replace(/^\[|\]$/g, ""), port: port(url.port, kind), database: scheme.includes("+") ? database : decode(database), username: decode(url.username), password: decode(url.password) };
     const query = new URLSearchParams(queryStart >= 0 ? text.slice(queryStart + 1) : ""), seen = new Set<string>();
     for (const [key, value] of query) {
       if (seen.has(key.toLowerCase())) throw new Error("Connection string contém parâmetros duplicados."); seen.add(key.toLowerCase());
       if (kind === "postgresql" && key === "options" && /^-csearch_path=(?:\\[\s\S]|[^\s\\])+$/.test(value)) config.schema = parsePgSchema(value.slice(14).replace(/\\([\\\s])/g, "$1"));
+      else if (kind === "postgresql" && pgTlsFields.includes(key.toLowerCase() as typeof pgTlsFields[number])) {
+        const field = key.toLowerCase() as typeof pgTlsFields[number];
+        if (field === "sslmode") config.sslmode = pgTlsMode(value); else config[field] = value;
+      }
       else if (kind === "sqlserver" && key.toLowerCase() === "trustservercertificate") config.trust_server_certificate = flag(value);
       else if (kind === "sqlserver" && key.toLowerCase() === "driver" && /^ODBC Driver (17|18) for SQL Server$/i.test(value)) { /* Equivalent bundled driver. */ }
       else throw new Error("A conexão possui opções que o cadastro do DataPyn não suporta.");
@@ -138,7 +160,7 @@ export function parseConnectionString(input: string, selectedKind: ConnectionCon
   if (driver && !/sql server|postgres|mysql|mariadb|databricks|simba|spark/i.test(driver)) throw new Error("Driver ODBC não suportado no cadastro do DataPyn.");
   const allowed = new Set(kind === "sqlite" ? ["datasource", "database"] : ["driver", "server", "datasource", "host", "port", "database", "username", "userid", "uid", "user", "password", "pwd",
     ...(kind === "sqlserver" ? ["initialcatalog", "integratedsecurity", "trustedconnection", "authentication", "encrypt", "trustservercertificate", "persistsecurityinfo"] : []),
-    ...(kind === "postgresql" ? ["searchpath"] : []),
+    ...(kind === "postgresql" ? ["searchpath", "sslmode", "sslrootcert", "rootcertificate", "sslcert", "sslcertificate", "sslkey"] : []),
     ...(kind === "databricks" ? ["httppath", "catalog", "schema", "ssl", "thrifttransport", "authmech", "authflow"] : [])]);
   if ([...values.keys()].some(key => !allowed.has(key))) throw new Error("A conexão possui opções que o cadastro do DataPyn não suporta.");
   config.database = get("database", "initialcatalog") ?? "";
@@ -155,7 +177,14 @@ export function parseConnectionString(input: string, selectedKind: ConnectionCon
     config.trust_server_certificate = flag(get("trust server certificate"));
     if (get("encrypt") && !flag(get("encrypt"))) throw new Error("O DataPyn usa criptografia no SQL Server; Encrypt=false não é suportado.");
   }
-  if (kind === "postgresql") config.schema = parsePgSchema(get("search path") ?? "public");
+  if (kind === "postgresql") {
+    config.schema = parsePgSchema(get("search path") ?? "public");
+    const mode = get("ssl mode"); if (mode !== undefined) config.sslmode = pgTlsMode(mode);
+    const root = get("root certificate", "sslrootcert"), cert = get("ssl certificate", "sslcert"), key = get("ssl key");
+    if (root !== undefined) config.sslrootcert = root;
+    if (cert !== undefined) config.sslcert = cert;
+    if (key !== undefined) config.sslkey = key;
+  }
   if (kind === "databricks") {
     config.http_path = get("http path") ?? ""; config.database = get("catalog") ?? ""; config.schema = get("schema") ?? "default";
     const mechanism = get("authmech") ?? "3";

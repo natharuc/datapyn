@@ -4,7 +4,7 @@ import type { ConnectionConfig } from "./workspace";
 export interface ConnectionGroup { id: string; name: string; parent_id: string | null; color: string; order: number }
 export interface SavedConnection {
   id: string; name: string; group_id: string | null; color: string; favorite: boolean; order: number;
-  config: ConnectionConfig; has_password: boolean; created_at?: string; last_used?: string;
+  config: ConnectionConfig; has_password: boolean; has_ssh_password?: boolean; has_ssh_passphrase?: boolean; created_at?: string; last_used?: string;
 }
 export interface ConnectionCatalog { version: number; groups: ConnectionGroup[]; connections: SavedConnection[] }
 export interface CatalogSnapshot { catalog: ConnectionCatalog; loading: boolean; error: string; loaded: boolean }
@@ -59,9 +59,13 @@ export class ConnectionsController {
     await this.refresh();
     return result;
   }
-  save(connection: { id?: string; name: string; group_id?: string | null; color?: string; favorite?: boolean; config: ConnectionConfig }, password?: string, savePassword = false) {
+  save(connection: { id?: string; name: string; group_id?: string | null; color?: string; favorite?: boolean; config: ConnectionConfig }, password?: string, savePassword = false, saveSshCredentials?: boolean) {
     const { password: _secret, ...config } = connection.config;
-    return this.mutate<SavedConnection>("connections.save", { connection: { ...connection, config }, password, save_password: savePassword });
+    const ssh = config.ssh;
+    const { password: sshPassword, passphrase: sshPassphrase, ...publicSsh } = ssh ?? {};
+    return this.mutate<SavedConnection>("connections.save", { connection: { ...connection, config: ssh ? { ...config, ssh: publicSsh } : config }, password, save_password: savePassword,
+      ...(sshPassword ? { ssh_password: sshPassword } : {}), ...(sshPassphrase ? { ssh_passphrase: sshPassphrase } : {}),
+      ...(saveSshCredentials !== undefined ? { save_ssh_credentials: saveSshCredentials } : {}) });
   }
   exportConfig(connectionId: string, includePassword = false) {
     return this.transport.request<{ config: ConnectionConfig; password_included: boolean }>("connections.export_config", { connection_id: connectionId, include_password: includePassword });

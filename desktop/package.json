@@ -1,6 +1,6 @@
 {
   "name": "datapyn-desktop",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "private": true,
   "type": "module",
   "overrides": {
@@ -14,6 +14,7 @@
     "test:autocomplete": "node scripts/test-autocomplete.mjs",
     "test:theme": "node scripts/test-theme.mjs",
     "test:updates": "node scripts/test-updates.mjs",
+    "test:ssh": "node scripts/test-ssh.mjs",
     "desktop:dev": "node ../scripts/tauri/dev.mjs",
     "runtime:bundle": "node ../scripts/tauri/runtime.mjs",
     "desktop:build": "node ../scripts/tauri/build.mjs",

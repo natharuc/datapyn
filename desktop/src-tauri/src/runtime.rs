@@ -19,13 +19,50 @@ use tokio::sync::oneshot;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 // Match the Python supervisor limit and reject before writing to its pipe.
 const MAX_REQUEST_BYTES: usize = 24 * 1024 * 1024;
-type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>;
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RuntimeRequestError {
+    pub code: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<Value>,
+}
+
+impl From<String> for RuntimeRequestError {
+    fn from(message: String) -> Self {
+        Self {
+            code: "runtime_error".into(),
+            message,
+            details: None,
+        }
+    }
+}
+
+impl From<&str> for RuntimeRequestError {
+    fn from(message: &str) -> Self {
+        message.to_owned().into()
+    }
+}
+
+impl std::fmt::Display for RuntimeRequestError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::ops::Deref for RuntimeRequestError {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.message
+    }
+}
+
+type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, RuntimeRequestError>>>>>;
 
 async fn wait_for_response(
     method: &str,
     deadline: tokio::time::Instant,
-    receiver: oneshot::Receiver<Result<Value, String>>,
-) -> Result<Value, String> {
+    receiver: oneshot::Receiver<Result<Value, RuntimeRequestError>>,
+) -> Result<Value, RuntimeRequestError> {
     // Large files and database uploads can legitimately take hours. They have
     // operation IDs, progress and explicit cancellation. A transport write is
     // still bounded above; disconnecting Python fails every pending receiver.
@@ -55,7 +92,7 @@ impl Backend {
         app: tauri::AppHandle,
         method: String,
         params: Value,
-    ) -> Result<Value, String> {
+    ) -> Result<Value, RuntimeRequestError> {
         self.request_with(method, params, || RuntimeClient::start(app))
             .await
     }
@@ -67,9 +104,9 @@ impl Backend {
         method: String,
         params: Value,
         start: impl FnOnce() -> Result<RuntimeClient, String> + Send,
-    ) -> Result<Value, String> {
+    ) -> Result<Value, RuntimeRequestError> {
         if !allowed_method(&method) {
-            return Err(format!("Unsupported runtime method: {method}"));
+            return Err(format!("Unsupported runtime method: {method}").into());
         }
         if !params.is_object() {
             return Err("Runtime parameters must be an object".into());
@@ -142,6 +179,7 @@ fn allowed_method(method: &str) -> bool {
             | "parameters.scan"
             | "connection.test"
             | "connection.test_cancel"
+            | "ssh.host_key.trust"
             | "connection.idle_timeout"
             | "data.import"
             | "data.import_cancel"
@@ -330,7 +368,11 @@ impl RuntimeClient {
         })
     }
 
-    async fn request(self: &Arc<Self>, method: String, params: Value) -> Result<Value, String> {
+    async fn request(
+        self: &Arc<Self>,
+        method: String,
+        params: Value,
+    ) -> Result<Value, RuntimeRequestError> {
         if self.closed.load(Ordering::Acquire) {
             return Err("Python runtime disconnected".into());
         }
@@ -377,7 +419,7 @@ impl RuntimeClient {
             if let Ok(mut pending) = self.pending.lock() {
                 pending.remove(&id);
             }
-            return Err(error);
+            return Err(error.into());
         }
         let response = wait_for_response(&method, deadline, receiver).await;
         if response.is_err() {
@@ -428,25 +470,36 @@ impl Drop for RuntimeClient {
     }
 }
 
-fn decode_response(message: &Value) -> Result<Value, String> {
+fn decode_response(message: &Value) -> Result<Value, RuntimeRequestError> {
     if let Some(error) = message.get("error") {
-        Err(error
-            .get("message")
-            .and_then(Value::as_str)
-            .unwrap_or("Python request failed")
-            .to_owned())
+        Err(RuntimeRequestError {
+            code: error
+                .get("code")
+                .and_then(Value::as_str)
+                .unwrap_or("runtime_error")
+                .to_owned(),
+            message: error
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Python request failed")
+                .to_owned(),
+            details: error
+                .get("details")
+                .filter(|value| value.is_object())
+                .cloned(),
+        })
     } else {
         message
             .get("result")
             .cloned()
-            .ok_or_else(|| "Python response missing result".to_owned())
+            .ok_or_else(|| RuntimeRequestError::from("Python response missing result"))
     }
 }
 
 fn fail_pending(pending: &Pending, error: &str) {
     if let Ok(mut map) = pending.lock() {
         for (_, sender) in map.drain() {
-            let _ = sender.send(Err(error.to_owned()));
+            let _ = sender.send(Err(error.into()));
         }
     }
 }
@@ -865,7 +918,8 @@ mod tests {
             assert_eq!(
                 wait_for_response("data.import", tokio::time::Instant::now(), receiver)
                     .await
-                    .unwrap_err(),
+                    .unwrap_err()
+                    .message,
                 "Import cancelled"
             );
             let (sender, receiver) = oneshot::channel();
@@ -889,9 +943,27 @@ mod tests {
         );
         assert!(decode_response(&json!({"id":1})).is_err());
         assert_eq!(
-            decode_response(&json!({"error":{"message":"invalid session"}})).unwrap_err(),
+            decode_response(&json!({"error":{"message":"invalid session"}}))
+                .unwrap_err()
+                .message,
             "invalid session"
         );
+    }
+
+    #[test]
+    fn structured_host_key_errors_survive_the_native_bridge() {
+        let details = json!({"host":"ssh.example","port":22,"fingerprint":"SHA256:test","public_key":"public-only","key_type":"ssh-ed25519"});
+        let error = decode_response(&json!({"error":{"code":"ssh_host_key_unknown","message":"Confirm the SSH host key","details":details}})).unwrap_err();
+        let encoded = serde_json::to_value(error).unwrap();
+        assert_eq!(encoded["code"], "ssh_host_key_unknown");
+        assert_eq!(encoded["details"], details);
+        let plain =
+            decode_response(&json!({"error":{"message":"{\"code\":\"ssh_host_key_unknown\"}"}}))
+                .unwrap_err();
+        assert_eq!(plain.code, "runtime_error");
+        assert!(plain.details.is_none());
+        assert!(allowed_method("ssh.host_key.trust"));
+        assert!(!allowed_method("ssh.exec"));
     }
     #[test]
     fn native_bridge_only_exposes_runtime_contract() {

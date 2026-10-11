@@ -29,6 +29,23 @@ def smoke(executable=None, timeout=90):
 from pathlib import Path
 from datapyn_runtime.distribution import verify_runtime_distribution
 report = verify_runtime_distribution()
+# Exercise encrypted OpenSSH keys in the actual sidecar, including native
+# cryptography/bcrypt/PyNaCl dependencies rather than just import availability.
+import tempfile, paramiko
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa, ed25519, ec
+from datapyn_runtime.ssh_tunnel import fingerprint
+report['ssh_key_formats'] = []
+with tempfile.TemporaryDirectory(prefix='datapyn-ssh-key-smoke-') as key_directory:
+    for index, private_key in enumerate((rsa.generate_private_key(public_exponent=65537, key_size=2048),
+                                         ed25519.Ed25519PrivateKey.generate(), ec.generate_private_key(ec.SECP256R1()))):
+        path = Path(key_directory) / f'key-{index}'
+        path.write_bytes(private_key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.OpenSSH,
+                                                  serialization.BestAvailableEncryption(b'isolated-smoke-passphrase')))
+        key = paramiko.PKey.from_path(path, password=b'isolated-smoke-passphrase')
+        assert fingerprint(key).startswith('SHA256:')
+        assert key.can_sign()
+        report['ssh_key_formats'].append(key.get_name())
 backend_module, backend_class = {
     'win32': ('keyring.backends.Windows', 'WinVaultKeyring'),
     'linux': ('keyring.backends.SecretService', 'Keyring'),
@@ -59,6 +76,7 @@ pd.DataFrame({'report': [json.dumps(report)]})"""
             finished = client.execute("distribution", "drivers", "python", code)
             report = json.loads(result_page(client, "distribution", finished)["rows"][0][0])
             assert set(report["databases"]) == {"sqlserver", "mysql", "mariadb", "postgresql", "databricks", "sqlite"}
+            assert set(report["ssh_key_formats"]) == {"ssh-rsa", "ssh-ed25519", "ecdsa-sha2-nistp256"}
             if executable:
                 assert report["frozen"] is True
             print(json.dumps({"status": "passed", **report}, indent=2))

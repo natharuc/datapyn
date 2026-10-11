@@ -42,6 +42,13 @@ de produção do PyQt6. Não há um driver alternativo específico para a interf
 blocos Python que importavam esses módulos. A conexão principal SQL Server usa
 `pyodbc`; `pymssql` não substitui silenciosamente ODBC ou o fluxo MFA.
 
+PostgreSQL, MySQL, MariaDB e SQL Server TCP também podem usar um túnel SSH
+interno. Paramiko, bcrypt e PyNaCl acompanham o runtime; não é necessário
+instalar um cliente SSH. O cadastro mantém os endpoints SSH e do banco
+separados, confirma a fingerprint antes de autenticar e preserva a validação
+TLS do banco. Consulte [Conexões por túnel SSH](SSH_TUNNELS.md) para configurar,
+testar e usar ambientes em containers na mesma VPS.
+
 Autenticação integrada exige a identidade e a configuração de domínio do SO.
 Em Linux/macOS, uma configuração Kerberos apropriada pode ser necessária.
 O instalador não provisiona servidores, instâncias LocalDB, contas de domínio,
