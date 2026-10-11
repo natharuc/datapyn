@@ -1,5 +1,6 @@
 .connections-sidebar{display:flex;flex-direction:column;min-height:0;min-width:0;height:100%;font-size:12px;gap:8px;padding-top:8px;box-sizing:border-box}
 .connections-active{display:flex;align-items:center;gap:9px;padding:6px 8px 10px;border-bottom:1px solid var(--border)}
+.connections-active>svg,.connections-active>.icon-button{flex-shrink:0}
 .connections-active>div{display:flex;flex-direction:column;gap:3px;flex:1;min-width:0}
 .connections-active strong,.connections-active small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .connections-active strong{font-size:12px;font-weight:500}

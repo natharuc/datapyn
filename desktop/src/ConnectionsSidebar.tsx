@@ -42,6 +42,7 @@ export function ConnectionsSidebar({ activeConnectionId, onConnect, onDisconnect
   const viewport = useRef<HTMLDivElement>(null), tree = useRef<HTMLDivElement>(null), menuOpening = useRef(0);
   const documentRevision = useOwnerDocumentRevision(viewport);
   const rows = useMemo(() => connectionRows(state.catalog, expanded, query, favorites), [state.catalog, expanded, query, favorites]);
+  const groupPaths = useMemo(() => new Map(groupHierarchy(state.catalog.groups).map(({ group, label }) => [group.id, label])), [state.catalog.groups]);
   useEffect(() => { void controller.ensureLoaded(); }, [controller]);
   useEffect(() => { const element = viewport.current; if (!element) return; const Resize = (element.ownerDocument.defaultView as (Window & typeof globalThis) | null)?.ResizeObserver; if (!Resize) return; const observer = new Resize(([entry]) => setHeight(entry.contentRect.height)); observer.observe(element); return () => observer.disconnect(); }, [documentRevision]);
   useEffect(() => { setMenu(undefined); }, [documentRevision]);
@@ -49,6 +50,7 @@ export function ConnectionsSidebar({ activeConnectionId, onConnect, onDisconnect
   useEffect(() => { if (!state.loaded) return; setExpanded((prior) => new Set([...prior, ...state.catalog.groups.filter((group) => !group.parent_id).map((group) => group.id)])); }, [state.loaded]);
   const rowHeight = 32, first = Math.max(0, Math.floor(scroll / rowHeight) - 6), end = Math.min(rows.length, Math.ceil((scroll + height) / rowHeight) + 6);
   const active = state.catalog.connections.find((connection) => connection.id === activeConnectionId);
+  const activeGroupPath = active ? groupPaths.get(active.group_id ?? "") ?? t("Sem grupo") : undefined;
   const perform = async (task: () => Promise<unknown> | unknown) => {
     setBusy(true); try { await task(); } catch (failure) { onError?.(errorText(failure)); } finally { setBusy(false); }
   };
@@ -117,7 +119,7 @@ export function ConnectionsSidebar({ activeConnectionId, onConnect, onDisconnect
   }
   if (menu) menuItems.push({ id: "delete", label: menu.row.connection ? t("Excluir conexão") : t("Excluir grupo"), icon: <Trash2 size={14} />, separator: true, danger: true, disabled: busy, onSelect: () => setDeleting(menu.row) });
   return <section className={`connections-sidebar ${compact ? "compact" : ""}`} aria-label={t("Conexões")}>
-    {!compact && active && <div className="connections-active"><DatabaseIcon dbType={active.config.db_type} color={effectiveConnectionColor(active,state.catalog)} /><div><strong title={active.name}>{active.name}</strong><small title={active.config.database}>{active.config.db_type} · {active.config.database}</small></div>{onDisconnect && activeConnectionId && <button className="icon-button" title={t("Desconectar")} aria-label={t("Desconectar")} disabled={disabled || busy} onClick={() => void perform(onDisconnect)}><X size={14} /></button>}</div>}
+    {!compact && active && <div className="connections-active"><DatabaseIcon dbType={active.config.db_type} color={effectiveConnectionColor(active,state.catalog)} /><div><strong title={active.name}>{active.name}</strong><small title={active.config.database}>{active.config.db_type} · {active.config.database}</small><small className="connections-active-group" title={activeGroupPath}>{activeGroupPath}</small></div>{onDisconnect && activeConnectionId && <button className="icon-button" title={t("Desconectar")} aria-label={t("Desconectar")} disabled={disabled || busy} onClick={() => void perform(onDisconnect)}><X size={14} /></button>}</div>}
     <div className="connections-toolbar"><strong>{t("Conexões")}</strong><button className="icon-button" title={t("Nova conexão")} aria-label={t("Nova conexão")} onClick={() => setEdit("new")}><Database size={14} /></button><button className="icon-button" title={t("Novo grupo")} aria-label={t("Novo grupo")} onClick={() => setGroupEdit("new")}><FolderPlus size={14} /></button><button className="icon-button" title={t("Gerenciar conexões")} aria-label={t("Gerenciar conexões")} onClick={() => setManager(true)}><Settings2 size={14} /></button><button className="icon-button" title={t("Atualizar conexões")} aria-label={t("Atualizar conexões")} onClick={() => void controller.refresh()} disabled={state.loading}><RefreshCw size={14} /></button></div>
     <div className="connections-search"><Search size={14} /><input aria-label={t("Buscar conexões")} value={query} onChange={(event) => { setQuery(event.target.value); if (viewport.current) viewport.current.scrollTop = 0; }} placeholder={t("Buscar conexões")} /><button className={`icon-button ${favorites ? "selected" : ""}`} title={t("Mostrar favoritas")} aria-label={t("Mostrar favoritas")} aria-pressed={favorites} onClick={() => setFavorites(!favorites)}><Star size={14} fill={favorites ? "currentColor" : "none"} /></button></div>
     {state.error && <p className="catalog-error" role="alert">{t(state.error)}</p>}
