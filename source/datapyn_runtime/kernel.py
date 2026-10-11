@@ -293,6 +293,7 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                 old_stdout, old_stderr = sys.stdout, sys.stderr
                 sys.stdout, sys.stderr = CapturedStream(capture, "stdout"), CapturedStream(capture, "stderr")
                 results, rich_outputs, error, download_result = [], [], None, None
+                connection_error = None
                 command_results = []
                 execution_connection = None
                 previous_context = None
@@ -383,8 +384,16 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                     for output in capture_figures():
                         rich_capture.add(output)
                     rich_outputs = rich_capture.outputs
-                except BaseException:
-                    error = traceback.format_exc()[-32_768:]
+                except BaseException as exc:
+                    code = getattr(exc, "code", "")
+                    if isinstance(code, str) and code.startswith("ssh_"):
+                        from .errors import serialize_runtime_error
+                        connection_error = serialize_runtime_error(exc)
+                        error = connection_error["message"]
+                        if code == "ssh_host_key_unknown":
+                            error += " Abra o cadastro da conexão e use Testar conexão para conferir e confirmar a fingerprint SSH."
+                    else:
+                        error = traceback.format_exc()[-32_768:]
                 finally:
                     delimiter_context.__exit__(None, None, None)
                     sys.stdout, sys.stderr = old_stdout, old_stderr
@@ -406,6 +415,9 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                     payload["scope_inherited"] = params["scope_inherited"] is True
                 if error:
                     payload["error"] = error
+                if connection_error:
+                    payload["error_code"] = connection_error["code"]
+                    payload["error_details"] = connection_error.get("details", {})
                 if rich_outputs:
                     payload["rich_outputs"] = rich_outputs
                 if download_result is not None:
@@ -598,7 +610,8 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                 send({"job_id": job_id, "result": result})
             except BaseException as exc:
                 from .export_control import ExportCancelled
-                send({"job_id": job_id, "error": {"code": "cancelled" if isinstance(exc, ExportCancelled) else "operation_failed", "message": f"{type(exc).__name__}: {exc}"}})
+                from .errors import serialize_runtime_error
+                send({"job_id": job_id, "error": serialize_runtime_error(exc, default_code="cancelled" if isinstance(exc, ExportCancelled) else "operation_failed")})
     finally:
         pool.disconnect()
         commands.close()

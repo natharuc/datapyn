@@ -20,6 +20,7 @@ import type { EditorPreferences } from "./MonacoBlock";
 import { ResultGrid } from "./ResultGrid";
 import { CommandResults } from "./CommandResults";
 import { ConnectionDialog } from "./ConnectionDialog";
+import { SshHostTrustDialog } from "./SshHostTrustDialog";
 import { DEFAULT_SHORTCUTS, commandForEvent, EDITOR_COMMANDS, type Command } from "./shortcuts";
 import { SettingsDialog } from "./SettingsDialog";
 import { DEFAULT_PREFERENCES, loadPreferences, normalizePreferences, savePreferences, type Preferences } from "./preferences";
@@ -109,6 +110,7 @@ export function App() {
   const catalogState=useSyncExternalStore(connections.subscribe,connections.getSnapshot);
   const state = useSyncExternalStore(workspace.subscribe, workspace.getSnapshot);
   const session = state.sessions.find((item) => item.id === state.activeId)!;
+  const activeSavedConnection = catalogState.catalog.connections.find(item => item.id === session.savedConnectionId);
   const openingConnection=connectionPending(session.connectionState);
   const connectionBlocked=openingConnection||session.connectionState?.phase==="error";
   const retryConnectionId=session.connectionState?.phase==="error"&&session.connectionState.name?session.connectionState.connectionId:session.connectionState?.connectionId??session.savedConnectionId;
@@ -776,7 +778,8 @@ export function App() {
     {workspaceManager && <Suspense fallback={null}><WorkspaceManagerDialog busy={state.sessions.some(s=>s.busy) || switchingProfile} onSelect={selectProfile} onClose={()=>setWorkspaceManager(false)} onMessage={reportMessage}/></Suspense>}
     <NotificationToasts center={notificationCenter} entries={notificationState.toasts} onActivate={openNotification} leading={<UpdateNotice controller={updates.controller} onOpen={()=>setUpdateDialog(true)}/>}/>
     {notificationHistory && <NotificationHistory center={notificationCenter} entries={notificationState.entries} onActivate={openNotification} onSettings={()=>{setNotificationHistory(false);setNotificationDialog(true);}} onClose={()=>setNotificationHistory(false)}/>}
-    {connectionDialog && <ConnectionDialog initial={session.connection} onClose={() => setConnectionDialog(false)} onConnect={async (config) => { await workspace.connect(session.id, config); setExplorerRefresh(n=>n+1); }} />}
+    {connectionDialog && <ConnectionDialog initial={session.connection} connectionId={session.savedConnectionId} hasPassword={activeSavedConnection?.has_password} hasSshPassword={activeSavedConnection?.has_ssh_password} hasSshPassphrase={activeSavedConnection?.has_ssh_passphrase} onClose={() => setConnectionDialog(false)} onConnect={async (config, metadata) => { await workspace.connect(session.id, config, session.savedConnectionId, metadata?.use_saved_database_password !== false); setExplorerRefresh(n=>n+1); }} />}
+    <SshHostTrustDialog />
     {settingsDialog && <SettingsDialog preferences={preferences} shortcuts={shortcuts} transfer={configurationActions} onClose={() => setSettingsDialog(false)} onSave={async(p,next) => { await saveNotificationFlags(runtime,p);setPreferences(p);if(p.notifications && !preferences.notifications && isDesktop())run(requestPermission());setShortcuts(next); workspace.patchSession(session.id,s=>({...s,extras:{...s.extras,shared_delimiter:p.sharedDelimiter}})); try { localStorage.setItem("datapyn.desktop.shortcuts.v1", JSON.stringify(next)); } catch { reportMessage("Atalhos aplicados. Não foi possível persistir nesta máquina."); } setSettingsDialog(false); }} />}
     {connectionPicker && <ConnectionPicker currentId={session.blocks.find(b=>b.id === connectionPicker)?.connection_id ?? session.savedConnectionId} onSelect={c => { if (connectionPicker === session.blocks[0].id) run(connectSaved(c).then(()=>workspace.updateBlock(session.id,session.blocks[0].id,{connection_id:undefined,database_name:undefined,schema:undefined}))); else workspace.updateBlock(session.id,connectionPicker,{connection_id:c.id,database_name:undefined,schema:undefined}); setConnectionPicker(undefined); requestAnimationFrame(()=>focusEditor(session.focusedBlockId)); }} onDefault={()=>{workspace.updateBlock(session.id,connectionPicker,{connection_id:undefined,database_name:undefined,schema:undefined});setConnectionPicker(undefined);}} onClose={()=>setConnectionPicker(undefined)}/>}
     {connectionsManager && <div className="modal-overlay"><section className="modal connection-manager" role="dialog" aria-modal="true" aria-label={translateUi("Gerenciar conexões")}><header className="modal-header"><h2>{translateUi("Gerenciar conexões")}</h2><button onClick={()=>setConnectionsManager(false)}>{translateUi("×")}</button></header><ConnectionsSidebar activeConnectionId={session.savedConnectionId} onConnect={connectSaved} onError={reportMessage}/></section></div>}

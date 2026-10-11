@@ -13,30 +13,48 @@ import uuid
 
 from .paths import workspace_root
 
-SECRET_KEYS = {"password", "token", "access_token", "client_secret"}
+SECRET_KEYS = {"password", "token", "access_token", "client_secret", "passphrase", "private_key",
+               "sslpassword", "ssl_key_password"}
+SSH_SECRET_KEYS = {"password", "passphrase"}
 DATABASE_TYPES = {"sqlite", "sqlserver", "postgresql", "mysql", "mariadb", "databricks"}
 
 
 class CredentialStore:
     service = "DataPyn.Tauri.Connections"
 
-    def get(self, identifier):
+    @staticmethod
+    def _backend():
+        """Refuse file/plaintext fallbacks, including a chainer that can select one."""
         import keyring
-        value = keyring.get_password(self.service, identifier)
+        backend = keyring.get_keyring()
+        secure_modules = {"keyring.backends.Windows", "keyring.backends.macOS",
+                          "keyring.backends.SecretService", "keyring.backends.libsecret",
+                          "keyring.backends.kwallet"}
+
+        def secure(candidate):
+            if type(candidate).__module__ == "keyring.backends.chainer":
+                choices = list(candidate.backends)
+                return bool(choices) and all(secure(choice) for choice in choices)
+            return type(candidate).__module__ in secure_modules and candidate.priority > 0
+
+        if not secure(backend):
+            raise RuntimeError("Secure OS credential storage is unavailable; credentials were not saved or read")
+        return backend
+
+    def get(self, identifier):
+        value = self._backend().get_password(self.service, identifier)
         return json.loads(value) if value else {}
 
     def set(self, identifier, secrets):
-        import keyring
         if secrets:
-            keyring.set_password(self.service, identifier, json.dumps(secrets))
+            self._backend().set_password(self.service, identifier, json.dumps(secrets))
         else:
             self.delete(identifier)
 
     def delete(self, identifier):
-        import keyring
         from keyring.errors import PasswordDeleteError
         try:
-            keyring.delete_password(self.service, identifier)
+            self._backend().delete_password(self.service, identifier)
         except PasswordDeleteError:
             pass
 
@@ -60,10 +78,45 @@ def _path(value):
 def without_secrets(value):
     """Keep extension metadata, while never transferring credential fields."""
     if isinstance(value, dict):
-        return {key: without_secrets(item) for key, item in value.items() if str(key).lower() not in SECRET_KEYS}
+        return {key: without_secrets(item) for key, item in value.items()
+                if str(key).lower() not in SECRET_KEYS and key != "_ssh_trust_path"}
     if isinstance(value, list):
         return [without_secrets(item) for item in value]
     return deepcopy(value)
+
+
+def ssh_identity(config):
+    """Credentials belong to one SSH endpoint, account and authentication method."""
+    ssh = config.get("ssh") or {}
+    return (str(ssh.get("host") or "").strip().casefold(), int(ssh.get("port") or 22),
+            str(ssh.get("username") or "").strip(), ssh.get("auth_method") or "password",
+            str(ssh.get("private_key_path") or "") if ssh.get("auth_method") == "private_key" else "")
+
+
+def normalized_ssh(value):
+    if not isinstance(value, dict):
+        raise ValueError("ssh must be an object")
+    enabled = value.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise ValueError("SSH enabled must be a boolean")
+    result = without_secrets(value)
+    result.pop("_identity", None)
+    result["enabled"] = enabled
+    port = value.get("port", 22)
+    if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+        raise ValueError("SSH port must be between 1 and 65535")
+    result["port"] = port
+    result["auth_method"] = value.get("auth_method", "password")
+    if result["auth_method"] not in {"password", "private_key"}:
+        raise ValueError("SSH authentication must be password or private_key")
+    for name in ("host", "username"):
+        result[name] = _text(value.get(name, ""), f"SSH {name}", empty=not enabled)
+    if enabled and result["auth_method"] == "private_key":
+        path = value.get("private_key_path")
+        if not isinstance(path, str) or not path.strip() or len(path) > 32768:
+            raise ValueError("SSH private key path is required")
+        result["private_key_path"] = path
+    return result
 
 
 class ConnectionCatalog:
@@ -78,7 +131,7 @@ class ConnectionCatalog:
             data = json.loads(self.path.read_text(encoding="utf-8-sig"))
             if data.get("version") != 1 or not isinstance(data.get("connections"), list) or not isinstance(data.get("groups"), list):
                 raise ValueError("Unsupported preview connection catalog")
-            self.data = data
+            self.data = without_secrets(data)
 
     def _save(self):
         if self._defer_save:
@@ -87,7 +140,7 @@ class ConnectionCatalog:
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.path.parent, delete=False) as stream:
             temporary = Path(stream.name)
             try:
-                json.dump(self.data, stream, ensure_ascii=False, indent=2, allow_nan=False)
+                json.dump(without_secrets(self.data), stream, ensure_ascii=False, indent=2, allow_nan=False)
                 stream.flush()
                 os.fsync(stream.fileno())
             except BaseException:
@@ -100,7 +153,7 @@ class ConnectionCatalog:
 
     def list(self):
         with self._lock:
-            return deepcopy(self.data)
+            return without_secrets(self.data)
 
     def _find(self, collection, identifier):
         item = next((entry for entry in self.data[collection] if entry["id"] == identifier), None)
@@ -113,12 +166,16 @@ class ConnectionCatalog:
             self._find("groups", group_id)
         return group_id or None
 
-    def config(self, identifier):
+    def config(self, identifier, *, resolve_database_password=True, resolve_ssh_credentials=True):
         with self._lock:
             item = self._find("connections", identifier)
             result = deepcopy(item["config"])
-            if item.get("has_password"):
+            if resolve_database_password and item.get("has_password"):
                 result.update(self.credentials.get(identifier))
+            if resolve_ssh_credentials and (result.get("ssh") or {}).get("enabled") and (item.get("has_ssh_password") or item.get("has_ssh_passphrase")):
+                saved = self.credentials.get(f"{identifier}:ssh")
+                if tuple(saved.get("_identity") or ()) == ssh_identity(result):
+                    result["ssh"].update({key: saved[key] for key in SSH_SECRET_KEYS if key in saved})
             return result
 
     def resolve_ref(self, group, name):
@@ -135,7 +192,8 @@ class ConnectionCatalog:
             self._find("connections", identifier)["last_used"] = _now()
             self._save()
 
-    def save_connection(self, connection, *, password=None, save_password=None, case_sensitive=False):
+    def save_connection(self, connection, *, password=None, save_password=None, ssh_password=None,
+                        ssh_passphrase=None, save_ssh_credentials=None, case_sensitive=False):
         if not isinstance(connection, dict) or not isinstance(connection.get("config"), dict):
             raise ValueError("connection and config must be objects")
         with self._lock:
@@ -155,6 +213,7 @@ class ConnectionCatalog:
                 raise ValueError("Unsupported database type")
             config["db_type"] = db_type
             config.pop("workspace_path", None)  # A saved profile cannot redirect application storage.
+            config.pop("_ssh_trust_path", None)
             secrets = {key: str(config.pop(key)) for key in SECRET_KEYS if config.get(key) is not None}
             for key in SECRET_KEYS:
                 config.pop(key, None)
@@ -162,28 +221,82 @@ class ConnectionCatalog:
                 secrets["password"] = str(password)
             if db_type == "postgresql":
                 config["schema"] = str(config.get("schema") or "public")
+            ssh_secrets = {}
+            ssh_changes = False
+            if "ssh" in config:
+                raw_ssh = config["ssh"]
+                config["ssh"] = normalized_ssh(raw_ssh)
+                if config["ssh"]["enabled"] and db_type not in {"postgresql", "mysql", "mariadb", "sqlserver"}:
+                    raise ValueError("SSH tunnels support PostgreSQL, MySQL, MariaDB and SQL Server connections")
+                same_identity = bool(existing and ssh_identity(existing["config"]) == ssh_identity(config))
+                supplied = {key: str(raw_ssh[key]) for key in SSH_SECRET_KEYS if raw_ssh.get(key)}
+                if ssh_password:
+                    supplied["password"] = str(ssh_password)
+                if ssh_passphrase:
+                    supplied["passphrase"] = str(ssh_passphrase)
+                auth = config["ssh"]["auth_method"]
+                supplied = {key: value for key, value in supplied.items()
+                            if key == ("password" if auth == "password" else "passphrase")}
+                if save_ssh_credentials is not None and not isinstance(save_ssh_credentials, bool):
+                    raise ValueError("save_ssh_credentials must be a boolean")
+                old_has_ssh = bool(existing and (existing.get("has_ssh_password") or existing.get("has_ssh_passphrase")))
+                # Imports never read/write keyring until the whole document validates.
+                if not self._defer_save and save_ssh_credentials is not False:
+                    if same_identity and old_has_ssh and supplied:
+                        ssh_secrets = self.credentials.get(f"{identifier}:ssh")
+                    ssh_secrets.update(supplied)
+                ssh_changes = bool(supplied and save_ssh_credentials is not False
+                                   or old_has_ssh and (save_ssh_credentials is False or not same_identity))
+                if ssh_secrets:
+                    ssh_secrets["_identity"] = list(ssh_identity(config))
             item = without_secrets({**(existing or {}), **connection})
             item.update({
                 "id": identifier, "name": name, "group_id": group_id,
                 "color": str(connection.get("color", "")), "favorite": bool(connection.get("favorite", False)),
                 "order": connection.get("order", existing.get("order", 0) if existing else len(self.data["connections"])),
                 "config": config, "has_password": bool(existing and existing.get("has_password")),
+                "has_ssh_password": False, "has_ssh_passphrase": False,
                 "created_at": connection.get("created_at", existing.get("created_at", _now()) if existing else _now()),
                 "last_used": connection.get("last_used", existing.get("last_used") if existing else None),
             })
+            credential_updates = []
+            if "ssh" in config and not self._defer_save:
+                if ssh_changes:
+                    credential_updates.append((f"{identifier}:ssh", ssh_secrets, old_has_ssh))
+                    item["has_ssh_password"] = bool(ssh_secrets.get("password"))
+                    item["has_ssh_passphrase"] = bool(ssh_secrets.get("passphrase"))
+                elif existing:
+                    item["has_ssh_password"] = bool(existing.get("has_ssh_password"))
+                    item["has_ssh_passphrase"] = bool(existing.get("has_ssh_passphrase"))
             if save_password is True and secrets:
-                self.credentials.set(identifier, secrets)
+                credential_updates.append((identifier, secrets, item["has_password"]))
                 item["has_password"] = True
             elif save_password is False:
                 if item["has_password"]:
-                    self.credentials.delete(identifier)
+                    credential_updates.append((identifier, {}, True))
                 item["has_password"] = False
-            if existing:
-                existing.clear()
-                existing.update(item)
-            else:
-                self.data["connections"].append(item)
-            self._save()
+            before = deepcopy(existing) if existing else None
+            rollback = []
+            try:
+                for key, value, present in credential_updates:
+                    previous = self.credentials.get(key) if present else {}
+                    self.credentials.set(key, value)
+                    rollback.append((key, previous))
+                if existing:
+                    existing.clear()
+                    existing.update(item)
+                else:
+                    self.data["connections"].append(item)
+                self._save()
+            except BaseException:
+                if existing:
+                    existing.clear()
+                    existing.update(before)
+                elif item in self.data["connections"]:
+                    self.data["connections"].remove(item)
+                for key, previous in reversed(rollback):
+                    self.credentials.set(key, previous)
+                raise
             return deepcopy(item)
 
     def save_group(self, group, *, case_sensitive=False):
@@ -238,13 +351,18 @@ class ConnectionCatalog:
                         included = True
                 return {"config": config, "password_included": included}
             if method == "connections.save":
-                return self.save_connection(params.get("connection"), password=params.get("password"), save_password=params.get("save_password"))
+                return self.save_connection(params.get("connection"), password=params.get("password"),
+                                            save_password=params.get("save_password"),
+                                            ssh_password=params.get("ssh_password"), ssh_passphrase=params.get("ssh_passphrase"),
+                                            save_ssh_credentials=params.get("save_ssh_credentials"))
             if method == "groups.save":
                 return self.save_group(params.get("group"))
             if method == "connections.delete":
                 item = self._find("connections", params.get("connection_id"))
                 if item.get("has_password"):
                     self.credentials.delete(item["id"])
+                if item.get("has_ssh_password") or item.get("has_ssh_passphrase"):
+                    self.credentials.delete(f"{item['id']}:ssh")
                 self.data["connections"].remove(item)
             elif method in {"connections.clone", "connections.move"}:
                 source = self._find("connections", params.get("connection_id"))
@@ -255,6 +373,10 @@ class ConnectionCatalog:
                     item["name"] = params.get("name") or f"{source['name']} copy"
                     secrets = self.credentials.get(source["id"]) if source.get("has_password") else {}
                     item["config"].update(secrets)
+                    if source.get("has_ssh_password") or source.get("has_ssh_passphrase"):
+                        ssh_secrets = self.credentials.get(f"{source['id']}:ssh")
+                        if tuple(ssh_secrets.get("_identity") or ()) == ssh_identity(source["config"]):
+                            item["config"]["ssh"].update({key: ssh_secrets[key] for key in SSH_SECRET_KEYS if key in ssh_secrets})
                     return self.save_connection(item, save_password=bool(secrets))
                 item["name"] = params.get("name", source["name"])
                 return self.save_connection(item)
@@ -323,6 +445,8 @@ class ConnectionCatalog:
                 result = without_secrets(self.data)
                 for item in result["connections"]:
                     item["has_password"] = False
+                    item["has_ssh_password"] = False
+                    item["has_ssh_passphrase"] = False
                 return result
             groups = {group["id"]: group for group in self.data["groups"]}
             names = [group["name"] for group in groups.values()]
@@ -480,7 +604,11 @@ class ConnectionCatalog:
                 profile["id"] = match["id"]
                 if match.get("has_password"):
                     credentials_to_remove.append(match["id"])
+                if match.get("has_ssh_password") or match.get("has_ssh_passphrase"):
+                    credentials_to_remove.append(f"{match['id']}:ssh")
             saved = self.save_connection(profile, case_sensitive=True)
             self._find("connections", saved["id"])["has_password"] = False
+            self._find("connections", saved["id"])["has_ssh_password"] = False
+            self._find("connections", saved["id"])["has_ssh_passphrase"] = False
             count += 1
         return {"catalog": self.list(), "imported_connections": count, "passwords_imported": False}, credentials_to_remove

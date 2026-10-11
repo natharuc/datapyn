@@ -9,6 +9,7 @@ import time
 
 from .process_group import initialize_kernel_group, own_process_group
 from .stdio import isolate_kernel_output
+from .errors import serialize_runtime_error
 
 
 def _task_main(method, params, context, pipe):
@@ -26,7 +27,7 @@ def _task_main(method, params, context, pipe):
             result = dispatch(method, params, context)
         pipe.send({"result": result})
     except BaseException as exc:
-        pipe.send({"error": {"code": "operation_failed", "message": f"{type(exc).__name__}: {exc}"}})
+        pipe.send({"error": serialize_runtime_error(exc)})
     finally:
         pipe.close()
 
@@ -103,7 +104,7 @@ class BackgroundJobs:
             try:
                 message = future.result()
             except BaseException as exc:
-                message = {"error": {"code": "operation_failed", "message": f"{type(exc).__name__}: {exc}"}}
+                message = {"error": serialize_runtime_error(exc)}
             finally:
                 with self.lock:
                     self._active_count -= 1

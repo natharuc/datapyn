@@ -23,6 +23,22 @@ export interface ConnectionConfig {
   schema?: string; http_path?: string; sqlserver_auth_mode?: string;
   use_windows_auth?: boolean; trust_server_certificate?: boolean;
   databricks_auth_mode?:"oauth"|"token";
+  ssh?: SshConnectionOptions;
+  sslmode?: "disable" | "allow" | "prefer" | "require" | "verify-ca" | "verify-full";
+  sslrootcert?: string; sslcert?: string; sslkey?: string;
+}
+export interface SshConnectionOptions {
+  enabled: boolean; host: string; port: number; username: string;
+  auth_method: "password" | "private_key";
+  password?: string; private_key_path?: string; passphrase?: string;
+}
+
+/** Live credentials belong to transient connection state, never session metadata. */
+export function connectionMetadata(config: ConnectionConfig): ConnectionConfig {
+  const { password: _password, ...metadata } = config;
+  if (!metadata.ssh) return metadata;
+  const { password: _sshPassword, passphrase: _passphrase, ...ssh } = metadata.ssh;
+  return { ...metadata, ssh };
 }
 export interface LogLine { id: string; time: string; stream: string; text: string; blockName: string }
 export interface SessionConnectionState {
@@ -275,6 +291,7 @@ export class WorkspaceController {
   private readonly connectingSessions = new Map<string, {key:string; task?:Promise<ConnectionResponse>}>();
   /** Credentials for manually configured connections never enter persisted documents. */
   private readonly transientConnections = new Map<string,ConnectionConfig>();
+  private readonly transientCredentialIds = new Map<string,{id:string;resolveDatabasePassword:boolean}>();
   private readonly directConnectionTargets = new Set<string>();
   private readonly importingSessions = new Map<string, Promise<ImportedData>>();
   private readonly completions = new Map<string, Completion>();
@@ -317,7 +334,7 @@ export class WorkspaceController {
     if(this.importingSessions.size)throw new Error("Aguarde ou cancele as importações antes de trocar de workspace.");
     if(this.state.sessions.some(s=>s.busy))throw new Error("Aguarde ou cancele as execuções antes de trocar de workspace.");
     for(const timer of this.periodicTimers.values())clearTimeout(timer);this.periodicTimers.clear();
-    this.runtimeGeneration++;this.runtimeSessions.clear();this.creatingSessions.clear();this.connectingSessions.clear();this.transientConnections.clear();this.directConnectionTargets.clear();this.cancelRequests.clear();
+    this.runtimeGeneration++;this.runtimeSessions.clear();this.creatingSessions.clear();this.connectingSessions.clear();this.transientConnections.clear();this.transientCredentialIds.clear();this.directConnectionTargets.clear();this.cancelRequests.clear();
     this.nativeRecords.clear();this.nativeSources.clear();this.editorViews.clear();
     const seenBlocks=new Set<string>(),seenSessions=new Set<string>();
     const sessions=(snapshot.documents ?? []).map(entry=>{
@@ -370,7 +387,7 @@ export class WorkspaceController {
     const saved=this.readBrowserSnapshot();if(!saved?.documents?.length)return false;
     this.restoreSnapshot({documents:saved.documents,activeIndex:saved.activeIndex});return true;
   }
-  dispose(){this.connectingSessions.clear();this.transientConnections.clear();this.directConnectionTargets.clear();this.unsubscribeEditorViews?.();this.unsubscribeEditorViews=undefined;if(this.persistTimer)clearTimeout(this.persistTimer);for(const timer of this.periodicTimers.values())clearTimeout(timer);this.periodicTimers.clear();}
+  dispose(){this.connectingSessions.clear();this.transientConnections.clear();this.transientCredentialIds.clear();this.directConnectionTargets.clear();this.unsubscribeEditorViews?.();this.unsubscribeEditorViews=undefined;if(this.persistTimer)clearTimeout(this.persistTimer);for(const timer of this.periodicTimers.values())clearTimeout(timer);this.periodicTimers.clear();}
 
   getSnapshot = () => this.state;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
@@ -452,13 +469,17 @@ export class WorkspaceController {
     const schema=preserveDocumentContext?session.schema??(session.database===undefined || session.database===inheritedDatabase?inheritedSchema:undefined):inheritedSchema;
     const sameConnection=!directTarget && connectionId===source.savedConnectionId;
     const name=changing?.name ?? (sameConnection?String(source.extras.connection_name ?? source.connection?.name ?? pending?.name ?? ""):(typeof block?.connection_name==="string"?block.connection_name:undefined));
-    if(config)this.transientConnections.set(session.id,{...config,database:database??config.database,schema:schema??config.schema});
+    if(config){
+      this.transientConnections.set(session.id,{...config,database:database??config.database,schema:schema??config.schema});
+      const credentialId=this.transientCredentialIds.get(source.id);
+      if(credentialId)this.transientCredentialIds.set(session.id,credentialId);
+    }
     return {...session,savedConnectionId:connectionId,database,schema,connectionState:{phase:"preparing",connectionId,name,scope:{database,schema}},
       extras:{...session.extras,connection_name:name,...(sameConnection?{connection_group:source.extras.connection_group}:{})}};
   }
   private prepareNewSessionConnection(session:SessionDocument) {
     const task=session.savedConnectionId?this.connectSaved(session.id,session.savedConnectionId,String(session.extras.connection_name??""),{database:session.database,schema:session.schema})
-      :this.transientConnections.has(session.id)?this.connect(session.id,this.transientConnections.get(session.id)!):undefined;
+      :this.transientConnections.has(session.id)?this.connect(session.id,this.transientConnections.get(session.id)!,this.transientCredentialIds.get(session.id)?.id,this.transientCredentialIds.get(session.id)?.resolveDatabasePassword):undefined;
     if(task)void task.catch(()=>{/* The target tab retains its authentication error and retry controls. */});
   }
   createSession(options:NewSessionOptions={}) {
@@ -568,6 +589,7 @@ export class WorkspaceController {
     this.stopPeriodic(id);
     this.connectingSessions.delete(id);
     this.transientConnections.delete(id);
+    this.transientCredentialIds.delete(id);
     this.directConnectionTargets.delete(id);
     if (this.runtimeSessions.has(id)) await this.transport.request("session.close", { session_id: id });
     this.runtimeSessions.delete(id);
@@ -602,8 +624,12 @@ export class WorkspaceController {
     const pending=this.connectingSessions.get(sessionId);
     if(pending)return pending.key===target.key ? pending.task! : Promise.reject(new Error("Uma conexão já está em andamento nesta aba."));
     const generation=this.runtimeGeneration,operation:{key:string;task?:Promise<ConnectionResponse>}={key:target.key};
-    if(target.connectionId){this.directConnectionTargets.delete(sessionId);this.transientConnections.delete(sessionId);}
-    else if(fallback){this.directConnectionTargets.add(sessionId);this.transientConnections.set(sessionId,{...fallback});}
+    if(target.connectionId){this.directConnectionTargets.delete(sessionId);this.transientConnections.delete(sessionId);this.transientCredentialIds.delete(sessionId);}
+    else if(fallback){
+      this.directConnectionTargets.add(sessionId);this.transientConnections.set(sessionId,{...fallback});
+      if(typeof params.credential_connection_id==="string")this.transientCredentialIds.set(sessionId,{id:params.credential_connection_id,resolveDatabasePassword:params.resolve_database_password!==false});
+      else this.transientCredentialIds.delete(sessionId);
+    }
     const scopeParams=target.connectionId?params:{...fallback,...params};
     const scope={...(typeof scopeParams.database==="string"?{database:scopeParams.database}:{}),...(typeof scopeParams.schema==="string"?{schema:scopeParams.schema}:{})};
     const targetState={name:target.name,connectionId:target.connectionId,...(Object.keys(scope).length?{scope}:{})};
@@ -618,7 +644,7 @@ export class WorkspaceController {
         const response=await this.transport.request<ConnectionResponse>("connection.connect",{session_id:sessionId,...params});
         if(!current())throw new Error("A conexão foi interrompida.");
         const config=response.config??response.connection??fallback;
-        const {password:_password,...safeConfig}=config??{};
+        const safeConfig=config?connectionMetadata(config):undefined;
         if(target.connectionId)this.transientConnections.delete(sessionId);
         else if(config)this.transientConnections.set(sessionId,{...fallback??config});
         this.patchSession(sessionId,s=>({...s,savedConnectionId:target.connectionId,connection:config?{...safeConfig,database:response.database??config.database,schema:response.schema??config.schema} as ConnectionConfig:undefined,
@@ -644,7 +670,7 @@ export class WorkspaceController {
       await this.connectSaved(sessionId,session.savedConnectionId,String(session.extras.connection_name??""),{database,schema});
     }else if(session && !session.connection && this.transientConnections.has(sessionId)){
       const config=this.transientConnections.get(sessionId)!;
-      await this.connect(sessionId,{...config,database:session.database??config.database,schema:session.schema??config.schema});
+      await this.connect(sessionId,{...config,database:session.database??config.database,schema:session.schema??config.schema},this.transientCredentialIds.get(sessionId)?.id,this.transientCredentialIds.get(sessionId)?.resolveDatabasePassword);
     }
   }
   async disconnect(sessionId: string) {
@@ -653,6 +679,7 @@ export class WorkspaceController {
     if(this.connectingSessions.has(sessionId))throw new Error("Aguarde a conexão antes de desconectar.");
     await this.ensureSession(sessionId); await this.transport.request("connection.disconnect", { session_id: sessionId });
     this.transientConnections.delete(sessionId);
+    this.transientCredentialIds.delete(sessionId);
     this.directConnectionTargets.delete(sessionId);
     this.patchSession(sessionId, s => ({ ...s, connection: undefined, connectionState:undefined,savedConnectionId: undefined, database: undefined, schema: undefined,extras:{...s.extras,connection_name:undefined,connection_group:undefined} }));
   }
@@ -727,8 +754,8 @@ export class WorkspaceController {
       throw error;
     }
   }
-  async connect(sessionId: string, config: ConnectionConfig) {
-    await this.establishConnection(sessionId,{key:newId(),name:config.name||config.database||config.db_type},{config},config);
+  async connect(sessionId: string, config: ConnectionConfig, credentialConnectionId?:string,resolveDatabasePassword=true) {
+    await this.establishConnection(sessionId,{key:newId(),name:config.name||config.database||config.db_type},{config,...(credentialConnectionId?{credential_connection_id:credentialConnectionId,resolve_database_password:resolveDatabasePassword}:{})},config);
     this.message(`Conectado: ${config.name || config.database || config.db_type}`);
   }
   async schema(sessionId: string): Promise<Record<string, unknown>> {

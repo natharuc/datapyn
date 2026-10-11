@@ -268,7 +268,7 @@ def _clone_configuration(source, target):
     for file in original.iterdir():
         if file.is_symlink() or not file.is_file() or file.resolve().parent != original.resolve():
             continue
-        if file.suffix.lower() not in {".ini", ".json"} or file.name.casefold() in {"notificationsecrets.ini", "workspaces.ini"}:
+        if file.suffix.lower() not in {".ini", ".json"} or file.name.casefold() in {"notificationsecrets.ini", "workspaces.ini", "ssh_known_hosts.json", "ssh-known-hosts.json"}:
             continue
         size = file.stat().st_size
         total += size
@@ -298,7 +298,8 @@ def clone(params):
             group_ids = {item["id"]: uuid.uuid4().hex for item in catalog.get("groups", [])}
             connection_ids = {item["id"]: uuid.uuid4().hex for item in catalog.get("connections", [])}
             catalog = _remap(catalog, connection_ids, group_ids)
-            from .connection_catalog import CredentialStore
+            from .connection_catalog import CredentialStore, ssh_identity, without_secrets
+            catalog = without_secrets(catalog)
             credentials = CredentialStore()
             for group in catalog.get("groups", []):
                 group["id"] = group_ids[group["id"]]
@@ -309,6 +310,14 @@ def clone(params):
                 if copied_secrets:
                     credentials.set(connection["id"], copied_secrets)
                 connection["has_password"] = bool(copied_secrets)
+                copy_ssh = params.get("include_credentials", False) and (connection.get("has_ssh_password") or connection.get("has_ssh_passphrase"))
+                ssh_secrets = credentials.get(f"{old_id}:ssh") if copy_ssh else {}
+                if tuple(ssh_secrets.get("_identity") or ()) != ssh_identity(connection.get("config") or {}):
+                    ssh_secrets = {}
+                if ssh_secrets:
+                    credentials.set(f"{connection['id']}:ssh", ssh_secrets)
+                connection["has_ssh_password"] = bool(ssh_secrets.get("password"))
+                connection["has_ssh_passphrase"] = bool(ssh_secrets.get("passphrase"))
             _write(target / "connections.json", catalog)
         for name in CONFIG_FILES:
             if name == "connections.json":

@@ -45,6 +45,19 @@ describe("saved connection tree", () => {
 });
 
 describe("catalog broker state", () => {
+  it("keeps SSH secrets out of saved config and sends them only to the secure-store request", async () => {
+    const requests: Array<{ method: string; params?: Record<string, unknown> }> = [];
+    const transport = { request: async (method: string, params?: Record<string, unknown>) => { requests.push({ method, params }); return method === "connections.list" ? catalog : connection("saved", null); }, subscribe: async () => () => {} } as RuntimeTransport;
+    const controller = new ConnectionsController(transport);
+    const config = { ...connection("x", null).config, ssh: { enabled: true, host: "ssh.example", port: 22, username: "admin", auth_method: "private_key" as const, private_key_path: "/id_ed25519", password: "ssh-secret", passphrase: "key-secret" } };
+    await controller.save({ name: "saved", config }, undefined, false, true);
+    const request = requests[0].params!, saved = (request.connection as { config: typeof config }).config;
+    expect(saved.ssh).not.toHaveProperty("password"); expect(saved.ssh).not.toHaveProperty("passphrase");
+    expect(saved.ssh.private_key_path).toBe("/id_ed25519"); expect(request.ssh_password).toBe("ssh-secret"); expect(request.ssh_passphrase).toBe("key-secret"); expect(request.save_ssh_credentials).toBe(true);
+    expect(JSON.stringify(controller.getSnapshot())).not.toContain("secret"); expect(config.ssh.passphrase).toBe("key-secret");
+    await controller.save({ name: "saved", config: { ...config, ssh: { ...saved.ssh } } }, undefined, false);
+    expect(requests.at(-2)?.params).not.toHaveProperty("save_ssh_credentials");
+  });
   it("discards old reads after switching to a newer catalog", async () => {
     const resolvers: Array<(value: ConnectionCatalog) => void> = [];
     const transport = { request: () => new Promise((resolve) => resolvers.push(resolve as (value: ConnectionCatalog) => void)), subscribe: async () => () => {} } as RuntimeTransport;

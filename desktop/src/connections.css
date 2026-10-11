@@ -62,4 +62,16 @@
 .connection-string-import{margin-bottom:14px}
 .connection-string-import summary{cursor:pointer;color:var(--muted);margin-bottom:10px}
 .connection-string-hint{font-size:12px;color:var(--muted);margin:8px 0}
+.connection-ssh-fields{min-width:0;border-top:1px solid var(--border);margin-top:12px;padding-top:12px}
+.connection-ssh-note{font-size:12px;line-height:1.5;color:var(--muted);margin:4px 0 10px;overflow-wrap:anywhere}
+.connection-tls-fields{min-width:0;margin:10px 0}
+.connection-tls-fields summary{cursor:pointer;color:var(--muted);font-size:12px;margin-bottom:10px}
+.modal.ssh-host-trust-dialog{width:520px;max-width:calc(100dvw - 48px);max-height:calc(100dvh - 48px);display:flex;flex-direction:column}
+.ssh-host-trust-content{padding:16px 20px;min-height:0;overflow:auto;font-size:12px;line-height:1.5}
+.ssh-host-trust-content p{margin:0 0 16px;color:var(--muted)}
+.ssh-host-trust-content dl{display:grid;grid-template-columns:110px minmax(0,1fr);gap:10px 14px;margin:0}
+.ssh-host-trust-content dt{color:var(--muted)}
+.ssh-host-trust-content dd{margin:0;overflow-wrap:anywhere;min-width:0}
+.ssh-host-trust-content code{font-family:var(--code-font,monospace);font-size:12px;user-select:all}
+.ssh-host-trust-dialog>.modal-header,.ssh-host-trust-dialog>.modal-footer{flex-shrink:0}
 @media(max-width:400px){.connection-manager-buttons{grid-template-columns:1fr}}

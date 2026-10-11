@@ -30,6 +30,7 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "cryptography>=48.0.0",
     "keyring>=25.0.0",
+    "paramiko>=5.0.0,<6",
     "requests>=2.33.0",
     "azure-identity>=1.17.0",
     # Code Formatting

@@ -115,6 +115,41 @@ def test_clone_remaps_catalog_ids_document_refs_without_reading_credentials(root
     assert json.loads((root / "connections.json").read_text()) == catalog
 
 
+@pytest.mark.parametrize("include_credentials", [False, True])
+def test_clone_ssh_credentials_is_explicit_and_never_copies_host_trust(root, monkeypatch, include_credentials):
+    from datapyn_runtime.connection_catalog import ConnectionCatalog
+    from test_connection_catalog import Secrets
+    import datapyn_runtime.connection_catalog as connection_catalog
+    import keyring
+
+    profiles.list_profiles()
+    secrets = Secrets()
+    catalog = ConnectionCatalog(root / "connections.json", secrets)
+    saved = catalog.save_connection({"name": "SSH database", "config": {
+        "db_type": "postgresql", "database": "docfis", "host": "127.0.0.1", "port": 5433,
+        "ssh": {"enabled": True, "host": "vps.example", "port": 22, "username": "ssh-user",
+                "auth_method": "password", "password": "ssh-secret"}}})
+    (root / "ssh_known_hosts.json").write_text('{"trusted":true}')
+    archive = root / ".pyqt-configuration"
+    archive.mkdir()
+    (archive / "SSH_KNOWN_HOSTS.json").write_text('{"trusted":true}')
+    (archive / "extension.json").write_text('{"keep":true}')
+    monkeypatch.setattr(connection_catalog, "CredentialStore", lambda: secrets)
+    monkeypatch.setattr(keyring, "get_password", lambda *_: None)
+    clone = profiles.clone({"profile_id": "default", "name": "Clone", "include_credentials": include_credentials})
+    target = Path(clone["path"])
+    copied_catalog = ConnectionCatalog(target / "connections.json", secrets)
+    copied = copied_catalog.list()["connections"][0]
+    assert copied["id"] != saved["id"]
+    assert copied["has_ssh_password"] is include_credentials
+    assert copied_catalog.config(copied["id"])["ssh"].get("password") == ("ssh-secret" if include_credentials else None)
+    assert "ssh-secret" not in (target / "connections.json").read_text()
+    assert not (target / "ssh_known_hosts.json").exists()
+    assert not (target / ".pyqt-configuration" / "SSH_KNOWN_HOSTS.json").exists()
+    assert (target / ".pyqt-configuration" / "extension.json").exists()
+    assert catalog.config(saved["id"])["ssh"]["password"] == "ssh-secret"
+
+
 def test_clone_copies_parquet_and_updates_workspace_ownership(root, monkeypatch):
     profiles.list_profiles()
     snapshot.settings_set({"settings": {"enabled": True}})

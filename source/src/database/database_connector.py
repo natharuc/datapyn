@@ -536,6 +536,7 @@ class DatabaseConnector:
         self._active_mysql_thread_id: Optional[int] = None
         self._connection_config: Dict[str, Any] = {}
         self._sqlserver_mfa_credential = None
+        self._ssh_tunnel = None
         self._last_command_results: list[SqlCommandResult] = []
         self.command_result_callback: Optional[Callable[[SqlCommandResult], None]] = None
 
@@ -558,6 +559,30 @@ class DatabaseConnector:
             bool: True if connected successfully
         """
         try:
+            if self._ssh_tunnel is not None:
+                self.disconnect()
+            connection_host, connection_port = host, port
+            driver_kwargs = dict(kwargs)
+            ssh = kwargs.get("ssh")
+            if isinstance(ssh, dict) and ssh.get("enabled"):
+                from datapyn_runtime.ssh_tunnel import SshTunnel, SshTrustStore, SshTunnelError
+
+                if db_type not in {"postgresql", "mysql", "mariadb", "sqlserver"}:
+                    raise SshTunnelError("Túnel SSH disponível para PostgreSQL, MySQL, MariaDB e SQL Server TCP.", code="ssh_database_unsupported")
+                if db_type == "sqlserver" and ("(localdb)" in host.lower() or "\\" in host):
+                    raise SshTunnelError("Para túnel SSH, informe o endereço TCP e a porta do SQL Server, sem instância nomeada.", code="ssh_database_unsupported")
+                if self.engine is not None or self._ssh_tunnel is not None:
+                    self.disconnect()
+                self._ssh_tunnel = SshTunnel(ssh, host, port, trust_store=SshTrustStore(kwargs.get("_ssh_trust_path")))
+                self._ssh_tunnel.start()
+                driver_kwargs["_ssh_original_host"] = host
+                if db_type == "postgresql":
+                    # libpq uses hostaddr for routing and host for certificate
+                    # identity; replacing host would break verify-full/SNI.
+                    driver_kwargs["_ssh_hostaddr"] = self._ssh_tunnel.local_host
+                    connection_port = self._ssh_tunnel.local_port
+                elif db_type == "sqlserver":
+                    connection_host, connection_port = self._ssh_tunnel.local_host, self._ssh_tunnel.local_port
             sqlserver_auth_mode = ""
             sqlserver_mfa_credential = None
             if db_type == "sqlserver":
@@ -574,7 +599,7 @@ class DatabaseConnector:
                     self._sqlserver_mfa_credential = sqlserver_mfa_credential
 
             connection_string, connect_args = self._build_connection_string(
-                db_type, host, port, database, username, password, **kwargs
+                db_type, connection_host, connection_port, database, username, password, **driver_kwargs
             )
 
             engine_kwargs = build_sqlalchemy_engine_kwargs(db_type, host)
@@ -583,6 +608,8 @@ class DatabaseConnector:
                 connect_args=connect_args,
                 **engine_kwargs,
             )
+            if self._ssh_tunnel is not None and db_type in {"mysql", "mariadb"}:
+                self._register_ssh_mysql_hook()
 
             if db_type == "postgresql":
                 initial_schema = (str(kwargs["schema"] or "") if kwargs.get("postgresql_search_path") is not None and "schema" in kwargs
@@ -646,10 +673,9 @@ class DatabaseConnector:
                 if db_type == "postgresql" and _is_unicode_decode_error(e) and not kwargs.get("postgresql_client_encoding"):
                     retry_error = None
                     for client_encoding in ("WIN1252", "LATIN1"):
-                        retry_kwargs = dict(kwargs)
-                        retry_kwargs["postgresql_client_encoding"] = client_encoding
+                        retry_driver_kwargs = {**driver_kwargs, "postgresql_client_encoding": client_encoding}
                         retry_connection_string, retry_connect_args = self._build_connection_string(
-                            db_type, host, port, database, username, password, **retry_kwargs
+                            db_type, connection_host, connection_port, database, username, password, **retry_driver_kwargs
                         )
                         retry_engine = create_engine(
                             retry_connection_string,
@@ -749,13 +775,55 @@ class DatabaseConnector:
             logger.info(f"Connected to {self.SUPPORTED_DATABASES[db_type]}: {host}/{database}")
             return True
 
-        except Exception as e:
+        except BaseException as e:
             # Driver/SDK error messages can contain connection strings or tokens.
             logger.error(
                 "Database connection error (%s; host=%s; database=%s): %s",
                 db_type, host, database, type(e).__name__,
             )
+            if self._ssh_tunnel is not None:
+                # Engine failure, authentication rejection and cancelled
+                # startup must release all local listeners and SSH channels.
+                tunnel_error = self._ssh_tunnel.error
+                try:
+                    self.disconnect()
+                except Exception:
+                    pass
+                if tunnel_error is not None:
+                    raise tunnel_error from None
             raise
+
+    def _register_ssh_mysql_hook(self) -> None:
+        """Route a PyMySQL socket locally while retaining remote TLS identity."""
+        tunnel = self._ssh_tunnel
+
+        @event.listens_for(self.engine, "do_connect")
+        def on_do_connect(dialect, connection_record, cargs, cparams):
+            import socket
+            import pymysql
+            from datapyn_runtime.ssh_tunnel import SshTunnelError
+
+            if not tunnel.is_alive():
+                raise tunnel.error or SshTunnelError("A conexão com o servidor SSH foi interrompida.", code="ssh_connection_lost")
+            options = dict(cparams)
+            options["defer_connect"] = True
+            connection = pymysql.Connection(**options)
+            stream = None
+            try:
+                stream = socket.create_connection((tunnel.local_host, tunnel.local_port), timeout=connection.connect_timeout)
+                stream.settimeout(None)
+                # PyMySQL wraps this supplied socket with server_hostname=self.host,
+                # which remains the database's original, remotely resolved name.
+                connection.connect(sock=stream)
+                return connection
+            except BaseException:
+                if stream is not None:
+                    stream.close()
+                try:
+                    connection.close()
+                except Exception:
+                    pass
+                raise
 
     def _get_available_odbc_driver(self) -> str:
         """
@@ -870,13 +938,29 @@ class DatabaseConnector:
             if trust_cert:
                 odbc_string += ";TrustServerCertificate=yes"
 
+            original_host = kwargs.get("_ssh_original_host")
+            if original_host and not trust_cert:
+                # Driver 18 supports independent routing and certificate identity.
+                # Older drivers cannot validate the remote name through loopback.
+                if str(driver).lower() != "odbc driver 18 for sql server":
+                    from datapyn_runtime.ssh_tunnel import SshTunnelError
+                    raise SshTunnelError("A validação TLS do SQL Server por SSH requer ODBC Driver 18 for SQL Server.", code="ssh_tls_unsupported")
+                escaped_host = str(original_host).replace("}", "}}")
+                odbc_string += f";HostNameInCertificate={{{escaped_host}}}"
+            if kwargs.get("encrypt") is not None:
+                encryption = "yes" if kwargs["encrypt"] is True else "no" if kwargs["encrypt"] is False else str(kwargs["encrypt"]).lower().strip()
+                if encryption not in {"yes", "no", "strict", "mandatory", "optional"}:
+                    raise ValueError("Invalid SQL Server Encrypt option")
+                odbc_string += ";Encrypt=" + encryption
+
             return f"mssql+pyodbc:///?odbc_connect={quote_plus(odbc_string)}", {}
 
         elif db_type in ("mysql", "mariadb"):
             # MariaDB uses PyMySQL (mysql dialect) — the C mariadb connector is not a runtime dep.
             user_encoded = quote_plus(username)
             pass_encoded = quote_plus(password)
-            return f"mysql+pymysql://{user_encoded}:{pass_encoded}@{host}:{port}/{database}?charset=utf8mb4", {}
+            connect_args = {key: kwargs[key] for key in ("ssl", "ssl_ca", "ssl_cert", "ssl_key", "ssl_key_password", "ssl_disabled", "ssl_verify_cert", "ssl_verify_identity", "connect_timeout") if kwargs.get(key) is not None}
+            return f"mysql+pymysql://{user_encoded}:{pass_encoded}@{host}:{port}/{database}?charset=utf8mb4", connect_args
 
         elif db_type == "postgresql":
             # URL encode username and password for special characters
@@ -884,6 +968,12 @@ class DatabaseConnector:
             user_encoded = quote_plus(username)
             pass_encoded = quote_plus(password)
             connect_args = {}
+            for key in ("sslmode", "sslrootcert", "sslcert", "sslkey", "sslpassword", "sslcrl", "sslcrldir", "sslsni", "gssencmode", "connect_timeout"):
+                if kwargs.get(key) is not None:
+                    connect_args[key] = kwargs[key]
+            if kwargs.get("_ssh_hostaddr"):
+                connect_args["hostaddr"] = kwargs["_ssh_hostaddr"]
+                connect_args.setdefault("connect_timeout", 15)
             client_encoding = str(kwargs.get("postgresql_client_encoding", "") or "").strip()
             if client_encoding:
                 connect_args["client_encoding"] = client_encoding
@@ -1777,7 +1867,18 @@ class DatabaseConnector:
         config = dict(getattr(self, "_connection_config", None) or {})
         if not config:
             raise ConnectionError("No connection configuration for admin connection")
-        admin = connect_connector_from_config(config, password=config.get("password", ""))
+        if isinstance(config.get("ssh"), dict) and config["ssh"].get("enabled"):
+            # The historical block connector helper whitelists driver options
+            # and does not forward SSH. An admin/cancel connection must preserve
+            # the same trust, TLS and remote routing as its parent connection.
+            admin = DatabaseConnector()
+            try:
+                admin.connect(**config)
+            except BaseException:
+                admin.disconnect()
+                raise
+        else:
+            admin = connect_connector_from_config(config, password=config.get("password", ""))
         if not admin.is_connected() or admin.engine is None:
             raise ConnectionError("Failed to open admin connection for query cancel")
         return admin, admin.engine.raw_connection()
@@ -1925,8 +2026,12 @@ class DatabaseConnector:
             try:
                 self.engine.dispose()
             except Exception as exc:
-                logger.warning("Error disposing engine during force_disconnect: %s", exc)
+                logger.warning("Error disposing engine during force_disconnect: %s", type(exc).__name__)
             self.engine = None
+        tunnel = self._ssh_tunnel
+        self._ssh_tunnel = None
+        if tunnel is not None:
+            tunnel.close()
 
     def request_cancel(self) -> None:
         """Set cancellation flag (safe from any thread; does not call the driver)."""
@@ -2980,10 +3085,16 @@ class DatabaseConnector:
 
     def disconnect(self):
         """Disconnect from database"""
-        if self.engine:
-            self.engine.dispose()
+        try:
+            if self.engine:
+                self.engine.dispose()
+                logger.info("Disconnected from database")
+        finally:
             self.engine = None
-            logger.info("Disconnected from database")
+            tunnel = self._ssh_tunnel
+            self._ssh_tunnel = None
+            if tunnel is not None:
+                tunnel.close()
         if self._sqlserver_mfa_credential is not None:
             try:
                 self._sqlserver_mfa_credential.close()
@@ -2997,7 +3108,7 @@ class DatabaseConnector:
         Only checks if engine exists. disconnect() sets engine=None.
         DOES NOT do SELECT 1 on main thread to avoid blocking UI.
         """
-        return self.engine is not None
+        return self.engine is not None and (self._ssh_tunnel is None or self._ssh_tunnel.is_alive())
 
     def ping(self) -> bool:
         """Test real connection with SELECT 1. Use only in background thread."""

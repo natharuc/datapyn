@@ -22,14 +22,14 @@ PACKAGED_DISTRIBUTIONS = (
     "SQLAlchemy", "pyodbc", "pymssql", "psycopg2-binary", "PyMySQL",
     "mysql-connector-python", "databricks-sql-connector", "databricks-sqlalchemy",
     "azure-identity", "azure-core", "msal", "msal-extensions", "cryptography",
-    "keyring", "requests", "certifi", "pandas", "numpy", "polars", "pyarrow",
+    "keyring", "paramiko", "bcrypt", "PyNaCl", "requests", "certifi", "pandas", "numpy", "polars", "pyarrow",
     "openpyxl", "fastexcel", "matplotlib", "plotly", "jedi", "sqlparse", "sqlglot", "jinja2",
 )
 
 DRIVER_IMPORTS = (
     "pyodbc", "pymssql", "psycopg2", "pymysql", "mysql.connector",
     "databricks.sql", "databricks.sqlalchemy", "databricks.sql.experimental.oauth_persistence",
-    "azure.identity", "msal", "msal_extensions", "keyring",
+    "azure.identity", "msal", "msal_extensions", "keyring", "paramiko",
 )
 
 DATABASE_DIALECTS = {

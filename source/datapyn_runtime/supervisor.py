@@ -18,6 +18,7 @@ from .process_group import own_process_group
 from .workspace import read_document, write_document
 from .background import BackgroundJobs
 from .connection_catalog import ConnectionCatalog
+from .errors import serialize_runtime_error
 from .configurations import ConfigurationTransfer
 from .desktop_services import DesktopServices
 from .pynia import PyniaService
@@ -725,16 +726,46 @@ class Supervisor:
     def _route(self, params):
         routed = dict(params)
         identifier = routed.get("connection_id")
+        credential_identifier = routed.pop("credential_connection_id", None)
+        if credential_identifier is not None:
+            self._identifier(credential_identifier, "credential_connection_id")
+            if identifier or not isinstance(routed.get("config"), dict):
+                raise ValueError("credential_connection_id requires a draft config and no connection_id")
+        resolve_database_password = routed.get("resolve_database_password", True)
+        if not isinstance(resolve_database_password, bool):
+            raise ValueError("resolve_database_password must be a boolean")
         if not identifier and routed.get("connection_name"):
             identifier = self.catalog.resolve_ref(routed.get("connection_group"), routed["connection_name"])
             routed["connection_id"] = identifier
-        if identifier:
-            self._identifier(identifier, "connection_id")
+        reference = identifier or credential_identifier
+        if reference:
+            self._identifier(reference, "connection_id" if identifier else "credential_connection_id")
             # The display name lives outside the driver config. Capture it
             # without changing engine keys or exposing credentials to the UI.
             with self.catalog._lock:
-                routed["_connection_config"] = self.catalog.config(identifier)
-                routed["_connection_name"] = self.catalog._find("connections", identifier)["name"]
+                from .connection_catalog import ssh_identity
+                from .database import database_credential_identity, connection_test_config
+                saved = self.catalog._find("connections", reference)
+                draft = routed.get("config")
+                has_draft = isinstance(draft, dict)
+                same_database = not has_draft or database_credential_identity(saved["config"]) == database_credential_identity(draft)
+                same_ssh = not has_draft or bool((draft.get("ssh") or {}).get("enabled")) and ssh_identity(saved["config"]) == ssh_identity(draft)
+                routed["_connection_config"] = self.catalog.config(reference,
+                    resolve_database_password=resolve_database_password and same_database,
+                    resolve_ssh_credentials=same_ssh)
+                routed["_connection_name"] = saved["name"]
+                if credential_identifier:
+                    routed["_connection_config"] = connection_test_config(routed, match_database_identity=True)
+        # A client may configure a database, but may not redirect host trust to
+        # an arbitrary file. Every profile owns an independent pin registry.
+        needs_ssh = any(isinstance(routed.get(key), dict) and (routed[key].get("ssh") or {}).get("enabled")
+                        for key in ("config", "_connection_config"))
+        for key in ("config", "_connection_config"):
+            if isinstance(routed.get(key), dict):
+                routed[key] = dict(routed[key])
+                routed[key].pop("_ssh_trust_path", None)
+                if needs_ssh:
+                    routed[key]["_ssh_trust_path"] = str(self.profile_path / "ssh_known_hosts.json")
         return routed
 
     def _session(self, params):
@@ -764,9 +795,10 @@ class Supervisor:
         except RuntimeErrorResponse as exc:
             self.emit({"id": request_id, "error": {"code": exc.code, "message": str(exc)}})
         except (ValueError, TypeError, KeyError, OSError) as exc:
-            self.emit({"id": request_id, "error": {"code": "invalid_params", "message": str(exc)}})
+            error = serialize_runtime_error(exc, default_code="invalid_params")
+            self.emit({"id": request_id, "error": error})
         except Exception as exc:
-            self.emit({"id": request_id, "error": {"code": "internal_error", "message": str(exc)}})
+            self.emit({"id": request_id, "error": serialize_runtime_error(exc, default_code="internal_error")})
 
     def dispatch(self, method: str, params: dict, request_id: int):
         if method == "system.info":
@@ -817,6 +849,9 @@ class Supervisor:
                     "executions": executions, "packages": packages, "pynia": pynia, "background": background}
         if method.startswith("connections.") or method.startswith("groups."):
             return self.catalog.dispatch(method, params)
+        if method == "ssh.host_key.trust":
+            from .ssh_tunnel import SshTrustStore
+            return SshTrustStore(self.profile_path / "ssh_known_hosts.json").confirm(params.get("details"))
         if method.startswith("configurations."):
             if method == "configurations.import" and self.dispatch("system.activity", {}, request_id)["busy"]:
                 raise RuntimeErrorResponse("workspace_busy", "Wait for executions, packages, Pynia and background operations before importing settings")

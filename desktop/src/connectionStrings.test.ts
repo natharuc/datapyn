@@ -79,13 +79,31 @@ describe("connection string import", () => {
     expect(parseConnectionString("Data Source=sql;Initial Catalog=prod;User ID=reader;Password=secret;", "sqlite").db_type).toBe("sqlserver");
   });
   it("does not silently ignore unsupported TLS or OAuth options", () => {
-    expect(() => parseConnectionString("postgresql://user:password@pg/prod?sslmode=verify-full")).toThrow("opções");
-    expect(() => parseConnectionString("Host=pg;Database=prod;SSLMode=Require;", "postgresql")).toThrow("opções");
+    expect(() => parseConnectionString("postgresql://user:password@pg/prod?sslmode=trust-everything")).toThrow("TLS");
+    expect(() => parseConnectionString("Host=pg;Database=prod;SSLMode=SkipValidation;", "postgresql")).toThrow("TLS");
     expect(() => parseConnectionString("Server=sql;Database=prod;Encrypt=false;")).toThrow("criptografia");
     expect(() => parseConnectionString("Server=sql;Database=prod;Authentication=Active Directory Managed Identity;")).toThrow("autenticação");
     expect(() => parseConnectionString("Driver=Databricks;Host=db;HTTPPath=/sql/test;AuthMech=11;Auth_Flow=1;")).toThrow("OAuth");
     expect(() => parseConnectionString("Driver=Oracle;Server=sql;Database=prod;")).toThrow("Driver");
     expect(() => parseConnectionString("postgresql://user:password@pg/prod?options=-csearch_path%3Dpublic%20-cstatement_timeout%3D1")).toThrow("opções");
+  });
+  it("preserves PostgreSQL hostname verification and certificates across supported provider formats", () => {
+    const config: ConnectionConfig = { ...profile("postgresql"), sslmode: "verify-full", sslrootcert: "C:/certs/my ca;root.pem", sslcert: "C:/certs/client.pem", sslkey: "C:/certs/client.key", ssh: { enabled: true, host: "ssh.example", port: 22, username: "deploy", auth_method: "password", password: "ssh-secret", passphrase: "ssh-passphrase" } };
+    for (const format of ["uri", "native"] as const) {
+      const value = formatConnectionString(config, format, true), parsed = parseConnectionString(value);
+      expect(parsed).toMatchObject({ host: config.host, port: config.port, sslmode: config.sslmode, sslrootcert: config.sslrootcert, sslcert: config.sslcert, sslkey: config.sslkey });
+      expect(value).not.toContain("ssh-secret"); expect(value).not.toContain("ssh-passphrase"); expect(value).not.toContain("ssh.example"); expect(parsed).not.toHaveProperty("ssh");
+    }
+    expect(formatConnectionString(config, "python", true)).toContain('"sslmode": "verify-full"');
+    expect(formatConnectionString(config, "csharp", true)).toContain("SSL Mode=VerifyFull");
+  });
+  it("does not weaken libpq require with an explicit CA when exporting to Npgsql", () => {
+    const config: ConnectionConfig = { ...profile("postgresql"), sslmode: "require", sslrootcert: "/root/ca.pem" };
+    expect(formatConnectionString(config, "native")).toContain("SSL Mode=VerifyCA");
+    expect(parseConnectionString(formatConnectionString(config, "uri")).sslmode).toBe("require");
+    expect(parseConnectionString("Host=pg;Database=prod;SSLMode=VerifyFull;Root Certificate=/ca.pem;")).toMatchObject({ sslmode: "verify-full", sslrootcert: "/ca.pem" });
+    expect(() => parseConnectionString("Host=pg;Database=prod;Root Certificate=/ca.pem;sslrootcert=/other.pem;")).toThrow("duplicados");
+    expect(() => parseConnectionString("postgresql://reader@pg/prod?sslmode=require&SSLMODE=disable")).toThrow("duplicados");
   });
   it.each(["", "jdbc:sqlserver://server;database=prod", "http://example.org/db", "postgresql://user:pwd@pg:99999/prod", "postgresql://user:bad%xx@pg/prod", "Server=sql;PWD={not-closed", "Server=sql;Password=\"not-closed", "Server;Database=prod", "sqlite:///test.db?mode=ro"])("rejects malformed or unsupported text without quoting credentials: %s", value => {
     expect(() => parseConnectionString(value)).toThrow();
