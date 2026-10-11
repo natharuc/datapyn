@@ -199,6 +199,30 @@ class RuntimeSqlAutoCompleteService(SqlAutoCompleteService):
                     candidates.append(entry)
         if not candidates:
             return None
+        if self._schema_db_type == "databricks":
+            # The server resolves three parts absolutely, two parts in the
+            # current catalog, and bare names in the current catalog/schema.
+            # Ranking a table from another namespace produces invalid fields.
+            bare = not schema_name and not catalog_name
+            if bare:
+                temporary = [entry for entry in candidates if entry.get("temporary")
+                             and self._normalize_name(entry["name"]) == self._normalize_name(table_name)]
+                if temporary:
+                    return temporary[0] if len(temporary) == 1 else None
+                if not any(entry["name"] == table_name for entry in candidates):
+                    parts = self._split_identifier_parts(table_name)
+                    if len(parts) in {2, 3}:
+                        table_name, schema_name = parts[-1], parts[-2]
+                        catalog_name = parts[-3] if len(parts) == 3 else ""
+            catalog = self._normalize_name(catalog_name or self._schema.get("database", ""))
+            schema = self._normalize_name(schema_name or self._schema.get("current_schema", ""))
+            matched = [entry for entry in candidates
+                       if not entry.get("temporary")
+                       and self._normalize_name(entry["name"]) == self._normalize_name(table_name)
+                       and (not catalog or self._normalize_name(entry["catalog"]) == catalog
+                            or (not catalog_name and not entry["catalog"]))
+                       and (not schema or self._normalize_name(entry["schema"]) == schema)]
+            return matched[0] if len(matched) == 1 else None
         exact = [entry for entry in candidates
                  if table_name in {entry["name"], entry["detail"], entry["key"]}
                  and (not schema_name or schema_name == entry["schema"])

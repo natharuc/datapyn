@@ -61,6 +61,16 @@ def test_nested_groups_ids_survive_rename_and_prevent_cycles(catalog):
     assert catalog.list()["groups"][0]["parent_id"] is None
 
 
+def test_move_rejects_malformed_destination_parent_cycle(catalog):
+    first = catalog.save_group({"name": "first"})
+    second = catalog.save_group({"name": "second", "parent_id": first["id"]})
+    source = catalog.save_group({"name": "source"})
+    catalog.data["groups"][0]["parent_id"] = second["id"]
+    with pytest.raises(ValueError, match="cycle"):
+        catalog.dispatch("groups.save", {"group": {**source, "parent_id": first["id"]}})
+    assert next(group for group in catalog.list()["groups"] if group["id"] == source["id"])["parent_id"] is None
+
+
 def test_duplicate_names_are_group_aware_and_delete_does_not_overwrite(catalog):
     group = catalog.save_group({"name": "group"})
     root = catalog.save_connection(profile())
@@ -121,6 +131,30 @@ def test_reorder_rejects_duplicate_or_unknown_identifiers(catalog):
         catalog.dispatch("connections.reorder", {"connection_ids": [saved["id"], saved["id"]]})
     with pytest.raises(ValueError):
         catalog.dispatch("connections.reorder", {"connection_ids": ["unknown"]})
+
+
+def test_clipboard_export_does_not_read_credentials_without_explicit_opt_in(catalog, monkeypatch):
+    saved = catalog.save_connection(profile(), password="clipboard-only-secret", save_password=True)
+    before = catalog.path.read_bytes()
+    reads = []
+    original = catalog.credentials.get
+    monkeypatch.setattr(catalog.credentials, "get", lambda identifier: (reads.append(identifier), original(identifier))[1])
+    for params in ({}, {"include_password": False}):
+        exported = catalog.dispatch("connections.export_config", {"connection_id": saved["id"], **params})
+        assert not exported["password_included"] and "password" not in exported["config"]
+    assert reads == []
+    exported = catalog.dispatch("connections.export_config", {"connection_id": saved["id"], "include_password": True})
+    assert exported["password_included"] and exported["config"]["password"] == "clipboard-only-secret"
+    assert reads == [saved["id"]]
+    assert catalog.path.read_bytes() == before
+    assert "clipboard-only-secret" not in json.dumps(catalog.list())
+
+
+@pytest.mark.parametrize("value", ["true", "false", 1, None, [], {}])
+def test_clipboard_export_requires_a_boolean_password_choice(catalog, value):
+    saved = catalog.save_connection(profile())
+    with pytest.raises(ValueError, match="boolean"):
+        catalog.dispatch("connections.export_config", {"connection_id": saved["id"], "include_password": value})
 
 
 def test_import_failure_after_valid_group_rolls_back_everything(catalog, tmp_path):

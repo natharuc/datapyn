@@ -59,7 +59,7 @@ do usuário. O pipeline verifica o sidecar novamente depois da assinatura.
 ## Identidade e armazenamento
 
 - Nome: `DataPyn Tauri`; identificador: `app.datapyn.tauri`.
-- Versão independente: `1.0.4`, sem alterar a numeração do PyQt6.
+- Versão independente: `1.0.5`, sem alterar a numeração do PyQt6.
 - Windows: `%LOCALAPPDATA%/app.datapyn.tauri`.
 - macOS: `~/Library/Application Support/app.datapyn.tauri`.
 - Linux: `$XDG_DATA_HOME/app.datapyn.tauri` ou `~/.local/share/app.datapyn.tauri`.
@@ -82,9 +82,10 @@ Instaladores usam tags imutáveis `tauri-vX.Y.Z`. O feed valida canal, versão,
 plataforma e URLs da mesma release; o plugin verifica a assinatura com a chave
 pública embutida.
 
-O app verifica após iniciar e a cada seis horas; falhas têm retry após quinze
-minutos. O download fica em segundo plano no recurso nativo mesmo com o diálogo
-fechado. Ao terminar aparece `Atualização pronta`. A instalação exige ação do
+O app verifica ao iniciar e a cada seis horas; falhas têm retry após quinze
+minutos. Quando há uma versão nova, mostra uma notificação; o clique inicia o
+download e abre seu progresso. O download fica em segundo plano no recurso
+nativo mesmo com o diálogo fechado. Ao terminar aparece `Atualização pronta`. A instalação exige ação do
 usuário e salva o workspace. Operações em andamento e falha ao salvar impedem a
 instalação. Sair antes de instalar descarta o download e exige baixá-lo novamente.
 

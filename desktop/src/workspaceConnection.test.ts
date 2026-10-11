@@ -11,6 +11,7 @@ class ConnectionTransport implements RuntimeTransport {
   requests:Array<{method:string;params:Record<string,unknown>}>=[];
   connections:Array<ReturnType<typeof deferred>>=[];
   createGate?:ReturnType<typeof deferred>;
+  createGates=new Map<string,ReturnType<typeof deferred>>();
   infoError?:string;
   listener?:(event:RuntimeEvent)=>void;
   async subscribe(listener:(event:RuntimeEvent)=>void){this.listener=listener;return ()=>{};}
@@ -20,7 +21,10 @@ class ConnectionTransport implements RuntimeTransport {
       if(this.infoError)throw new Error(this.infoError);
       return {protocol_version:1,python_version:"3.12",capabilities:{}} as T;
     }
-    if(method==="session.create"&&this.createGate)return await this.createGate.promise as T;
+    if(method==="session.create"){
+      const gate=this.createGates.get(String(params.session_id))??this.createGate;
+      if(gate)return await gate.promise as T;
+    }
     if(method==="connection.connect"){
       const gate=deferred();this.connections.push(gate);return await gate.promise as T;
     }
@@ -76,6 +80,45 @@ describe("opening a tab connection",()=>{
     expect(controller.session(session.id)!.connectionState?.phase).toBe("connecting");
     expect(controller.session(other.id)!.database).toBe("SECOND");
     transport.connections[0].resolve(connected);await first;
+  });
+  it("opens and authenticates an inherited tab while the focused tab is still preparing its kernel",async()=>{
+    const {controller,transport,session}=setup(),sourceGate=deferred();transport.createGates.set(session.id,sourceGate);
+    const source=controller.connectSaved(session.id,"a","Pending",{database:"requested",schema:"sales"});
+    await vi.waitFor(()=>expect(transport.calls("session.create")).toHaveLength(1));
+    const next=controller.createSession();
+    expect(next).toMatchObject({savedConnectionId:"a",database:"requested",schema:"sales",connectionState:{phase:"preparing"}});
+    await vi.waitFor(()=>expect(transport.connections).toHaveLength(1));
+    expect(transport.calls("connection.connect")[0].params).toEqual({session_id:next.id,connection_id:"a",database:"requested",schema:"sales"});
+    transport.connections[0].resolve({...connected,database:"requested",schema:"sales"});await controller.prepareSession(next.id);
+    expect(controller.session(next.id)!.connectionState?.phase).toBe("ready");
+    expect(controller.session(session.id)!.connectionState?.phase).toBe("preparing");
+    sourceGate.resolve({});await vi.waitFor(()=>expect(transport.connections).toHaveLength(2));
+    transport.connections[1].resolve({...connected,database:"requested",schema:"sales"});await source;
+    expect(controller.session()!.id).toBe(next.id);
+  });
+  it("resolves multiple inherited and explicit connection tabs in any order without sharing loading or errors",async()=>{
+    const {controller,transport,session}=setup();
+    const source=controller.connectSaved(session.id,"a","Source",{database:"scope",schema:"analysis"});
+    await vi.waitFor(()=>expect(transport.connections).toHaveLength(1));
+    const inherited=controller.createSession(),secondInherited=controller.createSession();
+    await vi.waitFor(()=>expect(transport.connections).toHaveLength(3));
+    const explicit=controller.createSession({inheritConnection:false}),explicitTask=controller.connectSaved(explicit.id,"b","Other");
+    const failure=controller.prepareSession(secondInherited.id),failed=expect(failure).rejects.toThrow("Only this tab failed");
+    await vi.waitFor(()=>expect(transport.connections).toHaveLength(4));
+    expect(transport.calls("connection.connect").map(call=>call.params)).toEqual([
+      {session_id:session.id,connection_id:"a",database:"scope",schema:"analysis"},
+      {session_id:inherited.id,connection_id:"a",database:"scope",schema:"analysis"},
+      {session_id:secondInherited.id,connection_id:"a",database:"scope",schema:"analysis"},
+      {session_id:explicit.id,connection_id:"b"},
+    ]);
+    transport.connections[3].resolve({...connected,database:"OTHER"});await explicitTask;
+    transport.connections[2].reject(new Error("Only this tab failed"));await failed;
+    transport.connections[1].resolve({...connected,database:"scope",schema:"analysis"});await controller.prepareSession(inherited.id);
+    expect(controller.session(session.id)!.connectionState?.phase).toBe("connecting");
+    expect(controller.session(secondInherited.id)!.connectionState?.phase).toBe("error");
+    expect(controller.session(explicit.id)!).toMatchObject({database:"OTHER",connectionState:{phase:"ready"}});
+    transport.connections[0].resolve({...connected,database:"scope",schema:"analysis"});await source;
+    expect(controller.session()!.id).toBe(explicit.id);
   });
   it("shows bootstrap failures in the requested tab without dispatching database authentication",async()=>{
     const {controller,transport,session}=setup();transport.infoError="Python unavailable";

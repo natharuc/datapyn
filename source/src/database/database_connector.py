@@ -596,6 +596,14 @@ class DatabaseConnector:
                 }
                 if kwargs.get("postgresql_search_path") is not None:
                     self.connection_params.update(schema=initial_schema, postgresql_search_path=kwargs["postgresql_search_path"])
+            elif db_type == "databricks":
+                # OpenSession namespace options are requests. Verify the
+                # physical backend before the connection test can succeed.
+                self.connection_params = {
+                    "database": database,
+                    "databricks_catalog": database,
+                    "databricks_schema": str(kwargs.get("schema") or kwargs.get("databricks_schema") or "default").strip() or "default",
+                }
             self._register_engine_checkout_hooks(db_type)
 
             if db_type == "sqlserver" and sqlserver_auth_mode == SQLSERVER_AUTH_ENTRA_MFA:
@@ -629,6 +637,7 @@ class DatabaseConnector:
                         connect_args=connect_args,
                         **build_sqlalchemy_engine_kwargs(db_type, host),
                     )
+                    self._register_engine_checkout_hooks(db_type)
                     with self.engine.connect() as conn:
                         conn.execute(text("SELECT 1"))
                 else:
@@ -720,6 +729,7 @@ class DatabaseConnector:
                         logger.warning("Could not query Databricks current catalog/schema (%s)", type(e).__name__)
                         self.connection_params["databricks_catalog"] = ""
                         self.connection_params["databricks_schema"] = "default"
+                self._sync_databricks_dialect_context()
 
             # PostgreSQL schema is applied on every pool checkout (search_path).
             if db_type == "postgresql" and not self.connection_params.get("postgresql_schema"):
@@ -1876,6 +1886,7 @@ class DatabaseConnector:
                 self.connection_params["databricks_catalog"] = database
                 self.connection_params["databricks_schema"] = str(row[1] or "")
                 self.connection_params["schema"] = str(row[1] or "")
+                self._sync_databricks_dialect_context()
             elif self.db_type == "postgresql":
                 self.connection_params["postgresql_schema"] = str(row[1] or "")
                 self.connection_params["schema"] = str(row[1] or "")
@@ -2726,6 +2737,7 @@ class DatabaseConnector:
                     self.connection_params["databricks_catalog"] = parsed.catalog
                 if parsed.schema:
                     self.connection_params["databricks_schema"] = parsed.schema
+                self._sync_databricks_dialect_context()
             elif self.db_type == "postgresql":
                 # Keep the real database; only track schema (search_path).
                 self.connection_params["postgresql_schema"] = database
@@ -2836,7 +2848,10 @@ class DatabaseConnector:
                 desired = (database, schema)
                 initial = getattr(connector_ref, "_connection_config", None) or {}
                 initial_schema = str(initial.get("schema") or initial.get("databricks_schema") or "default") if db_type == "databricks" else ""
-                applied = connection_record.info.setdefault("datapyn_namespace", (str(initial.get("database") or ""), initial_schema))
+                # Cache only observed Databricks namespaces. Its OpenSession
+                # initialNamespace can be ignored by a backend; assuming it was
+                # applied leaves an unrelated Spark namespace in user queries.
+                applied = connection_record.info.get("datapyn_namespace") if db_type == "databricks" else connection_record.info.setdefault("datapyn_namespace", (str(initial.get("database") or ""), initial_schema))
                 if applied == desired:
                     return
                 cursor = None
@@ -2844,9 +2859,25 @@ class DatabaseConnector:
                     cursor = dbapi_conn.cursor()
                     quoted_database = "`" + database.replace("`", "``") + "`"
                     if db_type == "databricks":
-                        cursor.execute(f"USE CATALOG {quoted_database}")
-                        quoted_schema = "`" + schema.replace("`", "``") + "`"
-                        cursor.execute(f"USE SCHEMA {quoted_schema}")
+                        cursor.execute("SELECT current_catalog(), current_schema()")
+                        row = cursor.fetchone()
+                        if not row or len(row) < 2:
+                            raise ConnectionError("Databricks did not return its current catalog and schema")
+                        actual = (str(row[0] or ""), str(row[1] or ""))
+                        catalog_changed = actual[0].casefold() != database.casefold()
+                        schema_changed = actual[1].casefold() != schema.casefold()
+                        if catalog_changed:
+                            cursor.execute(f"USE CATALOG {quoted_database}")
+                        if catalog_changed or schema_changed:
+                            # USE CATALOG resets the schema, so always reapply
+                            # the selected schema when the catalog changed.
+                            quoted_schema = "`" + schema.replace("`", "``") + "`"
+                            cursor.execute(f"USE SCHEMA {quoted_schema}")
+                            cursor.execute("SELECT current_catalog(), current_schema()")
+                            row = cursor.fetchone()
+                            actual = (str(row[0] or ""), str(row[1] or "")) if row and len(row) >= 2 else ("", "")
+                        if tuple(value.casefold() for value in actual) != tuple(value.casefold() for value in desired):
+                            raise ConnectionError("Databricks could not apply the selected catalog and schema")
                     else:
                         cursor.execute(f"USE {quoted_database}")
                     connection_record.info["datapyn_namespace"] = desired
@@ -2858,6 +2889,15 @@ class DatabaseConnector:
     @staticmethod
     def _postgresql_quote_ident(name: str) -> str:
         return '"' + str(name or "").replace('"', '""') + '"'
+
+    def _sync_databricks_dialect_context(self) -> None:
+        # SQLAlchemy's Databricks reflection uses dialect.catalog/schema from
+        # the original URL rather than the physical session's current context.
+        # Keep reflection aligned after USE without changing the user's SQL.
+        dialect = getattr(self.engine, "dialect", None)
+        if dialect is not None and getattr(dialect, "name", None) == "databricks":
+            dialect.catalog = self.get_current_catalog()
+            dialect.schema = self.get_current_schema()
 
     @staticmethod
     def _postgresql_search_path_value(schema: str) -> str:

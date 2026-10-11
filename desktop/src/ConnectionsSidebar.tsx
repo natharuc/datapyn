@@ -2,8 +2,10 @@ import { translate as t, useLocale } from "./i18n";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ChevronDown, ChevronRight, Copy, Database, Download, Folder, FolderPlus, LoaderCircle, Pencil, Plug, RefreshCw, Search, Settings2, Star, Trash2, Upload, X } from "lucide-react";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { connections, connectionRows, effectiveConnectionColor, effectiveGroupColor, groupDescendants, CONNECTION_MIME, GROUP_MIME, type ConnectionGroup, type ConnectionTreeRow, type SavedConnection, type ConnectionsController } from "./connections";
+import { connections, connectionRows, effectiveConnectionColor, effectiveGroupColor, groupDescendants, groupHierarchy, catalogDropAllowed, moveCatalogRow, CONNECTION_MIME, GROUP_MIME, type ConnectionGroup, type ConnectionTreeRow, type SavedConnection, type ConnectionsController } from "./connections";
 import { ConnectionDialog } from "./ConnectionDialog";
+import { ConnectionStringDialog } from "./ConnectionStringDialog";
+import { useConnectionDrag } from "./connectionDrag";
 import { Modal } from "./PanelControls";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { useOwnerDocumentRevision } from "./useOwnerDocument";
@@ -13,7 +15,7 @@ import "./connections.css";
 
 export interface ConnectionsSidebarProps {
   activeConnectionId?: string; onConnect: (connection: SavedConnection, newTab?: boolean) => Promise<void> | void;
-  onDisconnect?: () => Promise<void> | void; onError?: (message: string) => void; disabled?: boolean;
+  onDisconnect?: () => Promise<void> | void; onError?: (message: string) => void; disabled?: boolean; newTabDisabled?: boolean;
   controller?: ConnectionsController; compact?: boolean;
 }
 
@@ -29,13 +31,14 @@ function readExpanded(): Set<string> {
   try { return new Set(JSON.parse(localStorage.getItem("datapyn.desktop.connection-groups.v1") ?? "[]")); } catch { return new Set(); }
 }
 
-export function ConnectionsSidebar({ activeConnectionId, onConnect, onDisconnect, onError, disabled = false, controller = connections, compact = false }: ConnectionsSidebarProps) {
+export function ConnectionsSidebar({ activeConnectionId, onConnect, onDisconnect, onError, disabled = false, newTabDisabled = false, controller = connections, compact = false }: ConnectionsSidebarProps) {
   useLocale();
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
   const [query, setQuery] = useState(""), [favorites, setFavorites] = useState(false), [expanded, setExpanded] = useState(readExpanded);
   const [selected, setSelected] = useState<string>(), [menu, setMenu] = useState<ConnectionMenuState>(), [edit, setEdit] = useState<SavedConnection | "new">();
   const [groupEdit, setGroupEdit] = useState<ConnectionGroup | "new">(), [deleting, setDeleting] = useState<ConnectionTreeRow>();
   const [manager, setManager] = useState(false), [busy, setBusy] = useState(false), [scroll, setScroll] = useState(0), [height, setHeight] = useState(320);
+  const [stringExport, setStringExport] = useState<SavedConnection>();
   const viewport = useRef<HTMLDivElement>(null), tree = useRef<HTMLDivElement>(null), menuOpening = useRef(0);
   const documentRevision = useOwnerDocumentRevision(viewport);
   const rows = useMemo(() => connectionRows(state.catalog, expanded, query, favorites), [state.catalog, expanded, query, favorites]);
@@ -49,6 +52,17 @@ export function ConnectionsSidebar({ activeConnectionId, onConnect, onDisconnect
   const perform = async (task: () => Promise<unknown> | unknown) => {
     setBusy(true); try { await task(); } catch (failure) { onError?.(errorText(failure)); } finally { setBusy(false); }
   };
+  const connect = async (connection: SavedConnection, newTab = false) => {
+    if (newTab ? newTabDisabled : disabled) return;
+    try { await onConnect(connection, newTab); } catch (failure) { onError?.(errorText(failure)); }
+  };
+  const expand = (id: string) => setExpanded(previous => previous.has(id) ? previous : new Set([...previous, id]));
+  const move = async (source: ConnectionTreeRow, target: ConnectionTreeRow | null) => {
+    await perform(() => moveCatalogRow(controller, source, target));
+    const targetId = target?.group?.id ?? target?.connection?.group_id;
+    if (targetId) expand(targetId);
+  };
+  const pointerDrag = useConnectionDrag(viewport, { rows, allowed: (source, target) => !busy && catalogDropAllowed(state.catalog, source, target), move: (source, target) => void move(source, target), expand });
   const toggle = (id: string) => setExpanded((previous) => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   function openMenu(row: ConnectionTreeRow, ownerDocument: Document, x: number, y: number) {
     setSelected(row.key);
@@ -69,7 +83,7 @@ export function ConnectionsSidebar({ activeConnectionId, onConnect, onDisconnect
     } else if (current?.group && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
       event.preventDefault(); if (expanded.has(current.group.id) !== (event.key === "ArrowRight")) toggle(current.group.id);
     } else if (current && event.key === "Enter") {
-      event.preventDefault(); if (current.connection) void perform(() => onConnect(current.connection!, event.ctrlKey || event.metaKey)); else if (current.group) toggle(current.group.id);
+      event.preventDefault(); if (current.connection) void connect(current.connection, event.ctrlKey || event.metaKey); else if (current.group) toggle(current.group.id);
     } else if (current && (event.key === "F2" || event.key === "Delete" || event.key === "ContextMenu" || (event.shiftKey && event.key === "F10"))) {
       event.preventDefault(); if (event.key === "Delete") setDeleting(current); else if (event.key === "F2") { if (current.connection) setEdit(current.connection); else if (current.group) setGroupEdit(current.group); } else {
         const owner = event.currentTarget.ownerDocument, bounds = owner.getElementById(`connection-row-${current.key}`)?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
@@ -79,26 +93,17 @@ export function ConnectionsSidebar({ activeConnectionId, onConnect, onDisconnect
   }
   async function drop(event: React.DragEvent, target: ConnectionTreeRow | null) {
     event.preventDefault(); const connectionId = event.dataTransfer.getData(CONNECTION_MIME), groupId = event.dataTransfer.getData(GROUP_MIME);
-    const groupTarget = target?.group?.id ?? target?.connection?.group_id ?? null;
-    if (connectionId && target?.connection && connectionId !== target.connection.id) {
-      const ordered = [...state.catalog.connections].sort((a, b) => a.order - b.order).map((connection) => connection.id).filter((id) => id !== connectionId);
-      ordered.splice(ordered.indexOf(target.connection.id), 0, connectionId);
-      await controller.mutate("connections.move", { connection_id: connectionId, group_id: groupTarget });
-      await controller.mutate("connections.reorder", { connection_ids: ordered });
-    } else if (connectionId) await controller.mutate("connections.move", { connection_id: connectionId, group_id: groupTarget });
-    else if (groupId && groupId !== groupTarget) {
-      const group = state.catalog.groups.find((item) => item.id === groupId);
-      if (group && !groupDescendants(state.catalog.groups, groupId).has(groupTarget ?? "")) await controller.mutate("groups.save", { group: { ...group, parent_id: groupTarget } });
-    }
-    if (groupTarget) setExpanded((previous) => new Set([...previous, groupTarget]));
+    const source = connectionId ? { key: `c:${connectionId}`, depth: 0, connection: state.catalog.connections.find(item => item.id === connectionId) } : { key: `g:${groupId}`, depth: 0, group: state.catalog.groups.find(item => item.id === groupId) };
+    if (source.connection || source.group) await move(source, target);
   }
   const selection = rows.find((row) => row.key === selected);
   const menuItems: ContextMenuItem[] = [];
   if (menu?.row.connection) {
     const connection = menu.row.connection;
     menuItems.push(
-      { id: "connect", label: t("Conectar nesta aba"), icon: <Plug size={14} />, disabled: disabled || busy, onSelect: () => void perform(() => onConnect(connection)) },
-      { id: "connect-new", label: t("Conectar em nova aba"), icon: <Database size={14} />, disabled: disabled || busy, onSelect: () => void perform(() => onConnect(connection, true)) },
+      { id: "connect", label: t("Conectar nesta aba"), icon: <Plug size={14} />, disabled, onSelect: () => void connect(connection) },
+      { id: "connect-new", label: t("Conectar em nova aba"), icon: <Database size={14} />, disabled: newTabDisabled, onSelect: () => void connect(connection, true) },
+      { id: "copy-string", label: t("Copiar connection string"), icon: <Copy size={14} />, onSelect: () => setStringExport(connection) },
       { id: "edit", label: t("Editar conexão"), icon: <Pencil size={14} />, separator: true, disabled: busy, onSelect: () => setEdit(connection) },
       { id: "clone", label: t("Duplicar conexão"), icon: <Copy size={14} />, disabled: busy, onSelect: () => void perform(() => controller.mutate("connections.clone", { connection_id: connection.id, name: t("{name} (cópia)", { name: connection.name }) })) },
       { id: "favorite", label: connection.favorite ? t("Remover favorita") : t("Marcar como favorita"), icon: <Star size={14} />, disabled: busy, onSelect: () => void perform(() => controller.save({ ...connection, favorite: !connection.favorite }, undefined, connection.has_password)) },
@@ -117,19 +122,22 @@ export function ConnectionsSidebar({ activeConnectionId, onConnect, onDisconnect
     <div className="connections-search"><Search size={14} /><input aria-label={t("Buscar conexões")} value={query} onChange={(event) => { setQuery(event.target.value); if (viewport.current) viewport.current.scrollTop = 0; }} placeholder={t("Buscar conexões")} /><button className={`icon-button ${favorites ? "selected" : ""}`} title={t("Mostrar favoritas")} aria-label={t("Mostrar favoritas")} aria-pressed={favorites} onClick={() => setFavorites(!favorites)}><Star size={14} fill={favorites ? "currentColor" : "none"} /></button></div>
     {state.error && <p className="catalog-error" role="alert">{t(state.error)}</p>}
     {state.loading && !state.loaded && <p className="catalog-empty"><LoaderCircle size={15} className="spin" /> {t("Carregando catálogo…")}</p>}
-    <div className="connection-tree-viewport" ref={viewport} onScroll={(event) => setScroll(event.currentTarget.scrollTop)} onDragOver={(event) => event.preventDefault()} onDrop={(event) => void perform(() => drop(event, null))}>
+    <div className="connection-tree-viewport" ref={viewport} onScroll={(event) => setScroll(event.currentTarget.scrollTop)} onDragOver={(event) => { if (event.dataTransfer.types.includes(CONNECTION_MIME) || event.dataTransfer.types.includes(GROUP_MIME)) event.preventDefault(); }} onDrop={(event) => void drop(event, null)}>
       <div ref={tree} role="tree" tabIndex={0} aria-label={t("Conexões salvas agrupadas")} aria-activedescendant={selected ? `connection-row-${selected}` : undefined} style={{ height: Math.max(rows.length * rowHeight, 32), position: "relative" }} onKeyDown={keyboard}>
-        {rows.slice(first, end).map((row, offset) => <div id={`connection-row-${row.key}`} key={row.key} role="treeitem" aria-level={row.depth + 1} aria-selected={selected === row.key} aria-expanded={row.group ? expanded.has(row.group.id) || !!query : undefined} className={`connection-tree-row ${row.group ? "group" : "leaf"} ${selected === row.key ? "selected" : ""} ${activeConnectionId === row.connection?.id ? "active" : ""}`} style={{ position: "absolute", top: (first + offset) * rowHeight, height: rowHeight, paddingLeft: 8 + row.depth * 14,borderLeftColor:activeConnectionId===row.connection?.id&&row.connection?effectiveConnectionColor(row.connection,state.catalog):undefined }}
+        {rows.slice(first, end).map((row, offset) => <div id={`connection-row-${row.key}`} data-connection-row-key={row.key} key={row.key} role="treeitem" aria-level={row.depth + 1} aria-selected={selected === row.key} aria-expanded={row.group ? expanded.has(row.group.id) || !!query : undefined} className={`connection-tree-row ${row.group ? "group" : "leaf"} ${selected === row.key ? "selected" : ""} ${activeConnectionId === row.connection?.id ? "active" : ""} ${pointerDrag.drag?.target?.key === row.key && pointerDrag.drag.valid ? "drop-target" : ""}`} style={{ position: "absolute", top: (first + offset) * rowHeight, height: rowHeight, paddingLeft: 8 + row.depth * 14,borderLeftColor:activeConnectionId===row.connection?.id&&row.connection?effectiveConnectionColor(row.connection,state.catalog):undefined }}
           title={row.connection ? `${row.connection.config.db_type}\n${row.connection.config.host}\n${row.connection.config.database}` : row.group?.name}
-          draggable={!busy} onDragStart={(event) => { event.dataTransfer.effectAllowed = "copyMove"; if (row.connection) { event.dataTransfer.setData(CONNECTION_MIME, row.connection.id); event.dataTransfer.setData("application/x-connection-name", row.connection.name); } else if (row.group) event.dataTransfer.setData(GROUP_MIME, row.group.id); }}
-          onDragOver={(event) => { event.preventDefault(); event.stopPropagation(); }} onDrop={(event) => { event.stopPropagation(); void perform(() => drop(event, row)); }}
-          onClick={() => { setSelected(row.key); tree.current?.focus(); if (row.group) toggle(row.group.id); }} onDoubleClick={(event) => { if (row.connection && !disabled) void perform(() => onConnect(row.connection!, event.ctrlKey || event.metaKey)); }}
-          onAuxClick={(event) => { if (event.button === 1 && row.connection && !disabled) { event.preventDefault(); void perform(() => onConnect(row.connection!, true)); } }} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); openMenu(row, event.currentTarget.ownerDocument, event.clientX, event.clientY); }}>
+          draggable={false} onDragStart={event => event.preventDefault()} onPointerDown={event => { if (event.button === 1) event.preventDefault(); if (!busy) pointerDrag.start(event, row); }}
+          onDragOver={(event) => { if (event.dataTransfer.types.includes(CONNECTION_MIME) || event.dataTransfer.types.includes(GROUP_MIME)) { event.preventDefault(); event.stopPropagation(); } }} onDrop={(event) => { event.stopPropagation(); void drop(event, row); }}
+          onClick={() => { if (pointerDrag.consumeClick()) return; setSelected(row.key); tree.current?.focus(); if (row.group) toggle(row.group.id); }} onDoubleClick={(event) => { if (row.connection && !pointerDrag.consumeClick()) void connect(row.connection, event.ctrlKey || event.metaKey); }}
+          onAuxClick={(event) => { if (event.button === 1 && row.connection) { event.preventDefault(); void connect(row.connection, true); } }} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); openMenu(row, event.currentTarget.ownerDocument, event.clientX, event.clientY); }}>
           {row.group ? <>{expanded.has(row.group.id) || query ? <ChevronDown size={13} /> : <ChevronRight size={13} />}<Folder size={14} style={{ color: effectiveGroupColor(row.group,state.catalog) }} /><span>{row.group.name}</span></> : <><DatabaseIcon dbType={row.connection?.config.db_type} color={row.connection?effectiveConnectionColor(row.connection,state.catalog):undefined} /><span>{row.connection?.name}</span>{row.connection?.favorite && <Star size={12} fill="currentColor" />}{activeConnectionId === row.connection?.id && <Plug size={12} />}</>}
         </div>)}
       </div>
       {!rows.length && !state.loading && <p className="catalog-empty">{query || favorites ? t("Nenhuma conexão corresponde ao filtro.") : t("Nenhuma conexão salva.")}</p>}
+      {pointerDrag.drag && <div className={`connection-root-drop ${!pointerDrag.drag.target && pointerDrag.drag.valid ? "drop-target" : ""}`}>{t("Sem grupo")}</div>}
     </div>
+    {pointerDrag.drag && <div className={`connection-drag-label ${pointerDrag.drag.valid ? "valid" : "invalid"}`} style={{ left: pointerDrag.drag.x + 12, top: pointerDrag.drag.y + 12 }} aria-hidden="true">{pointerDrag.drag.source.connection?.name ?? pointerDrag.drag.source.group?.name}</div>}
+    {stringExport && <ConnectionStringDialog connection={stringExport} controller={controller} onClose={() => setStringExport(undefined)} />}
     {edit && <ConnectionDialog mode="save" connectionId={edit === "new" ? undefined : edit.id} initial={edit === "new" ? undefined : { ...edit.config, name: edit.name }} initialGroupId={edit === "new" ? selection?.group?.id ?? null : edit.group_id} initialColor={edit === "new" ? undefined : edit.color} hasPassword={edit !== "new" && edit.has_password} groups={state.catalog.groups} onClose={() => setEdit(undefined)} onConnect={async (config, metadata) => { await controller.save({ id: edit === "new" ? undefined : edit.id, name: config.name!.trim(), config, group_id: metadata?.group_id ?? null, color: metadata?.color, favorite: edit !== "new" && edit.favorite }, config.password || undefined, metadata?.save_password); }} />}
     {groupEdit && <GroupDialog initial={groupEdit === "new" ? undefined : groupEdit} groups={state.catalog.groups} defaultParent={selection?.group?.id ?? null} onClose={() => setGroupEdit(undefined)} onSave={async (group) => { await controller.mutate("groups.save", { group }); setExpanded((prior) => new Set([...prior, ...(group.parent_id ? [group.parent_id] : [])])); }} />}
     {menu && <ContextMenu key={menu.opening} ownerDocument={menu.ownerDocument} anchor={{ x: menu.x, y: menu.y }} returnFocus={tree.current} label={menu.row.connection?.name ?? menu.row.group!.name} items={menuItems} onClose={() => setMenu(undefined)} />}
@@ -142,7 +150,7 @@ function GroupDialog({ initial, groups, defaultParent, onClose, onSave }: { init
   useLocale();
   const [name, setName] = useState(initial?.name ?? ""), [parent, setParent] = useState(initial ? initial.parent_id : defaultParent), [color, setColor] = useState(initial?.color ?? ""), [error, setError] = useState(""), [busy, setBusy] = useState(false);
   const forbidden = initial ? groupDescendants(groups, initial.id) : new Set<string>();
-  return <Modal title={initial ? t("Editar grupo") : t("Novo grupo")} onClose={() => { if (!busy) onClose(); }}><form className="catalog-group-form" onSubmit={(event) => { event.preventDefault(); setBusy(true); void onSave({ id: initial?.id, name: name.trim(), parent_id: parent, color }).then(onClose, (failure) => setError(errorText(failure))).finally(() => setBusy(false)); }}><label className="field">{t("Nome")}<input required value={name} onChange={(event) => setName(event.target.value)} /></label><label className="field">{t("Grupo pai")}<select value={parent ?? ""} onChange={(event) => setParent(event.target.value || null)}><option value="">{t("Raiz")}</option>{groups.filter((group) => !forbidden.has(group.id)).map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label><label className="field">{t("Cor")}<input type="color" disabled={!color} value={color||"#dcdc8b"} onChange={(event) => setColor(event.target.value)} /></label><label className="checkbox-field"><input type="checkbox" checked={!color} onChange={event=>setColor(event.target.checked?"":"#dcdc8b")}/>{t("Herdar cor do grupo pai")}</label>{error && <p className="form-error" role="alert">{t(error)}</p>}<footer className="modal-footer"><button type="button" className="secondary-button" disabled={busy} onClick={onClose}>{t("Cancelar")}</button><button className="primary-button" disabled={busy || !name.trim()}>{t("Salvar grupo")}</button></footer></form></Modal>;
+  return <Modal title={initial ? t("Editar grupo") : t("Novo grupo")} onClose={() => { if (!busy) onClose(); }}><form className="catalog-group-form" onSubmit={(event) => { event.preventDefault(); setBusy(true); void onSave({ id: initial?.id, name: name.trim(), parent_id: parent, color }).then(onClose, (failure) => setError(errorText(failure))).finally(() => setBusy(false)); }}><label className="field">{t("Nome")}<input required value={name} onChange={(event) => setName(event.target.value)} /></label><label className="field">{t("Grupo pai")}<select aria-label={t("Grupo pai")} value={parent ?? ""} onChange={(event) => setParent(event.target.value || null)}><option value="">{t("Raiz")}</option>{groupHierarchy(groups).filter(({ group }) => !forbidden.has(group.id)).map(({ group, label }) => <option key={group.id} value={group.id}>{label}</option>)}</select></label><label className="field">{t("Cor")}<input type="color" disabled={!color} value={color||"#dcdc8b"} onChange={(event) => setColor(event.target.value)} /></label><label className="checkbox-field"><input type="checkbox" checked={!color} onChange={event=>setColor(event.target.checked?"":"#dcdc8b")}/>{t("Herdar cor do grupo pai")}</label>{error && <p className="form-error" role="alert">{t(error)}</p>}<footer className="modal-footer"><button type="button" className="secondary-button" disabled={busy} onClick={onClose}>{t("Cancelar")}</button><button className="primary-button" disabled={busy || !name.trim()}>{t("Salvar grupo")}</button></footer></form></Modal>;
 }
 
 export function ConnectionPicker({ title = t("Escolher conexão"), currentId, onSelect, onDefault, onClose }: { title?: string; currentId?: string; onSelect: (connection: SavedConnection) => Promise<void> | void; onDefault?: () => void; onClose: () => void }) {

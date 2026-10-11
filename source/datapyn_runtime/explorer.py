@@ -302,15 +302,44 @@ class ObjectExplorer:
         from .sql_context import metadata_signature
         references, prefixes, routines = metadata_signature(code, self.db_type)
         referenced_names = {part for path in references + prefixes for part in path}
+        relative_schemas, relative_tables, temporary_names = set(), set(), set()
+        if self.db_type == "databricks":
+            # Build namespace keys once: large catalogs still have constant
+            # lookup cost per table, independent of the number of SQL sources.
+            current = context["database"].casefold()
+            for path in references:
+                if len(path) == 1:
+                    temporary_names.add(path[0])
+                    relative_tables.add((schema.casefold(), path[0]))
+                elif len(path) == 2:
+                    relative_schemas.add(path[0])
+                    relative_tables.add(path)
+                elif len(path) == 3 and path[0] == current:
+                    relative_schemas.add(path[1])
+                    relative_tables.add(path[1:])
+            for path in prefixes:
+                if len(path) == 1:
+                    relative_schemas.add(path[0])
+                elif len(path) >= 2 and path[0] == current:
+                    relative_schemas.add(path[1])
         for candidate in schemas:
-            if candidate != schema and candidate.casefold() in referenced_names:
+            requested = candidate.casefold() in referenced_names
+            if self.db_type == "databricks":
+                # A foreign catalog's schema/table names must not cause probes
+                # of identically named objects in the focused namespace.
+                requested = candidate.casefold() in relative_schemas
+            if candidate != schema and requested:
                 requested_schemas.append(candidate)
         tables = []
         for candidate in requested_schemas[:8]:
             tables.extend(self._cached(("completion_tables", candidate), lambda candidate=candidate: self.objects(candidate, "table") + self.objects(candidate, "view")))
         # Fetch columns only for relations actually referenced by the document.
         for table in tables:
-            if table["name"].casefold() in referenced_names:
+            requested = table["name"].casefold() in referenced_names
+            if self.db_type == "databricks":
+                table_schema, name = table["schema"].casefold(), table["name"].casefold()
+                requested = name in temporary_names if table.get("temporary") else (table_schema, name) in relative_tables
+            if requested:
                 self.columns(table["name"], table["schema"])
         catalog = context["database"] if self.db_type in {"databricks", "sqlserver"} else ""
         # Listing other databases may require extra catalog privileges. Keep
@@ -342,11 +371,25 @@ class ObjectExplorer:
         catalogs = {str(name).casefold(): str(name) for name in result["databases"]}
         targets = set()
         catalog_schemas = {current: list(result["schemas"])}
+        if self.db_type == "databricks":
+            # Direct SELECT privileges need not include permission to discover
+            # every catalog/schema. A three-part relation already identifies
+            # its namespace; probe that namespace without SHOW CATALOGS gates.
+            for path in references:
+                if len(path) != 3 or path[0] == current.casefold():
+                    continue
+                catalog = catalogs.get(path[0], path[0])
+                targets.add((catalog, path[1]))
+                schemas = catalog_schemas.setdefault(catalog, [])
+                if path[1] not in schemas:
+                    schemas.append(path[1])
         for path in references + prefixes:
             if not path or path[0] not in catalogs:
                 continue
             catalog = catalogs[path[0]]
             if catalog.casefold() == current.casefold():
+                continue
+            if self.db_type == "databricks" and any(target[0].casefold() == catalog.casefold() for target in targets):
                 continue
             def load_schemas(catalog=catalog):
                 if self.db_type == "databricks":

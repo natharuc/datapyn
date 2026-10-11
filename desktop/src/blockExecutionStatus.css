@@ -1,0 +1,7 @@
+.block-status .block-elapsed { font: 10px var(--editor-font); font-variant-numeric: tabular-nums; flex:none; min-width:9ch; text-align:right; color:var(--muted); }
+.block-header .block-status { flex:0 0 auto; max-width:none; overflow:visible; }
+.block-execution-line { position:absolute; inset:auto 0 0; height:2px; overflow:hidden; pointer-events:none; z-index:2; }
+.block-execution-line > span { display:block; width:25%; height:100%; background:var(--blue-light); animation:block-execution-travel 1.35s linear infinite; }
+@keyframes block-execution-travel { from { transform:translateX(-100%); } to { transform:translateX(400%); } }
+@media(prefers-reduced-motion:reduce) { .block-execution-line > span { animation:none; width:100%; opacity:.65; } }
+@container(max-width:680px) { .block-status .block-status-label { display:none!important; } }

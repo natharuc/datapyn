@@ -18,7 +18,7 @@ export function UpdateDialog({ controller, onClose, beforeInstall }: { controlle
     <div className="update-content" aria-live="polite">
       {state.phase === "loading" && <p className="update-status"><LoaderCircle className="spin" size={17} />{t("Carregando configuração…")}</p>}
       {state.phase === "unavailable" && <><h3>{t("Atualizador indisponível neste build")}</h3><p>{t(state.configuration?.reason || "Não foi possível consultar a configuração de atualização.")}</p></>}
-      {state.phase === "idle" && <p>{t("Novas versões são verificadas e baixadas automaticamente.")}</p>}
+      {state.phase === "idle" && <p>{t("Novas versões são verificadas ao abrir o DataPyn.")}</p>}
       {state.phase === "checking" && <p className="update-status"><LoaderCircle className="spin" size={17} />{t("Verificando atualizações…")}</p>}
       {state.phase === "current" && <p className="update-status"><CircleCheck size={20} />{t("Você está usando a versão mais recente deste canal.")}</p>}
       {state.version && ["available", "downloading", "downloaded", "installing"].includes(state.phase) && <><h3>{t("Nova versão disponível")}: {state.version}</h3>{state.date && <p className="update-date">{new Date(state.date).toLocaleDateString()}</p>}</>}

@@ -197,9 +197,13 @@ class ConnectionCatalog:
                 name = group["name"]
             parent = self._group(group.get("parent_id"))
             ancestor = parent
+            visited = set()
             while ancestor:
                 if ancestor == identifier:
                     raise ValueError("A group cannot contain itself or one of its ancestors")
+                if ancestor in visited:
+                    raise ValueError("The destination group has an invalid parent cycle")
+                visited.add(ancestor)
                 ancestor = self._find("groups", ancestor).get("parent_id")
             if any(g["id"] != identifier and g["name"] == name for g in self.data["groups"]):
                 raise ValueError("A group with this name already exists; PyQt6 group names must be globally unique")
@@ -219,6 +223,20 @@ class ConnectionCatalog:
         with self._lock:
             if method == "connections.list":
                 return self.list()
+            if method == "connections.export_config":
+                include_password = params.get("include_password", False)
+                if not isinstance(include_password, bool):
+                    raise ValueError("include_password must be a boolean")
+                item = self._find("connections", params.get("connection_id"))
+                config = without_secrets(item["config"])
+                included = False
+                if include_password and item.get("has_password"):
+                    # Explicit clipboard export only; do not save or mutate catalog data.
+                    secrets = self.credentials.get(item["id"])
+                    if secrets.get("password") is not None:
+                        config["password"] = str(secrets["password"])
+                        included = True
+                return {"config": config, "password_included": included}
             if method == "connections.save":
                 return self.save_connection(params.get("connection"), password=params.get("password"), save_password=params.get("save_password"))
             if method == "groups.save":

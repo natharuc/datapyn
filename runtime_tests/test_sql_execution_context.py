@@ -338,7 +338,7 @@ def test_checkout_applies_changed_namespace_once_per_physical_connection(db_type
     handler = captured[0]
     record = SimpleNamespace(info=physical.info)
     handler(physical, record, None)
-    assert physical.commands == []
+    assert physical.commands == (["SELECT current_catalog(), current_schema()"] if db_type == "databricks" else [])
     connector.execute_query("USE CATALOG after" if db_type == "databricks" else "USE after")
     commands = list(physical.commands)
     handler(physical, record, None)
@@ -346,9 +346,9 @@ def test_checkout_applies_changed_namespace_once_per_physical_connection(db_type
     second = PhysicalConnection(db_type)
     second_record = SimpleNamespace(info=second.info)
     handler(second, second_record, None)
-    assert len(second.commands) == (2 if db_type == "databricks" else 1)
+    assert len(second.commands) == (4 if db_type == "databricks" else 1)
     handler(second, second_record, None)
-    assert len(second.commands) == (2 if db_type == "databricks" else 1)
+    assert len(second.commands) == (4 if db_type == "databricks" else 1)
     assert second.database == "after"
 
 
