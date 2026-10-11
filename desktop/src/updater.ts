@@ -65,8 +65,8 @@ export class UpdateController {
     })();
     await this.initialized;
   }
-  /** Check after startup, then every six hours. Network failures retry after fifteen minutes. */
-  startAutomaticUpdates(initialDelay = 10_000) {
+  /** Check when startup is ready, then every six hours. Downloads require a user action. */
+  startAutomaticUpdates(initialDelay = 0) {
     this.stopAutomaticUpdates();
     if (this.disposed) return () => {};
     const generation = ++this.automaticGeneration;
@@ -77,7 +77,6 @@ export class UpdateController {
       if (!current() || !this.state.configuration?.available || this.state.configuration.automatic_download === false) return;
       if (!this.active && !["downloaded", "installing", "installed"].includes(this.state.phase)) {
         await this.check();
-        if (current() && this.state.phase === "available") await this.download();
       }
       if (current() && this.state.phase !== "installed") this.automaticTimer = setTimeout(() => { void poll(); }, this.state.phase === "failed" ? 900_000 : 21_600_000);
     };

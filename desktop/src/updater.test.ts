@@ -26,13 +26,15 @@ describe("Tauri update lifecycle",()=>{
       expect(transport.check).not.toHaveBeenCalled();
     }
   });
-  it("checks and downloads after startup without automatically installing or restarting", async () => {
+  it("checks at startup and waits for a click before downloading, installing or restarting", async () => {
     vi.useFakeTimers();
     const { service, handle, transport } = fixture();
     const stop = service.startAutomaticUpdates();
-    await vi.advanceTimersByTimeAsync(9_999);
-    expect(transport.check).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(transport.check).toHaveBeenCalledOnce();
+    expect(service.state.phase).toBe("available");
+    expect(handle.download).not.toHaveBeenCalled();
+    await service.download();
     expect(service.state.phase).toBe("downloaded");
     expect(handle.download).toHaveBeenCalledOnce();
     expect(handle.install).not.toHaveBeenCalled();

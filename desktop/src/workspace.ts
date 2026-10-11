@@ -10,7 +10,7 @@ import { importedDataCode } from "./importCode";
 export type BlockStatus = "idle" | "queued" | "running" | "cancelling" | "succeeded" | "failed" | "cancelled";
 export interface Block {
   id: string; block_name: string; language: Language; code: string; is_active: boolean;
-  status: BlockStatus; duration_ms?: number; error?: string; height?: number;
+  status: BlockStatus; duration_ms?: number; executionStartedAt?: number; error?: string; height?: number;
   connection_id?: string; database_name?: string; schema?: string; collapsed?: boolean;
   sql_parameters?: Record<string, unknown>[]; sql_parameters_enabled?: boolean;
   cell_type?: "code" | "markdown" | "raw";
@@ -128,7 +128,7 @@ export function decodeDocument(input: unknown, title = "Análise importada", res
     if (block.language !== "sql" && block.language !== "python") throw new Error(`Linguagem de bloco não suportada: ${String(block.language)}`);
     if (typeof block.code !== "string") throw new Error("Código de bloco inválido.");
     return { ...block, id: newId(), block_name: String(block.block_name ?? ""), language: block.language,
-      code: block.code, is_active: block.is_active !== false, status: "idle" } as Block;
+      code: block.code, is_active: block.is_active !== false, status: "idle", executionStartedAt: undefined } as Block;
   });
   if (session.blocks.length === 0) session.blocks = [newBlock()];
   session.focusedBlockId = session.blocks[0].id;
@@ -147,7 +147,7 @@ export function encodeDocument(session: SessionDocument): Record<string, unknown
   return { ...encodeCharts(session.extras), version: "1.0", database_context: session.database ?? session.extras.database_context,
     desktop: { ...(session.extras.desktop as object ?? {}), session_id:session.id, connection_id: session.savedConnectionId, schema: session.schema,
       focused_block_key: session.blocks.find(b => b.id === session.focusedBlockId)?.block_key ?? session.focusedBlockId },
-    blocks: session.blocks.map(({ id, status, duration_ms, error, results, ...block }) => ({ ...block, block_key: block.block_key ?? id })) };
+    blocks: session.blocks.map(({ id, status, duration_ms, executionStartedAt, error, results, ...block }) => ({ ...block, block_key: block.block_key ?? id })) };
 }
 
 export function eventBelongsToSession(session: SessionDocument, event: RuntimeEvent): boolean {
@@ -200,7 +200,7 @@ export function applyRuntimeEvent(session: SessionDocument, event: RuntimeEvent)
     return { ...session, busy: false, currentExecutionId: undefined, currentBlockId: undefined,
       results: [], variables: [], images: [], richOutputs:[], commandExecutions:[], executionOutput:undefined, connection: undefined, connectionState:{...session.connectionState,phase:"error",error:event.payload.error},runtimeError: event.payload.error,
       notice: `Runtime desta sessão indisponível: ${event.payload.error}. Salve a análise, feche esta aba e reabra para criar uma nova sessão.`,
-      blocks: session.blocks.map((block) => ["running", "queued", "cancelling"].includes(block.status) ? { ...block, results:undefined, status: "failed", error: event.payload.error } : {...block,results:undefined}),
+      blocks: session.blocks.map((block) => ["running", "queued", "cancelling"].includes(block.status) ? { ...block, results:undefined, executionStartedAt:undefined, status: "failed", error: event.payload.error } : {...block,results:undefined,executionStartedAt:undefined}),
       logs: appendLog(session, "stderr", event.payload.error + "\n") };
   }
   if (event.event === "session.reset") {
@@ -208,11 +208,12 @@ export function applyRuntimeEvent(session: SessionDocument, event: RuntimeEvent)
     return { ...session, results: [], variables: [], images: [], richOutputs:[], connection: undefined,connectionState:undefined,
       executionOutput: lastCommands ? {executionId:lastCommands.executionId,kind:"commands"} : undefined,
       notice: "Runtime da sessão reiniciado. Variáveis e conexão foram descartadas; reconecte antes de executar SQL.",
-      blocks: session.blocks.map((block) => ["running", "queued", "cancelling"].includes(block.status) ? { ...block, results:undefined, status: "cancelled" } : {...block,results:undefined}),
+      blocks: session.blocks.map((block) => ["running", "queued", "cancelling"].includes(block.status) ? { ...block, results:undefined, executionStartedAt:undefined, status: "cancelled" } : {...block,results:undefined,executionStartedAt:undefined}),
       logs: appendLog(session, "system", "Sessão reiniciada: namespace e conexão descartados.\n") };
   }
   if (event.event === "execution.started") {
-    return { ...session, blocks: session.blocks.map((block) => block.id === session.currentBlockId && block.status === "queued" ? { ...block, status: "running" } : block) };
+    return { ...session, blocks: session.blocks.map((block) => block.id === session.currentBlockId && ["queued", "running", "cancelling"].includes(block.status) && block.executionStartedAt === undefined
+      ? { ...block, status: block.status === "cancelling" ? "cancelling" : "running", executionStartedAt: Date.now() } : block) };
   }
   if (event.event === "execution.output") {
     const running = session.blocks.find((block) => block.status === "running" || block.status === "cancelling");
@@ -233,7 +234,7 @@ export function applyRuntimeEvent(session: SessionDocument, event: RuntimeEvent)
     executionOutput: payload.rich_outputs?.length ? {executionId:payload.execution_id,kind:"rich"}
       : resultRefs.length && payload.status !== "failed" ? {executionId:payload.execution_id,kind:"results",resultId:resultRefs.at(-1)?.result_id}
       : commands.length ? {executionId:payload.execution_id,kind:"commands"} : session.executionOutput,
-    blocks: session.blocks.map(block => block.id === session.currentBlockId ? { ...block, status: payload.status, duration_ms: payload.duration_ms, error: payload.error, results: payload.results } : block),
+    blocks: session.blocks.map(block => block.id === session.currentBlockId ? { ...block, status: payload.status, duration_ms: payload.duration_ms, executionStartedAt: undefined, error: payload.error, results: payload.results } : block),
     results: payload.status === "failed" ? [] : resultRefs.length ? resultRefs : session.results,
     resultRevision: session.resultRevision + (payload.status === "succeeded" ? 1 : 0),
     // Cancelling a queued job does not restart the kernel. session.reset owns namespace invalidation.
@@ -586,7 +587,7 @@ export class WorkspaceController {
   duplicateBlock(sessionId: string, blockId: string) {
     const source = this.session(sessionId)?.blocks.find(b => b.id === blockId); if (!source) return;
     const copy = this.addBlock(sessionId, source.language, source.code, blockId);
-    const { id: _id, status: _status, error: _error, duration_ms: _duration, results: _results, ...definition } = source;
+    const { id: _id, status: _status, error: _error, duration_ms: _duration, executionStartedAt: _startedAt, results: _results, ...definition } = source;
     this.updateBlock(sessionId, copy.id, { ...definition, block_key: copy.id, block_name: source.block_name ? `${source.block_name}_copy` : "" });
     return copy;
   }
@@ -769,7 +770,7 @@ export class WorkspaceController {
     if (!runnable.length) { this.message("Escreva código no bloco antes de executar."); return; }
     this.cancelRequests.delete(sessionId);
     this.patchSession(sessionId, (session) => ({ ...session, busy: true, executionStartedAt: Date.now(), notice: undefined, commandExecutions: [], executionOutput: undefined,
-      blocks: session.blocks.map((block) => runnable.some((item) => item.id === block.id) ? { ...block, status: "queued", error: undefined } : block) }));
+      blocks: session.blocks.map((block) => runnable.some((item) => item.id === block.id) ? { ...block, status: "queued", error: undefined, duration_ms:undefined, executionStartedAt:undefined } : block) }));
     let succeeded = true, failedError: string | undefined, cancelled = false;
     let lastBlock = runnable[0], lastExecutionId = newId();
     let lastContext: NotificationContext = { tab_name: session?.title, block_name: lastBlock.block_name, blocks: 0,
@@ -798,7 +799,7 @@ export class WorkspaceController {
     finally {
       this.cancelRequests.delete(sessionId);
       this.patchSession(sessionId, (session) => ({ ...session, busy: false, lastDurationMs: session.executionStartedAt ? Date.now() - session.executionStartedAt : undefined, executionStartedAt: undefined, currentExecutionId: undefined, currentBlockId: undefined,
-        blocks: session.blocks.map((block) => ["queued", "running", "cancelling"].includes(block.status) ? { ...block, status: "cancelled" } : block) }));
+        blocks: session.blocks.map((block) => ["queued", "running", "cancelling"].includes(block.status) ? { ...block, status: "cancelled", executionStartedAt:undefined } : block) }));
       this.schedulePeriodic(sessionId);
       const current = this.session(sessionId);
       const status = cancelled ? "cancelled" : succeeded ? "succeeded" : "failed";
@@ -815,7 +816,7 @@ export class WorkspaceController {
     // The event channel may report failure before execution.run's request acknowledgement.
     void completion.catch(() => {});
     this.patchSession(sessionId, (session) => ({ ...session, currentExecutionId: executionId, currentBlockId: block.id,
-      blocks: session.blocks.map((item) => item.id === block.id ? { ...item, status: "running", error: undefined } : item) }));
+      blocks: session.blocks.map((item) => item.id === block.id ? { ...item, status: "running", error: undefined, executionStartedAt:undefined } : item) }));
     const current = this.session(sessionId)!;
     // Queue source code is captured at Run All, but context follows earlier
     // commands in that queue and must be resolved from the current document.
@@ -836,7 +837,7 @@ export class WorkspaceController {
     }).then(() => completion).catch((error) => {
         // A terminal event is authoritative even if its request acknowledgement arrives later.
         if (this.completions.delete(executionId)) {
-          this.patchSession(sessionId, (session) => ({ ...session, blocks: session.blocks.map((item) => item.id === block.id ? { ...item, status: "failed", error: errorText(error) } : item) }));
+          this.patchSession(sessionId, (session) => ({ ...session, blocks: session.blocks.map((item) => item.id === block.id ? { ...item, status: "failed", executionStartedAt:undefined, error: errorText(error) } : item) }));
         }
         throw error;
       });
@@ -866,7 +867,7 @@ export class WorkspaceController {
         sessions: this.state.sessions.map((session) => ({ ...session, busy: false, currentExecutionId: undefined, currentBlockId: undefined,
           connection: undefined, connectionState:{...session.connectionState,...(session.connectionState?.phase==="ready"?{scope:{database:session.database,schema:session.schema}}:{}),phase:"error",error:message},variables: [], results: [], images: [], richOutputs:[], commandExecutions:[], executionOutput:undefined, periodicSeconds:undefined, runtimeError: undefined, notice: "Runtime encerrado. As variáveis e conexões foram descartadas.",
           dataImport:session.dataImport?{...session.dataImport,phase:"error",error:message}:undefined,
-          blocks: session.blocks.map((block) => block.status === "running" || block.status === "cancelling" ? { ...block, results:undefined, status: "failed", error: message } : block.status === "queued" ? { ...block, results:undefined, status: "cancelled" } : {...block,results:undefined}) })) });
+          blocks: session.blocks.map((block) => block.status === "running" || block.status === "cancelling" ? { ...block, results:undefined, executionStartedAt:undefined, status: "failed", error: message } : block.status === "queued" ? { ...block, results:undefined, executionStartedAt:undefined, status: "cancelled" } : {...block,results:undefined,executionStartedAt:undefined}) })) });
       return;
     }
     if (!event || !event.payload?.session_id) return;

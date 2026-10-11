@@ -15,6 +15,7 @@ import { errorText, isDesktop, runtime } from "./runtime";
 import { WorkspaceController, encodeDocument, type Block, type SessionDocument, type WorkspaceStorage } from "./workspace";
 import { disposeModel, focusEditor, insertInEditor, selectedCode, setCompletionContext,setCompletionContextResolver, editorAction, formatEditor, forceAutocomplete, transformEditorSelection, getRegisteredEditor,revealEditorRange } from "./editorRegistry";
 import { BlockSyntaxDiagnostics } from "./BlockSyntaxDiagnostics";
+import {BlockExecutionLine,BlockExecutionStatus,SessionExecutionTime} from "./BlockExecutionStatus";
 import type { EditorPreferences } from "./MonacoBlock";
 import { ResultGrid } from "./ResultGrid";
 import { CommandResults } from "./CommandResults";
@@ -59,6 +60,7 @@ import {connectionPending,SessionConnectionStatus} from "./SessionConnectionStat
 import {dataImportPending} from "./dataImport";
 import {DataImportStatus} from "./DataImportStatus";
 import {useTauriUpdates} from "./useTauriUpdates";
+import {UpdateNotice} from "./UpdateNotice";
 import type {ExplorerContext} from "./explorer";
 import {exportContext} from "./exportContext";
 import {downloadDirectory} from "./queryDownload";
@@ -97,7 +99,6 @@ function blockConnectionConfig(session:SessionDocument,block:Block) {
     (block.connection_id===undefined || block.connection_id===session.savedConnectionId ? session.connection : undefined);
 }
 const blockScope=(session:SessionDocument,block:Block)=>({...completionConnectionScope(session,block,blockConnectionConfig(session,block)),scopeInherited:inheritsSessionScope(block)});
-const statusLabel = { idle: "", queued: "Na fila", running: "Executando", cancelling: "Cancelando", succeeded: "Concluído", failed: "Erro", cancelled: "Cancelado" };
 
 function IconButton({ title, children, onClick, disabled = false, className = "" }: { title: string; children: React.ReactNode; onClick?: () => void; disabled?: boolean; className?: string }) {
   return <button type="button" className={`icon-button ${className}`} title={translateUi(title)} aria-label={translateUi(title)} onClick={onClick} disabled={disabled}>{children}</button>;
@@ -336,7 +337,7 @@ export function App() {
     if(docking.current)docking.current.reset(resetSizes ? {leftWidth:DEFAULT_PREFERENCES.leftWidth,rightWidth:DEFAULT_PREFERENCES.rightWidth,resultHeight:DEFAULT_PREFERENCES.resultHeight} : undefined);else setDockReset(n=>n+1);
     workspace.maximizeBlock(workspace.getSnapshot().activeId);
   };
-  const [periodicSeconds, setPeriodicSeconds] = useState(30), [elapsed, setElapsed] = useState(0);
+  const [periodicSeconds, setPeriodicSeconds] = useState(30);
   const [activeResult, setActiveResult] = useState<Record<string, string>>({}), [copySignal, setCopySignal] = useState(0);
   const [shortcuts, setShortcuts] = useState<Record<Command, string>>(() => {
     try { return { ...DEFAULT_SHORTCUTS, ...JSON.parse(localStorage.getItem("datapyn.desktop.shortcuts.v1") ?? "{}") }; } catch { return DEFAULT_SHORTCUTS; }
@@ -430,12 +431,6 @@ export function App() {
       }finally{workspace.setEditingLocked(false);setSwitchingProfile(false);}
     },
   };
-  useEffect(() => {
-    if (!session.busy || !session.executionStartedAt) { setElapsed(session.lastDurationMs ?? 0); return; }
-    const update = () => setElapsed(Date.now() - session.executionStartedAt!); update();
-    const timer = setInterval(update, 100); return () => clearInterval(timer);
-  }, [session.busy, session.executionStartedAt, session.lastDurationMs]);
-
   useEffect(() => { void workspace.initialize(); const persist = () => workspace.persist(); window.addEventListener("beforeunload", persist); return () => window.removeEventListener("beforeunload", persist); }, []);
   const run = useCallback((task: Promise<unknown>) => { void task.catch((failure) => reportMessage(errorText(failure))); }, []);
   const showResult = (result: ResultRef, variables?: RuntimeVariable[], generatedCode?:string) => {
@@ -606,6 +601,8 @@ export function App() {
         // Keep Escape available to Monaco's completion/find widgets.
         if (eventDocument.activeElement?.closest(".monaco-editor") || !activeSessionRef.current.busy) return;
       }
+      // The connection tree owns Enter and Ctrl/Meta+Enter to open its selected connection.
+      if (event.key === "Enter" && eventDocument.activeElement?.closest('.connection-tree-viewport [role="tree"]')) return;
       const command = commandForEvent(event.repeat ? { key: event.key, ctrlKey: event.ctrlKey, metaKey: event.metaKey, altKey: event.altKey, shiftKey: event.shiftKey, repeat: false } : event, shortcuts); if (!command) return;
       if (EDITOR_COMMANDS.has(command) && !eventDocument.activeElement?.closest(".monaco-editor")) return;
       if (eventDocument.activeElement?.matches("input,textarea,select") && !eventDocument.activeElement.closest(".monaco-editor") && !["save","saveAs","open","settings"].includes(command)) return;
@@ -673,7 +670,7 @@ export function App() {
         <button onClick={() => run(saveDocument(true))}>{translateUi("Salvar como")}</button>
         <button onClick={() => setSettingsDialog(true)}>{translateUi("Configurações")}</button>
         <button disabled={!dockControls || editingLocked} aria-haspopup="dialog" aria-expanded={layoutDialog} onClick={()=>setLayoutDialog(true)}>{translateUi("Exibir")}</button>
-        {updates.state.phase === "downloaded" && <button className="app-update-ready" onClick={()=>setUpdateDialog(true)}><RefreshCw size={14}/>{translateUi("Atualização pronta")}</button>}
+        {["available","downloading","downloaded"].includes(updates.state.phase) && <button className="app-update-ready" onClick={()=>setUpdateDialog(true)}><RefreshCw size={14}/>{translateUi(updates.state.phase === "downloaded"?"Atualização pronta":updates.state.phase === "downloading"?"Baixando atualização":"Nova versão disponível")}</button>}
         <button className="app-notifications" aria-label={translateUi("Notificações")} title={translateUi("Notificações")} onClick={()=>setNotificationHistory(true)}><Bell size={14}/>{notificationState.unread > 0 && <span className="notification-menu-count">{notificationState.unread}</span>}</button>
         <button aria-haspopup="menu" aria-expanded={Boolean(appMenu)} onClick={e=>{const rect=e.currentTarget.getBoundingClientRect();setAppMenu({owner:e.currentTarget.ownerDocument,anchor:{x:rect.left,y:rect.bottom},button:e.currentTarget});}}><MoreHorizontal size={15}/>{translateUi("Mais")}</button>
       </nav>
@@ -692,7 +689,7 @@ export function App() {
           {item.busy || connectionPending(item.connectionState) || dataImportPending(item.dataImport) ? <LoaderCircle size={13} className="spin" aria-label={t(dataImportPending(item.dataImport)?"Importando dados…":item.busy?"Executando…":"Abrindo conexão")}/> : item.dataImport?.phase==="error"||item.connectionState?.phase==="error" ? <AlertTriangle size={13} className="session-connection-error" aria-label={t(item.dataImport?.phase==="error"?"Falha ao importar arquivo":"Falha na conexão")}/> : <FileCode2 size={13} />}<span>{item.title}{item.modified ? " •" : ""}</span></button>}
         <IconButton title={`Fechar ${item.title}`} onClick={() => run(closeSession(item.id))}><X size={12} /></IconButton>
       </div>)}
-      <IconButton title={translateUi("Nova sessão (Ctrl+N / Ctrl+T)")} onClick={() => workspace.createSession()} className="new-session"><Plus size={17} /></IconButton>
+      <IconButton title={translateUi("Nova sessão (Ctrl+N / Ctrl+T)")} disabled={editingLocked || !profile} onClick={() => workspace.createSession()} className="new-session"><Plus size={17} /></IconButton>
     </div>
     <div className="workspace-toolbar">
       <IconButton title={leftVisible ? "Ocultar conexões" : "Mostrar conexões"} disabled={editingLocked} onClick={() => toggleDockGroup(["connections","explorer"])}>{leftVisible ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}</IconButton>
@@ -704,14 +701,14 @@ export function App() {
       <button className="text-button stop-button" disabled={!session.busy&&!dataImportPending(session.dataImport)||session.dataImport?.phase==="cancelling"} onClick={() => run(dataImportPending(session.dataImport)?workspace.cancelImport(session.id):workspace.cancel(session.id))} title={t(dataImportPending(session.dataImport)?"Cancelar importação":"Interromper esta sessão e descartar seu namespace")}><Square size={13} fill="currentColor" /> {translateUi("Cancelar")}</button>
       <span className="toolbar-spacer" />
       <label className="periodic-control" title={translateUi("Executar todos periodicamente nesta aba")}><input type="number" min="1" max="86400" value={periodicSeconds} onChange={e => setPeriodicSeconds(Math.max(1,+e.target.value))} aria-label={translateUi("Intervalo em segundos")}/>{translateUi("s")}<button className={session.periodicSeconds ? "active" : ""} disabled={runDisabled && !session.periodicSeconds} onClick={() => session.periodicSeconds ? workspace.stopPeriodic(session.id) : run(workspace.startPeriodic(session.id, periodicSeconds))}>{t(session.periodicSeconds ? "Parar repetição" : "Repetir")}</button></label>
-      <span className="execution-time">{(elapsed / 1000).toFixed(1)}{translateUi("s")}</span>
+      <SessionExecutionTime active={session.busy} started={session.executionStartedAt} duration={session.lastDurationMs}/>
       <span className="toolbar-hint">{session.blocks.length} {translateUi("blocos")}</span>
       <IconButton title={rightVisible ? "Ocultar variáveis" : "Mostrar variáveis"} disabled={editingLocked} onClick={() => toggleDockGroup(["variables","pynia"])}>{rightVisible ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}</IconButton>
     </div>
     {isDesktop() && !profile && <div className="workspace-loading" role="status" aria-live="polite">{profileLoadError || state.runtimeStatus === "unavailable" ? <><span>{profileLoadError || state.message}</span><button className="text-button" onClick={()=>state.runtimeStatus === "unavailable" ? run(workspace.retryRuntime()) : setProfileRetry(n=>n+1)}>{translateUi("Tentar novamente")}</button></> : <><LoaderCircle className="spin" size={22}/><span>{translateUi(state.runtimeStatus === "ready" ? "Restaurando workspace…" : "Iniciando runtime Python…")}</span></>}</div>}
     {state.runtimeStatus === "unavailable" && <div className="runtime-banner"><Activity size={14} /><span>{isDesktop() ? state.message : "Prévia da interface. O runtime Python está disponível no aplicativo desktop."}</span>{isDesktop() && <button className="text-button" onClick={() => run(workspace.retryRuntime())}><RefreshCw size={12} /> {translateUi("Reconectar")}</button>}</div>}
     <main className="workbench">{(!isDesktop() || profile) && <Suspense fallback={<p className="explorer-empty">{translateUi("Carregando painéis…")}</p>}><DockingWorkbench key={profile?.active_id ?? "startup"} initialLayout={dockLayout} locked={editingLocked} onControlsReady={controls=>{docking.current=controls;setDockControls(controls);}} onPanelsChange={dockPanelsChanged} onVisiblePanelsChange={setVisibleDockPanels} onRestoreError={reportMessage} onInitialized={()=>setStartupLayout(profile?.active_id)} onPopoutReady={attachPopoutKeyboard} onCaptureReady={capture=>{captureLayout.current=capture;}} onLayoutChange={setDockLayout} theme={preferences.theme} leftWidth={preferences.leftWidth} rightWidth={preferences.rightWidth} resultHeight={resultHeight} leftVisible={leftVisible} rightVisible={rightVisible} activeBottom={panel} activeRight={rightPanel} resetRevision={dockReset} onActivate={id=>{if(isBottomPanel(id))setPanel(id);if(id === "variables" || id === "pynia")setRightPanel(id);}} panels={{
-      connections:<ConnectionsSidebar activeConnectionId={session.savedConnectionId} onConnect={connectSaved} onDisconnect={() => workspace.disconnect(session.id)} onError={reportMessage} disabled={session.busy || dataImportPending(session.dataImport) || openingConnection || !profile || switchingProfile}/>,
+      connections:<ConnectionsSidebar activeConnectionId={session.savedConnectionId} onConnect={connectSaved} onDisconnect={() => workspace.disconnect(session.id)} onError={reportMessage} disabled={session.busy || dataImportPending(session.dataImport) || openingConnection || editingLocked || !profile} newTabDisabled={editingLocked || !profile}/>,
       explorer:<ObjectExplorer sessionId={session.id} blockId={focusedBlock?.id} scopeInherited={focusedScope.scopeInherited} connectionId={focusedScope.connectionId} database={focusedScope.database} schema={focusedScope.schema} dbType={catalogState.catalog.connections.find(item=>item.id===focusedScope.connectionId)?.config.db_type ?? session.connection?.db_type} connected={!connectionBlocked && preparedSession === `${profile?.active_id}:${session.id}` && Boolean(session.connection || focusedBlock?.connection_id || session.savedConnectionId)} refresh={explorerRefresh} disabled={session.busy} onError={reportMessage}
           onInsert={(code, language = "sql", newBlock = false) => { if (newBlock) { const block = workspace.addBlock(session.id,language,code,session.focusedBlockId); if (focusedBlock) workspace.updateBlock(session.id,block.id,{connection_id:focusedScope.connectionId,database_name:focusedScope.database,schema:focusedScope.schema}); requestAnimationFrame(()=>focusEditor(block.id)); } else insertInEditor(session.focusedBlockId,code); }}
           onContextChange={context => applyBlockScope(session.id,session.focusedBlockId,context)}/>,
@@ -777,7 +774,7 @@ export function App() {
     {packageDialog && <Suspense fallback={null}><PackageManagerDialog onClose={()=>setPackageDialog(false)} onError={reportMessage}/></Suspense>}
     {notificationDialog && <Suspense fallback={null}><NotificationsDialog sessionId={session.id} config={session.extras.notification_config as NotificationConfig} context={notificationContext(session)} onDefaults={flags=>setPreferences(p=>({...p,...flags}))} onSave={notification_config=>workspace.patchSession(session.id,s=>({...s,modified:true,extras:{...s.extras,notification_config}}))} onClose={()=>setNotificationDialog(false)}/></Suspense>}
     {workspaceManager && <Suspense fallback={null}><WorkspaceManagerDialog busy={state.sessions.some(s=>s.busy) || switchingProfile} onSelect={selectProfile} onClose={()=>setWorkspaceManager(false)} onMessage={reportMessage}/></Suspense>}
-    <NotificationToasts center={notificationCenter} entries={notificationState.toasts} onActivate={openNotification}/>
+    <NotificationToasts center={notificationCenter} entries={notificationState.toasts} onActivate={openNotification} leading={<UpdateNotice controller={updates.controller} onOpen={()=>setUpdateDialog(true)}/>}/>
     {notificationHistory && <NotificationHistory center={notificationCenter} entries={notificationState.entries} onActivate={openNotification} onSettings={()=>{setNotificationHistory(false);setNotificationDialog(true);}} onClose={()=>setNotificationHistory(false)}/>}
     {connectionDialog && <ConnectionDialog initial={session.connection} onClose={() => setConnectionDialog(false)} onConnect={async (config) => { await workspace.connect(session.id, config); setExplorerRefresh(n=>n+1); }} />}
     {settingsDialog && <SettingsDialog preferences={preferences} shortcuts={shortcuts} transfer={configurationActions} onClose={() => setSettingsDialog(false)} onSave={async(p,next) => { await saveNotificationFlags(runtime,p);setPreferences(p);if(p.notifications && !preferences.notifications && isDesktop())run(requestPermission());setShortcuts(next); workspace.patchSession(session.id,s=>({...s,extras:{...s.extras,shared_delimiter:p.sharedDelimiter}})); try { localStorage.setItem("datapyn.desktop.shortcuts.v1", JSON.stringify(next)); } catch { reportMessage("Atalhos aplicados. Não foi possível persistir nesta máquina."); } setSettingsDialog(false); }} />}
@@ -792,13 +789,24 @@ const BlockCard = memo(function BlockCard({ block, index, count, session, disabl
   const maximized = session.maximizedBlockId === block.id;
   const [actions,setActions]=useState<{owner:Document;anchor:{x:number;y:number};button:HTMLElement}>();
   const catalog = useSyncExternalStore(connections.subscribe, connections.getSnapshot);
+  const article=useRef<HTMLElement>(null);
+  useEffect(()=>{
+    const target=article.current;if(!target)return;
+    const drop=(event:Event)=>{
+      const connectionId=(event as CustomEvent<{connectionId?:unknown}>).detail?.connectionId;
+      if(index===0 || locked || session.busy || typeof connectionId!=="string" || !connections.getSnapshot().catalog.connections.some(item=>item.id===connectionId))return;
+      event.stopPropagation();workspace.updateBlock(session.id,block.id,{connection_id:connectionId,database_name:undefined,schema:undefined});
+    };
+    target.addEventListener("datapyn:connection-drop",drop);
+    return()=>target.removeEventListener("datapyn:connection-drop",drop);
+  },[session.id,block.id,index,locked,session.busy]);
   const customConnection = catalog.catalog.connections.find(c => c.id === (block.connection_id ?? session.savedConnectionId));
   const dialect = blockConnectionConfig(session,block)?.db_type;
   const scope = blockScope(session, block),metadata=scopeMetadata(session,block);
   const diagnosticKey = JSON.stringify([session.id, scope.connectionId, scope.database, scope.schema, scope.scopeInherited, dialect, preferences.sharedDelimiter, preferences.locale, diagnosticRevision]);
   useParameterScan(block.language === "sql" ? [block.code] : [], (block.sql_parameters ?? []) as ParameterDefinition[], false, preferences.sharedDelimiter,
     parameters => workspace.updateBlock(session.id,block.id,{sql_parameters:parameters}));
-  return <article style={{pointerEvents:locked ? "none" : undefined,...(session.maximizedBlockId && session.maximizedBlockId !== block.id ? {display:"none"} : {}),borderLeftColor:effectiveConnectionColor(block.connection_id ?? session.savedConnectionId ?? "",catalog.catalog)}} className={`code-block ${block.language} ${session.focusedBlockId === block.id ? "focused" : ""} ${session.maximizedBlockId === block.id ? "maximized" : ""}`} data-block-id={block.id}
+  return <article ref={article} style={{pointerEvents:locked ? "none" : undefined,...(session.maximizedBlockId && session.maximizedBlockId !== block.id ? {display:"none"} : {}),borderLeftColor:effectiveConnectionColor(block.connection_id ?? session.savedConnectionId ?? "",catalog.catalog)}} className={`code-block ${block.language} ${session.focusedBlockId === block.id ? "focused" : ""} ${session.maximizedBlockId === block.id ? "maximized" : ""}`} data-block-id={block.id}
     onDragOver={e=>{if (e.dataTransfer.types.includes("application/x-datapyn-block") || e.dataTransfer.types.includes(CONNECTION_MIME)) e.preventDefault();}}
     onDrop={e=>{e.preventDefault();const source = e.dataTransfer.getData("application/x-datapyn-block");const connection = e.dataTransfer.getData(CONNECTION_MIME);if(source) workspace.reorderBlock(session.id,source,block.id);if(connection && index > 0) workspace.updateBlock(session.id,block.id,{connection_id:connection,database_name:undefined,schema:undefined});}}>
     <div className="block-header" onClick={()=>workspace.focusBlock(session.id,block.id)} onDoubleClick={event=>{
@@ -815,7 +823,7 @@ const BlockCard = memo(function BlockCard({ block, index, count, session, disabl
           connected={scopeReady && Boolean(scope.connectionId || session.connection)} disabled={session.busy || locked} refresh={scopeRefresh} onError={reportMessage}
           onChange={context=>onScopeChange(session.id,block.id,context)} /></>}
       {!block.is_active && <span className="block-inactive">{translateUi("Desativado")}</span>}
-      {block.status !== "idle" && <span className={`block-status ${block.status}`} title={translateUi(statusLabel[block.status])} aria-label={translateUi(statusLabel[block.status])}>{block.status === "running" || block.status === "cancelling" ? <><LoaderCircle size={12} className="spin"/>{translateUi(statusLabel[block.status])}</> : block.status !== "succeeded" ? translateUi(statusLabel[block.status]) : null}{block.duration_ms !== undefined && ["succeeded","failed"].includes(block.status) && <span>{(block.duration_ms/1000).toFixed(2)} s</span>}</span>}
+      <BlockExecutionStatus block={block}/>
       <button className="icon-button" aria-label={translateUi("Ações do bloco")} title={translateUi("Ações do bloco")} aria-haspopup="menu" aria-expanded={Boolean(actions)} onClick={e=>{const rect=e.currentTarget.getBoundingClientRect();setActions({owner:e.currentTarget.ownerDocument,anchor:{x:rect.right,y:rect.bottom},button:e.currentTarget});}}><MoreHorizontal size={15}/></button>
       {actions && <ContextMenu ownerDocument={actions.owner} anchor={actions.anchor} returnFocus={actions.button} label={translateUi("Ações do bloco")} onClose={()=>setActions(undefined)} items={[
         {label:translateUi(block.is_active ? "Desativar na execução de todos" : "Ativar na execução de todos"),disabled:session.busy,onSelect:()=>workspace.updateBlock(session.id,block.id,{is_active:!block.is_active})},
@@ -839,6 +847,7 @@ const BlockCard = memo(function BlockCard({ block, index, count, session, disabl
     <BlockSyntaxDiagnostics id={block.id} code={block.code} language={block.language} enabled={!block.cell_type || block.cell_type === "code"} ready={diagnosticsReady} focused={session.focusedBlockId === block.id} contextKey={diagnosticKey}
       params={() => { const context = block.language === "python" ? diagnosticContext(session.id) : undefined; return { session_id: session.id, block_id:block.id, scope_inherited:scope.scopeInherited,connection_id: scope.connectionId, database: scope.database, schema: scope.schema, db_type: dialect, shared_delimiter: preferences.sharedDelimiter, locale: preferences.locale, global_imports: context?.globalImports, preamble: context?.preamble }; }}
       onReveal={marker => { workspace.updateBlock(session.id, block.id, { collapsed: false }); workspace.focusBlock(session.id, block.id); revealEditorRange(block.id, { startLineNumber: marker.start_line, startColumn: marker.start_column, endLineNumber: marker.end_line, endColumn: marker.end_column }); }} />
+    <BlockExecutionLine active={block.status === "running" || block.status === "cancelling"}/>
   </article>;
 }, (before,after)=>before.block === after.block && before.index === after.index && before.count === after.count && before.disabled === after.disabled && before.locked === after.locked && before.forceMount === after.forceMount && before.onEditorReady === after.onEditorReady && before.preferences === after.preferences && before.scopeReady === after.scopeReady && before.scopeRefresh === after.scopeRefresh && before.scopeMetadata === after.scopeMetadata && before.onScopeChange === after.onScopeChange && before.diagnosticsReady === after.diagnosticsReady && before.diagnosticRevision === after.diagnosticRevision && before.session.focusedBlockId === after.session.focusedBlockId && before.session.maximizedBlockId === after.session.maximizedBlockId && before.session.connection === after.session.connection && before.session.savedConnectionId === after.session.savedConnectionId && before.session.database === after.session.database && before.session.schema === after.session.schema && before.session.busy === after.session.busy);
 

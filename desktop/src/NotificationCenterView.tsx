@@ -2,6 +2,7 @@ import { Bell, CheckCircle2, CircleSlash, Settings2, X, XCircle } from "lucide-r
 import { translate as t, useLocale } from "./i18n";
 import { Modal } from "./PanelControls";
 import type { NotificationCenter, NotificationEntry } from "./executionNotifications";
+import type {ReactNode} from "react";
 import "./notificationCenter.css";
 
 function StatusIcon({ entry }: { entry: NotificationEntry }) {
@@ -10,9 +11,10 @@ function StatusIcon({ entry }: { entry: NotificationEntry }) {
 function NotificationText({ entry }: { entry: NotificationEntry }) {
   return <><strong>{entry.title || t("DataPyn")}</strong><p>{entry.message}</p>{entry.target && <small>{t("Ir para o bloco")}</small>}</>;
 }
-export function NotificationToasts({ center, entries, onActivate }: { center: NotificationCenter; entries: readonly NotificationEntry[]; onActivate: (entry: NotificationEntry) => void }) {
+export function NotificationToasts({ center, entries, onActivate, leading }: { center: NotificationCenter; entries: readonly NotificationEntry[]; onActivate: (entry: NotificationEntry) => void; leading?:ReactNode }) {
   useLocale();
   return <div className="notification-toasts" aria-live="polite" aria-relevant="additions">
+    {leading}
     {entries.map(entry => <article key={entry.id} className={`notification-toast notification-card ${entry.success ? "success" : "failure"} ${entry.status === "cancelled" ? "cancelled" : ""}`}
       style={{ borderLeftColor: entry.color }} onMouseEnter={() => center.pause(entry.id)} onMouseLeave={() => center.resume(entry.id)} onFocus={() => center.pause(entry.id)} onBlur={() => center.resume(entry.id)}>
       {entry.target ? <button className="notification-open" onClick={() => onActivate(entry)}><StatusIcon entry={entry}/><div><NotificationText entry={entry}/></div></button> : <div className="notification-open"><StatusIcon entry={entry}/><div><NotificationText entry={entry}/></div></div>}

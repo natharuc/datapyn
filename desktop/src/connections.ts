@@ -63,6 +63,9 @@ export class ConnectionsController {
     const { password: _secret, ...config } = connection.config;
     return this.mutate<SavedConnection>("connections.save", { connection: { ...connection, config }, password, save_password: savePassword });
   }
+  exportConfig(connectionId: string, includePassword = false) {
+    return this.transport.request<{ config: ConnectionConfig; password_included: boolean }>("connections.export_config", { connection_id: connectionId, include_password: includePassword });
+  }
 }
 export const connections = new ConnectionsController(runtime);
 
@@ -107,4 +110,35 @@ export function groupDescendants(groups: ConnectionGroup[], id: string): Set<str
     for (const group of groups) if (group.parent_id && descendants.has(group.parent_id) && !descendants.has(group.id)) { descendants.add(group.id); changed = true; }
   }
   return descendants;
+}
+
+/** Full paths disambiguate equally named leaves, even in imported malformed trees. */
+export function groupHierarchy(groups: ConnectionGroup[]): Array<{ group: ConnectionGroup; label: string; depth: number }> {
+  const lookup = new Map(groups.map(group => [group.id, group]));
+  return groups.map(group => {
+    const names = [group.name], visited = new Set([group.id]); let parent = group.parent_id;
+    while (parent && !visited.has(parent)) { visited.add(parent); const ancestor = lookup.get(parent); if (!ancestor) break; names.unshift(ancestor.name); parent = ancestor.parent_id; }
+    return { group, label: names.join(" / "), depth: names.length - 1 };
+  }).sort((a, b) => a.label.localeCompare(b.label));
+}
+
+export function catalogDropAllowed(catalog: ConnectionCatalog, source: ConnectionTreeRow, target: ConnectionTreeRow | null): boolean {
+  const parent = target?.group?.id ?? target?.connection?.group_id ?? null;
+  if (source.connection) return source.connection.id !== target?.connection?.id && catalog.connections.some(connection => connection.id === source.connection!.id);
+  if (source.group) return !groupDescendants(catalog.groups, source.group.id).has(parent ?? "") && source.group.parent_id !== parent;
+  return false;
+}
+
+export async function moveCatalogRow(controller: ConnectionsController, source: ConnectionTreeRow, target: ConnectionTreeRow | null): Promise<void> {
+  const catalog = controller.getSnapshot().catalog;
+  if (!catalogDropAllowed(catalog, source, target)) return;
+  const parent = target?.group?.id ?? target?.connection?.group_id ?? null;
+  if (source.connection) {
+    await controller.mutate("connections.move", { connection_id: source.connection.id, group_id: parent });
+    if (target?.connection) {
+      const ordered = [...controller.getSnapshot().catalog.connections].sort(compare).map(connection => connection.id).filter(id => id !== source.connection!.id);
+      ordered.splice(ordered.indexOf(target.connection.id), 0, source.connection.id);
+      await controller.mutate("connections.reorder", { connection_ids: ordered });
+    }
+  } else if (source.group) await controller.mutate("groups.save", { group: { ...source.group, parent_id: parent } });
 }

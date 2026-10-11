@@ -49,4 +49,16 @@
 .connection-help summary{cursor:pointer;width:max-content;max-width:100%}
 .connection-help p{margin:8px 0;overflow-wrap:anywhere}
 .connection-manager .modal-header h2,.connection-picker .modal-header h2{flex:1}
+.connection-tree-viewport{position:relative}
+.connection-tree-row.drop-target,.connection-root-drop.drop-target{background:var(--card);outline:1px solid var(--accent);outline-offset:-1px}
+.connection-root-drop{position:sticky;bottom:0;min-height:32px;box-sizing:border-box;border:1px dashed var(--border);padding:8px 12px;color:var(--muted);background:var(--panel,var(--bg))}
+.connection-drag-label{position:fixed;z-index:10000;pointer-events:none;max-width:240px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:6px 10px;border:1px solid var(--border);border-radius:3px;background:var(--panel,var(--bg));color:var(--text);font-size:12px}
+.connection-drag-label.invalid{opacity:.65}
+.modal.connection-string-dialog{width:620px;max-width:calc(100dvw - 40px);max-height:calc(100dvh - 40px);display:flex;flex-direction:column}
+.connection-string-fields{padding:16px 18px;min-height:0;overflow:auto}
+.connection-string-dialog .modal-footer{padding:12px 18px;flex-shrink:0}
+.connection-string-dialog textarea,.connection-string-import textarea{width:100%;box-sizing:border-box;resize:vertical;min-height:76px;padding:9px;border:1px solid var(--border);border-radius:3px;background:var(--bg);color:var(--text);font-family:var(--code-font,monospace);font-size:12px;line-height:1.5}
+.connection-string-import{margin-bottom:14px}
+.connection-string-import summary{cursor:pointer;color:var(--muted);margin-bottom:10px}
+.connection-string-hint{font-size:12px;color:var(--muted);margin:8px 0}
 @media(max-width:400px){.connection-manager-buttons{grid-template-columns:1fr}}

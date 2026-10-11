@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ConnectionsController, connectionRows, connectionSearchText, effectiveConnectionColor, effectiveGroupColor, groupDescendants, type ConnectionCatalog, type SavedConnection } from "./connections";
+import { ConnectionsController, connectionRows, connectionSearchText, effectiveConnectionColor, effectiveGroupColor, groupDescendants, groupHierarchy, catalogDropAllowed, moveCatalogRow, type ConnectionCatalog, type SavedConnection } from "./connections";
 import type { RuntimeTransport } from "./runtime";
 const connection = (id: string, group_id: string | null, name = id): SavedConnection => ({ id, group_id, name, order: 1, color: "", favorite: false, has_password: false, config: { db_type: "sqlite", host: "", port: 0, database: "sample.db", username: "" } });
 const catalog: ConnectionCatalog = { version: 1, groups: [
@@ -59,5 +59,32 @@ describe("catalog broker state", () => {
     await controller.save({ name: "saved", config: { ...connection("x", null).config, password: "transient" } }, "secret", true);
     const request = requests[0].params!; expect((request.connection as { config: unknown }).config).not.toHaveProperty("password"); expect(request.password).toBe("secret");
     expect(JSON.stringify(controller.getSnapshot())).not.toContain("secret");
+  });
+});
+
+describe("connection organization", () => {
+  it("shows full paths and terminates malformed group cycles", () => {
+    expect(groupHierarchy(catalog.groups).map(item => item.label)).toEqual(["Produção", "Produção / Operações"]);
+    expect(groupHierarchy([{ ...catalog.groups[0], parent_id: "g2" }, catalog.groups[1]])).toHaveLength(2);
+  });
+  it("rejects group cycles and allows connections between ancestors, children and root", () => {
+    const parent = { key: "g:g1", depth: 0, group: catalog.groups[0] }, child = { key: "g:g2", depth: 1, group: catalog.groups[1] }, leaf = { key: "c:c1", depth: 2, connection: catalog.connections[0] };
+    expect(catalogDropAllowed(catalog, parent, child)).toBe(false); expect(catalogDropAllowed(catalog, child, child)).toBe(false);
+    expect(catalogDropAllowed(catalog, child, null)).toBe(true); expect(catalogDropAllowed(catalog, leaf, parent)).toBe(true); expect(catalogDropAllowed(catalog, leaf, null)).toBe(true);
+    expect(catalogDropAllowed(catalog, leaf, leaf)).toBe(false);
+  });
+  it("moves to the destination group before reordering relative to a connection", async () => {
+    const requests: Array<{ method: string; params?: Record<string, unknown> }> = [];
+    const transport = { request: async (method: string, params?: Record<string, unknown>) => { requests.push({ method, params }); return method === "connections.list" ? catalog : {}; }, subscribe: async () => () => {} } as RuntimeTransport;
+    const controller = new ConnectionsController(transport); await controller.refresh(); requests.length = 0;
+    await moveCatalogRow(controller, { key: "c:c2", depth: 0, connection: catalog.connections[1] }, { key: "c:c1", depth: 2, connection: catalog.connections[0] });
+    expect(requests.filter(request => request.method !== "connections.list")).toEqual([{ method: "connections.move", params: { connection_id: "c2", group_id: "g2" } }, { method: "connections.reorder", params: { connection_ids: ["c2", "c1"] } }]);
+  });
+  it("requests credentials only with the caller's explicit choice and does not mutate state", async () => {
+    const requests: Array<{ method: string; params?: Record<string, unknown> }> = [];
+    const transport = { request: async (method: string, params?: Record<string, unknown>) => { requests.push({ method, params }); return { config: { ...connection("c", null).config, ...(params?.include_password ? { password: "secret" } : {}) } }; }, subscribe: async () => () => {} } as RuntimeTransport;
+    const controller = new ConnectionsController(transport), before = controller.getSnapshot();
+    expect((await controller.exportConfig("c")).config.password).toBeUndefined(); expect((await controller.exportConfig("c", true)).config.password).toBe("secret");
+    expect(requests.map(request => request.params?.include_password)).toEqual([false, true]); expect(controller.getSnapshot()).toBe(before);
   });
 });

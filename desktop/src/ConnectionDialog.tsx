@@ -4,7 +4,8 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { FolderOpen, LoaderCircle } from "lucide-react";
 import { isDesktop, errorText, runtime } from "./runtime";
 import type { ConnectionConfig } from "./workspace";
-import type { ConnectionGroup } from "./connections";
+import { groupHierarchy, type ConnectionGroup } from "./connections";
+import { parseConnectionString } from "./connectionStrings";
 import { Modal } from "./PanelControls";
 import "./connections.css";
 
@@ -25,6 +26,7 @@ export function ConnectionDialog({ initial, onConnect, onClose, mode = "connect"
     sqlserver_auth_mode: "sql_password", schema: "", http_path: "", trust_server_certificate: false,
   });
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const [stringInput, setStringInput] = useState(""), importedString = useRef(false);
   const [databricksAuth,setDatabricksAuth]=useState<"oauth"|"token">((initial as ConnectionConfig&{databricks_auth_mode?:string})?.databricks_auth_mode==="oauth"?"oauth":initial?.password||hasPassword?"token":"oauth");
   const [groupId, setGroupId] = useState<string | null>(initialGroupId), [color, setColor] = useState(initialColor), [savePassword, setSavePassword] = useState(hasPassword), [testMessage, setTestMessage] = useState("");
   const formRef = useRef<HTMLFormElement>(null);
@@ -35,6 +37,14 @@ export function ConnectionDialog({ initial, onConnect, onClose, mode = "connect"
     return () => {mounted.current=false;if(testId.current)void runtime.request("connection.test_cancel",{test_id:testId.current}).catch(()=>{});};
   }, []);
   function field<K extends keyof ConnectionConfig>(key: K, value: ConnectionConfig[K]) { setConfig((previous) => ({ ...previous, [key]: value })); }
+  function importString() {
+    try {
+      const imported = parseConnectionString(stringInput, config.db_type);
+      setConfig({ ...imported, name: config.name });
+      importedString.current = true; setSavePassword(false);
+      setDatabricksAuth(imported.databricks_auth_mode ?? "oauth"); setStringInput(""); setError(""); setTestMessage("");
+    } catch (failure) { setError(errorText(failure)); }
+  }
   async function submit(event: React.FormEvent) {
     event.preventDefault(); setBusy(true); setError("");
     try {
@@ -48,7 +58,7 @@ export function ConnectionDialog({ initial, onConnect, onClose, mode = "connect"
     const id=crypto.randomUUID();testId.current=id;
     setBusy(true); setError(""); setTestMessage("");
     try {
-      const result = await runtime.request<{ success: boolean; message?: string }>("connection.test", { test_id:id,connection_id:connectionId,config: { ...config, use_windows_auth: config.sqlserver_auth_mode === "windows",...(config.db_type==="databricks"?{databricks_auth_mode:databricksAuth,username:"",password:databricksAuth==="oauth"?"":config.password}: {}) } });
+      const result = await runtime.request<{ success: boolean; message?: string }>("connection.test", { test_id:id,connection_id:importedString.current ? undefined : connectionId,config: { ...config, use_windows_auth: config.sqlserver_auth_mode === "windows",...(config.db_type==="databricks"?{databricks_auth_mode:databricksAuth,username:"",password:databricksAuth==="oauth"?"":config.password}: {}) } });
       if(!mounted.current||testId.current!==id)return;
       if (!result.success) throw new Error(result.message ?? t("A conexão não foi estabelecida."));
       setTestMessage(result.message ?? t("Conexão testada com sucesso."));
@@ -67,12 +77,13 @@ export function ConnectionDialog({ initial, onConnect, onClose, mode = "connect"
   return <Modal title={mode === "save" ? initial ? t("Editar conexão") : t("Nova conexão") : t("Conectar ao banco")} className="connection-dialog" onClose={() => { if (!busy) onClose(); }}>
       <form ref={formRef} onSubmit={(event) => void submit(event)}>
         <fieldset className="connection-fields" disabled={busy}>
+        <details className="connection-string-import"><summary>{t("Colar connection string")}</summary><label className="field">{t("URI ou string .NET/ODBC")}<textarea value={stringInput} onChange={event => setStringInput(event.target.value)} rows={3} spellCheck={false} autoComplete="off" /></label><button type="button" className="secondary-button" disabled={!stringInput.trim()} onClick={importString}>{t("Preencher campos")}</button></details>
         <label className="field">{t("Tipo do banco")}<select value={config.db_type} onChange={event => {
           const driver = DRIVERS.find(item => item.id === event.target.value);
           if (driver) setConfig(previous => ({ ...previous, db_type: driver.id, port: driver.port, database: driver.id === "sqlite" ? ":memory:" : "", schema: driver.id === "postgresql" ? "public" : "", host: driver.id === "sqlite" ? "" : previous.host || "localhost" }));
         }}>{DRIVERS.map(driver => <option key={driver.id} value={driver.id}>{t(driver.name)}</option>)}</select></label>
         <label className="field">{t("Nome")} <input required={mode === "save"} value={config.name ?? ""} onChange={(event) => field("name", event.target.value)} /></label>
-        {mode === "save" && <><div className="field-row"><label className="field grow">{t("Grupo")}<select value={groupId ?? ""} onChange={(event) => setGroupId(event.target.value || null)}><option value="">{t("Sem grupo")}</option>{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label><label className="field connection-color">{t("Cor")}<input type="color" disabled={!color} value={color||"#80a3ff"} onChange={(event) => setColor(event.target.value)} /></label></div><label className="checkbox-field"><input type="checkbox" checked={!color} onChange={event=>setColor(event.target.checked?"":"#80a3ff")}/>{t("Herdar cor do grupo")}</label></>}
+        {mode === "save" && <><div className="field-row"><label className="field grow">{t("Grupo")}<select aria-label={t("Grupo")} value={groupId ?? ""} onChange={(event) => setGroupId(event.target.value || null)}><option value="">{t("Sem grupo")}</option>{groupHierarchy(groups).map(({ group, label }) => <option key={group.id} value={group.id}>{label}</option>)}</select></label><label className="field connection-color">{t("Cor")}<input type="color" disabled={!color} value={color||"#80a3ff"} onChange={(event) => setColor(event.target.value)} /></label></div><label className="checkbox-field"><input type="checkbox" checked={!color} onChange={event=>setColor(event.target.checked?"":"#80a3ff")}/>{t("Herdar cor do grupo")}</label></>}
         {server && <div className="field-row"><label className="field grow">{t("Servidor")} <input required value={config.host} onChange={(event) => field("host", event.target.value)} placeholder={config.db_type === "databricks" ? "adb-….azuredatabricks.net" : "localhost"} /></label><label className="field port">{t("Porta")} <input type="number" min={1} max={65535} required value={config.port} onChange={(event) => field("port", Number(event.target.value))} /></label></div>}
         <label className="field">{config.db_type === "sqlite" ? t("Arquivo SQLite") : config.db_type === "databricks" ? t("Catalog") : t("Banco")}
           <div className="field-input-row"><input title={config.db_type === "sqlite" ? t("Arquivo SQLite ou :memory:") : undefined} value={config.database} onChange={(event) => field("database", event.target.value)} placeholder={config.db_type === "sqlite" ? ":memory:" : t("Nome do banco")} />
