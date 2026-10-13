@@ -1,6 +1,7 @@
 """Reusable SSH endpoints preserve secrets, identity and references across profiles."""
 
 from copy import deepcopy
+import hashlib
 import json
 from pathlib import Path
 import time
@@ -18,6 +19,21 @@ from test_ssh_tunnel import local_ssh  # noqa: F401
 @pytest.fixture
 def catalog(tmp_path):
     return ConnectionCatalog(tmp_path / "connections.json", Secrets())
+
+
+@pytest.fixture
+def isolated_notification_keyring(monkeypatch):
+    """Profile cloning also copies notifications; never reach any OS backend."""
+    import keyring
+
+    stored = {}
+    def forbidden_backend():
+        pytest.fail("Profile clone tests must not access the OS credential backend")
+    monkeypatch.setattr(keyring, "get_keyring", forbidden_backend)
+    monkeypatch.setattr(keyring, "get_password", lambda service, name: stored.get((service, name)))
+    monkeypatch.setattr(keyring, "set_password", lambda service, name, value: stored.__setitem__((service, name), value))
+    monkeypatch.setattr(keyring, "delete_password", lambda service, name: stored.pop((service, name), None))
+    return stored
 
 
 def tunnel_config(**values):
@@ -352,7 +368,8 @@ def test_tunnel_revision_invalidation_does_not_change_other_default_connection(c
 
 
 @pytest.mark.parametrize("include_credentials", [False, True])
-def test_profile_clone_remaps_reusable_tunnels_and_never_copies_trust(tmp_path, monkeypatch, include_credentials):
+def test_profile_clone_remaps_reusable_tunnels_and_never_copies_trust(
+        tmp_path, monkeypatch, isolated_notification_keyring, include_credentials):
     from datapyn_runtime import profiles
     import datapyn_runtime.connection_catalog as catalog_module
     root = tmp_path / "preview"
@@ -360,6 +377,10 @@ def test_profile_clone_remaps_reusable_tunnels_and_never_copies_trust(tmp_path, 
     monkeypatch.setenv("DATAPYN_WORKSPACE_PATH", str(root))
     profiles.close_stores()
     profiles.list_profiles()
+    old_notification_service = "DataPyn.Tauri.notifications." + hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:20]
+    notification_secrets = {"telegram_bot_token": "isolated-notification-token", "email_password": "isolated-email-secret"}
+    for name, value in notification_secrets.items():
+        isolated_notification_keyring[(old_notification_service, name)] = value
     secrets = Secrets()
     monkeypatch.setattr(catalog_module, "CredentialStore", lambda: secrets)
     catalog = ConnectionCatalog(root / "connections.json", secrets)
@@ -375,5 +396,9 @@ def test_profile_clone_remaps_reusable_tunnels_and_never_copies_trust(tmp_path, 
         assert copied.data["connections"][0]["config"]["ssh_tunnel_id"] == entry["id"]
         assert copied.config(copied.data["connections"][0]["id"])["ssh"].get("password") == ("ssh-secret" if include_credentials else None)
         assert not (Path(clone["path"]) / "ssh_known_hosts.json").exists()
+        new_notification_service = "DataPyn.Tauri.notifications." + hashlib.sha256(clone["path"].encode()).hexdigest()[:20]
+        for name, value in notification_secrets.items():
+            assert isolated_notification_keyring.get((new_notification_service, name)) == (value if include_credentials else None)
+            assert isolated_notification_keyring[(old_notification_service, name)] == value
     finally:
         profiles.close_stores()

@@ -109,7 +109,8 @@ O túnel não substitui nem enfraquece o TLS do banco:
   o socket local do túnel.
 - SQL Server conserva a validação do nome com `HostNameInCertificate` no
   ODBC Driver 18. Combinações de driver que não conseguem preservar essa
-  validação são recusadas.
+  validação são recusadas. NTLM/Kerberos usam TLS por conexão no adaptador TDS,
+  preservando o nome original e o SPN; consulte [Autenticação SQL Server](SQL_SERVER_AUTHENTICATION.md).
 
 SQLite é um arquivo local, e Databricks usa seu próprio fluxo HTTP/OAuth; essas
 duas integrações não oferecem a opção de túnel SSH. O suporte TCP se aplica a
