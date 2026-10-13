@@ -24,13 +24,15 @@ PACKAGED_DISTRIBUTIONS = (
     "azure-identity", "azure-core", "msal", "msal-extensions", "cryptography",
     "keyring", "paramiko", "bcrypt", "PyNaCl", "requests", "certifi", "pandas", "numpy", "polars", "pyarrow",
     "openpyxl", "fastexcel", "matplotlib", "plotly", "jedi", "sqlparse", "sqlglot", "jinja2",
-)
+    "python-tds", "sqlalchemy-pytds", "pyspnego", "pyOpenSSL",
+) + (("sspilib",) if sys.platform == "win32" else ("gssapi", "krb5"))
 
 DRIVER_IMPORTS = (
     "pyodbc", "pymssql", "psycopg2", "pymysql", "mysql.connector",
     "databricks.sql", "databricks.sqlalchemy", "databricks.sql.experimental.oauth_persistence",
     "azure.identity", "msal", "msal_extensions", "keyring", "paramiko",
-)
+    "pytds", "sqlalchemy_pytds", "spnego", "OpenSSL",
+) + (("sspilib",) if sys.platform == "win32" else ("gssapi", "krb5"))
 
 DATABASE_DIALECTS = {
     "sqlserver": "mssql.pyodbc", "mysql": "mysql.pymysql", "mariadb": "mysql.pymysql",
@@ -38,7 +40,7 @@ DATABASE_DIALECTS = {
 }
 
 DATABASE_AUTH_MODES = {
-    "sqlserver": ["sql", "windows", "entra_mfa"],
+    "sqlserver": ["sql", *(["windows"] if sys.platform == "win32" else []), "ntlm", "kerberos", "entra_mfa"],
     "mysql": ["password"], "mariadb": ["password"], "postgresql": ["password"],
     "databricks": ["pat", "oauth"], "sqlite": ["local"],
 }
@@ -87,6 +89,27 @@ def verify_runtime_distribution() -> dict:
         except Exception as error:
             errors.append(f"{name} dialect/DBAPI: {error}")
 
+    network_authentication = {}
+    for mode in ("ntlm", "kerberos"):
+        try:
+            # Force the string-registered adapter and its native TLS libraries
+            # to load in the frozen kernel, without credentials or network I/O.
+            from src.database.sqlserver_network_auth import _tls_context
+            uri, options = DatabaseConnector()._build_connection_string(
+                "sqlserver", "offline.example", 1433, "sample",
+                "OFFLINE\\example" if mode == "ntlm" else "example@OFFLINE",
+                "test-only", sqlserver_auth_mode=mode,
+            )
+            engine = create_engine(uri, connect_args=options)
+            try:
+                assert engine.dialect.driver == "datapyn_tds"
+                _tls_context(options["cafile"], "offline.example", False)
+                network_authentication[mode] = engine.dialect.import_dbapi().__name__
+            finally:
+                engine.dispose()
+        except Exception as error:
+            errors.append(f"SQL Server {mode} adapter/TLS: {error}")
+
     frozen = bool(getattr(sys, "frozen", False))
     tools = {}
     root = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
@@ -115,5 +138,6 @@ def verify_runtime_distribution() -> dict:
     return {"frozen": frozen, "platform": sys.platform, "python_version": sys.version.split()[0],
             "databases": databases, "packages": versions, "tools": tools,
             "tls_ca_bundle": True,
+            "sqlserver_network_authentication": network_authentication,
             "sqlserver_odbc": {"available": bool(odbc_drivers), "drivers": odbc_drivers,
                                "system_dependency": True}}

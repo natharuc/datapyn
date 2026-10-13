@@ -24,8 +24,10 @@ export interface ConnectionConfig {
   use_windows_auth?: boolean; trust_server_certificate?: boolean;
   databricks_auth_mode?:"oauth"|"token";
   ssh?: SshConnectionOptions;
+  ssh_tunnel_id?: string | null;
   sslmode?: "disable" | "allow" | "prefer" | "require" | "verify-ca" | "verify-full";
   sslrootcert?: string; sslcert?: string; sslkey?: string;
+  ssl_ca?: string;
 }
 export interface SshConnectionOptions {
   enabled: boolean; host: string; port: number; username: string;

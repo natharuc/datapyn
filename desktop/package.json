@@ -1,6 +1,6 @@
 {
   "name": "datapyn-desktop",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "private": true,
   "type": "module",
   "overrides": {
@@ -18,7 +18,8 @@
     "desktop:dev": "node ../scripts/tauri/dev.mjs",
     "runtime:bundle": "node ../scripts/tauri/runtime.mjs",
     "desktop:build": "node ../scripts/tauri/build.mjs",
-    "postinstall": "node scripts/postinstall.mjs"
+    "postinstall": "node scripts/postinstall.mjs",
+    "test:explorer": "node scripts/test-explorer.mjs"
   },
   "dependencies": {
     "@glideapps/glide-data-grid": "6.0.3",

@@ -46,7 +46,7 @@ export function debianLayout({ directory, appImage, version, icon = join(root, "
     mkdirSync(dirname(output), { recursive: true });
     writeFileSync(output, content, { mode });
   };
-  write("DEBIAN/control", `Package: datapyn-tauri\nVersion: ${version}\nArchitecture: amd64\nMaintainer: DataPyn Team (github.com/natharuc/datapyn)\nSection: devel\nPriority: optional\nInstalled-Size: ${Math.ceil(statSync(appImage).size / 1024) + 10}\nDepends: libc6 (>= 2.35), libstdc++6, libgtk-3-0, libnss3, libx11-6, unixodbc, libodbc2, libsecret-1-0, dbus-user-session, shared-mime-info\nRecommends: gnome-keyring, msodbcsql18\nHomepage: https://github.com/natharuc/datapyn\nDescription: DataPyn Tauri SQL and Python desktop\n Isolated desktop application with a per-user signed AppImage updater.\n`);
+  write("DEBIAN/control", `Package: datapyn-tauri\nVersion: ${version}\nArchitecture: amd64\nMaintainer: DataPyn Team (github.com/natharuc/datapyn)\nSection: devel\nPriority: optional\nInstalled-Size: ${Math.ceil(statSync(appImage).size / 1024) + 10}\nDepends: libc6 (>= 2.35), libstdc++6, libgtk-3-0, libnss3, libx11-6, unixodbc, libodbc2, libgssapi-krb5-2, libkrb5-3, libsecret-1-0, dbus-user-session, shared-mime-info\nRecommends: gnome-keyring, msodbcsql18\nHomepage: https://github.com/natharuc/datapyn\nDescription: DataPyn Tauri SQL and Python desktop\n Isolated desktop application with a per-user signed AppImage updater.\n`);
   write("usr/bin/datapyn-tauri", linuxLauncher(), 0o755);
   const image = join(directory, "usr/lib/datapyn-tauri/DataPyn-Tauri.AppImage");
   mkdirSync(dirname(image), { recursive: true });

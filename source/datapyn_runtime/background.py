@@ -19,6 +19,9 @@ def _task_main(method, params, context, pipe):
         if method == "connection.test":
             from .database import test_connection
             result = test_connection(params)
+        elif method == "ssh.tunnels.test":
+            from .ssh_tunnel import test_tunnel
+            result = test_tunnel(params)
         elif method in {"notifications.deliver_prepared", "notifications.test"}:
             from .notifications import deliver_prepared, dispatch
             result = deliver_prepared(params) if method == "notifications.deliver_prepared" else dispatch(method, params)
@@ -75,7 +78,7 @@ class BackgroundJobs:
             raise ValueError("Too many editor requests; retry after the previous request finishes")
         key = None
         with self.lock:
-            test_id = params.get("test_id") if method == "connection.test" else None
+            test_id = params.get("test_id") if method in {"connection.test", "ssh.tunnels.test"} else None
             if test_id in self.test_jobs:
                 self.slots.release()
                 raise ValueError("This connection test is already running")
@@ -155,7 +158,7 @@ class BackgroundJobs:
         with self.lock:
             if key is not None and self.latest.get(key) != sequence:
                 return {"result": {"items": [], "markers": [], "superseded": True}}
-        if method not in {"connection.test", "notifications.deliver_prepared", "notifications.test"}:
+        if method not in {"connection.test", "ssh.tunnels.test", "notifications.deliver_prepared", "notifications.test"}:
             if method == "language.complete" and params.get("language") == "python" and self.completion_worker is not None:
                 def superseded():
                     with self.lock:
@@ -192,7 +195,7 @@ class BackgroundJobs:
             raise
         with self.lock:
             self.tests.add(group)
-            state = self.test_jobs.get(params.get("test_id")) if method == "connection.test" else None
+            state = self.test_jobs.get(params.get("test_id")) if method in {"connection.test", "ssh.tunnels.test"} else None
             if state is not None:
                 state["group"] = group
         try:

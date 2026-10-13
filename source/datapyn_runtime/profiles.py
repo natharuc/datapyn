@@ -208,9 +208,9 @@ def archive(params, restore=False):
         return _public(profile)
 
 
-def _remap(value, connections, groups):
+def _remap(value, connections, groups, tunnels=None):
     if isinstance(value, list):
-        return [_remap(item, connections, groups) for item in value]
+        return [_remap(item, connections, groups, tunnels) for item in value]
     if not isinstance(value, dict):
         return value
     result = {}
@@ -219,8 +219,10 @@ def _remap(value, connections, groups):
             result[key] = connections.get(item, item)
         elif key in {"group_id", "parent_id"} and isinstance(item, str):
             result[key] = groups.get(item, item)
+        elif key == "ssh_tunnel_id" and isinstance(item, str) and tunnels is not None:
+            result[key] = tunnels.get(item, item)
         else:
-            result[key] = _remap(item, connections, groups)
+            result[key] = _remap(item, connections, groups, tunnels)
     return result
 
 
@@ -291,16 +293,28 @@ def clone(params):
         profile = {"id": uuid.uuid4().hex, "name": _name(params.get("name"), registry), "archived": False, "created_at": time.time()}
         source, target = profile_path(original["id"]), base_path() / "profiles" / profile["id"]
         target.mkdir(parents=True)
-        group_ids, connection_ids = {}, {}
+        group_ids, connection_ids, tunnel_ids = {}, {}, {}
         catalog_file = source / "connections.json"
         if catalog_file.is_file():
             catalog = json.loads(catalog_file.read_text(encoding="utf-8-sig"))
             group_ids = {item["id"]: uuid.uuid4().hex for item in catalog.get("groups", [])}
             connection_ids = {item["id"]: uuid.uuid4().hex for item in catalog.get("connections", [])}
-            catalog = _remap(catalog, connection_ids, group_ids)
-            from .connection_catalog import CredentialStore, ssh_identity, without_secrets
+            tunnel_ids = {item["id"]: uuid.uuid4().hex for item in catalog.get("ssh_tunnels", [])}
+            catalog = _remap(catalog, connection_ids, group_ids, tunnel_ids)
+            from .connection_catalog import ConnectionCatalog, CredentialStore, ssh_identity, without_secrets
             catalog = without_secrets(catalog)
             credentials = CredentialStore()
+            for tunnel in catalog.get("ssh_tunnels", []):
+                old_id = tunnel["id"]
+                tunnel["id"] = tunnel_ids[old_id]
+                present = params.get("include_credentials", False) and (tunnel.get("has_password") or tunnel.get("has_passphrase"))
+                secrets = credentials.get(ConnectionCatalog.tunnel_credential_id(old_id)) if present else {}
+                if tuple(secrets.get("_identity") or ()) != ssh_identity({"ssh": tunnel.get("config") or {}}):
+                    secrets = {}
+                if secrets:
+                    credentials.set(ConnectionCatalog.tunnel_credential_id(tunnel["id"]), secrets)
+                tunnel["has_password"] = bool(secrets.get("password"))
+                tunnel["has_passphrase"] = bool(secrets.get("passphrase"))
             for group in catalog.get("groups", []):
                 group["id"] = group_ids[group["id"]]
             for connection in catalog.get("connections", []):
@@ -339,13 +353,13 @@ def clone(params):
                     _write(target / name, json.loads(file.read_text(encoding="utf-8")))
         document = state({"profile_id": original["id"]})["state"]
         if document is not None:
-            _store(target).save(_remap(document, connection_ids, group_ids))
+            _store(target).save(_remap(document, connection_ids, group_ids, tunnel_ids))
         _clone_configuration(source, target)
         pynia = source / "pynia"
         if pynia.is_dir() and not pynia.is_symlink():
             for file in pynia.glob("*.json"):
                 if file.is_file() and not file.is_symlink():
-                    _write(target / "pynia" / file.name, _remap(json.loads(file.read_text(encoding="utf-8")), connection_ids, group_ids))
+                    _write(target / "pynia" / file.name, _remap(json.loads(file.read_text(encoding="utf-8")), connection_ids, group_ids, tunnel_ids))
         if params.get("include_snapshots", True):
             _clone_snapshots(source, target)
         if params.get("include_credentials", False):

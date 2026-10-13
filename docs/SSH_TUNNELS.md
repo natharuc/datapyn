@@ -1,14 +1,14 @@
 # Conexões por túnel SSH
 
 O DataPyn Tauri abre o túnel dentro do runtime com Paramiko, sem executar SSH no
-terminal ou depender de um cliente instalado. A opção **Usar túnel SSH** começa
-desativada. As conexões existentes continuam com o mesmo funcionamento.
+terminal ou depender de um cliente instalado. Os túneis são cadastrados em
+**Configurações → Túneis SSH** e podem ser usados por várias conexões.
 
 ## Cadastro
 
 Os campos de servidor, porta, usuário, banco e TLS continuam sendo os **dados do
-banco**. Ative o túnel e informe separadamente o servidor SSH, a porta (22 por
-padrão), o usuário e a autenticação:
+banco**. Nas configurações, cadastre um túnel com um nome, servidor SSH,
+porta (22 por padrão), usuário e autenticação:
 
 - **Senha:** a senha da conta SSH.
 - **Chave privada:** selecione o arquivo local da chave. Informe a passphrase se
@@ -21,7 +21,10 @@ nos rascunhos, nos arquivos DPW, nos logs ou na exportação de configurações.
 Editar deixando o segredo em branco mantém o valor salvo somente quando a
 identidade SSH continua a mesma. Trocar servidor, porta, usuário, autenticação
 ou caminho da chave exige informar novamente o segredo correspondente.
-Desativar o SSH remove as credenciais SSH salvas. Se o armazenamento seguro não
+Na janela de conexão, selecione o túnel cadastrado ou **Sem túnel SSH**. Isso
+não remove o cadastro nem suas credenciais das outras conexões. Não é possível
+excluir um túnel enquanto uma conexão cadastrada o utiliza: remova primeiro a
+referência nessa conexão. Se o armazenamento seguro não
 estiver disponível, o cadastro falha em vez de gravar os segredos em texto aberto.
 
 O arquivo da chave permanece no local selecionado. Somente seu caminho faz
@@ -29,7 +32,12 @@ parte da configuração; o conteúdo da chave não é copiado para o catálogo n
 para as exportações. Após importar em outra máquina, selecione uma chave local
 e informe os segredos novamente. Uma duplicação no mesmo perfil preserva as
 credenciais no armazenamento seguro. Clonar um perfil só leva as credenciais
-quando a opção existente de incluir credenciais estiver marcada.
+quando a opção existente de incluir credenciais estiver marcada. Os túneis antigos
+embutidos nas conexões são migrados para esse cadastro, com as credenciais
+preservadas no cofre. Cadastros iguais com senhas diferentes permanecem separados.
+Alterar um túnel atualiza todas as suas referências; conexões em cache são
+recriadas com a nova configuração na próxima operação. Um túnel ausente gera erro,
+sem usar uma cópia antiga ou tentar conexão direta.
 
 ## PostgreSQL em containers na mesma VPS
 
@@ -38,7 +46,7 @@ a VPS, não o computador do usuário. Um nome Docker, como `postgres-stg`, só
 funciona se o servidor SSH conseguir resolvê-lo e alcançá-lo; os nomes de serviço
 de uma rede Docker normalmente não são resolvidos pelo sistema da VPS.
 
-Para STG e PRD separados, cadastre duas conexões com os mesmos dados SSH e os
+Para STG e PRD separados, cadastre um túnel e duas conexões que o referenciam, com os
 dados de banco de cada ambiente. Por exemplo, se os containers estiverem
 publicados na interface de loopback da VPS:
 
@@ -81,6 +89,10 @@ encaminhamento e autentica no banco. O teste só informa sucesso se as duas
 conexões funcionarem. O trabalho roda fora da interface, com cancelamento e
 limite de tempo. Fechar o formulário cancela o teste que estiver ativo.
 
+**Testar túnel** nas configurações valida somente a chave e a autenticação SSH.
+Esse teste não abre um destino de banco, não cria uma porta local e não executa
+SQL. Use também **Testar conexão** para validar o encaminhamento e os dados do banco.
+
 Cada conector usa uma porta local automática, reservada pelo sistema e
 restrita a `127.0.0.1`. É possível abrir várias abas, STG e PRD simultaneamente
 sem escolher portas locais nem compartilhar o contexto do banco. Desconectar,
@@ -97,7 +109,8 @@ O túnel não substitui nem enfraquece o TLS do banco:
   o socket local do túnel.
 - SQL Server conserva a validação do nome com `HostNameInCertificate` no
   ODBC Driver 18. Combinações de driver que não conseguem preservar essa
-  validação são recusadas.
+  validação são recusadas. NTLM/Kerberos usam TLS por conexão no adaptador TDS,
+  preservando o nome original e o SPN; consulte [Autenticação SQL Server](SQL_SERVER_AUTHENTICATION.md).
 
 SQLite é um arquivo local, e Databricks usa seu próprio fluxo HTTP/OAuth; essas
 duas integrações não oferecem a opção de túnel SSH. O suporte TCP se aplica a

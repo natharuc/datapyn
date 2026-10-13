@@ -44,6 +44,12 @@ hiddenimports = [
     "paramiko",
     "bcrypt",
     "nacl",
+    "pytds",
+    "sqlalchemy_pytds",
+    "spnego",
+    "OpenSSL",
+    "src.database.sqlserver_network_auth",
+    "src.database.sqlserver_network_dialect",
     "src.services.pynia.acp.client_transport",
     "src.services.pynia.acp.activity",
     "src.services.pynia.acp.mcp_helpers",
@@ -54,6 +60,8 @@ hiddenimports = [
     "src.services.entity_metadata_service",
 ]
 for package in ("datapyn_runtime", "sqlglot.dialects", "sqlalchemy.dialects", "mysql.connector", "databricks.sqlalchemy", "keyring.backends", "plotly.graph_objs"):
+    hiddenimports += collect_submodules(package)
+for package in ("pytds", "sqlalchemy_pytds", "spnego", "OpenSSL", *( ("sspilib",) if sys.platform == "win32" else ("gssapi", "krb5") )):
     hiddenimports += collect_submodules(package)
 
 datas = [(str(path), "src/language") for path in (ROOT / "source/src/language").glob("*.json")]

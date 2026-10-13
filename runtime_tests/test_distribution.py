@@ -38,7 +38,7 @@ def test_distribution_loads_every_legacy_driver_and_dialect_without_network(monk
     assert set(report["databases"]) == set(DatabaseConnector.SUPPORTED_DATABASES) | {"sqlite"}
     assert report["databases"]["databricks"]["dbapi"] == "databricks.sql"
     assert report["databases"]["mariadb"]["dbapi"] == "pymysql"
-    assert report["databases"]["sqlserver"]["authentication"] == ["sql", "windows", "entra_mfa"]
+    assert report["databases"]["sqlserver"]["authentication"] == ["sql", *(["windows"] if sys.platform == "win32" else []), "ntlm", "kerberos", "entra_mfa"]
     assert report["databases"]["databricks"]["authentication"] == ["pat", "oauth"]
     assert all(report["packages"].values())
     assert report["tls_ca_bundle"] is True
@@ -117,8 +117,12 @@ def test_production_dialects_build_engines_offline(db_type, monkeypatch, tmp_pat
 
 
 @pytest.mark.parametrize("auth", ["sql", "windows", "entra_mfa"])
-def test_sqlserver_authentication_options_remain_available_offline(auth):
+def test_sqlserver_authentication_options_remain_available_offline(auth, monkeypatch):
     from urllib.parse import unquote_plus
+    # Windows integrated credentials are intentionally OS-specific; building
+    # its connection-string contract does not authenticate or impersonate.
+    if auth == "windows":
+        monkeypatch.setattr(sys, "platform", "win32")
     uri, args = DatabaseConnector()._build_connection_string(
         "sqlserver", "offline.example", 1433, "sample", "example", "test-only",
         driver="ODBC Driver 18 for SQL Server", sqlserver_auth_mode=auth,

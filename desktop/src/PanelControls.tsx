@@ -3,6 +3,7 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { getFocusedDocument } from "./documentWindows";
+import { topmostShortcutDialog } from "./shortcutModalGuard";
 
 export function Modal({ title, children, onClose, className = "" }: { title: string; children: ReactNode; onClose: () => void; className?: string }) {
   useLocale();
@@ -18,6 +19,7 @@ export function Modal({ title, children, onClose, className = "" }: { title: str
     const focusables = () => Array.from(panel?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]:not(:disabled)') ?? []).filter((element) => element.getClientRects().length);
     (focusables()[0] ?? panel)?.focus();
     const handle = (event: KeyboardEvent) => {
+      if (!panel || topmostShortcutDialog(owner) !== panel || owner.activeElement?.closest('[role="menu"]')) return;
       if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close.current(); }
       if (event.key === "Tab") {
         const items = focusables(), index = items.indexOf(owner.activeElement as HTMLElement);
@@ -28,18 +30,18 @@ export function Modal({ title, children, onClose, className = "" }: { title: str
       }
     };
     const unload = () => { unloading = true; close.current(); };
-    panel?.addEventListener("keydown", handle);
+    owner.addEventListener("keydown", handle, true);
     view?.addEventListener("pagehide", unload);
     view?.addEventListener("unload", unload);
     return () => {
-      panel?.removeEventListener("keydown", handle);
+      owner.removeEventListener("keydown", handle, true);
       view?.removeEventListener("pagehide", unload);
       view?.removeEventListener("unload", unload);
       if (!unloading && !view?.closed && host.previous?.isConnected) host.previous.focus();
     };
   }, [host]);
   return createPortal(<div className="modal-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <section ref={container} tabIndex={-1} className={`modal ${className}`} role="dialog" aria-modal="true" aria-label={title}>
+    <section ref={container} tabIndex={-1} className={`modal ${className}`} role="dialog" aria-modal="true" aria-label={title} data-local-shortcut-dialog="true">
       <header className="modal-header"><h2>{title}</h2><button className="icon-button" type="button" onClick={onClose} title={t("Fechar")} aria-label={t("Fechar")}><X size={17} /></button></header>{children}
     </section>
   </div>, host.owner.body);

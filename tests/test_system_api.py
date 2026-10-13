@@ -288,8 +288,9 @@ class TestDatabaseConnectorAPI:
     """Testes da API do DatabaseConnector"""
 
     @patch("database.database_connector.pyodbc.drivers", return_value=["ODBC Driver 18 for SQL Server"])
-    def test_connection_string_sqlserver_windows_auth(self, _mock_drivers):
+    def test_connection_string_sqlserver_windows_auth(self, _mock_drivers, monkeypatch):
         """String de conexao SQL Server com Windows Auth"""
+        monkeypatch.setattr(sys, "platform", "win32")
         from database.database_connector import DatabaseConnector
 
         conn = DatabaseConnector()

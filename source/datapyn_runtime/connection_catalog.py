@@ -79,7 +79,7 @@ def without_secrets(value):
     """Keep extension metadata, while never transferring credential fields."""
     if isinstance(value, dict):
         return {key: without_secrets(item) for key, item in value.items()
-                if str(key).lower() not in SECRET_KEYS and key != "_ssh_trust_path"}
+                if str(key).lower() not in SECRET_KEYS and key not in {"_ssh_trust_path", "_ssh_catalog_path", "_tunnel_revision"}}
     if isinstance(value, list):
         return [without_secrets(item) for item in value]
     return deepcopy(value)
@@ -126,12 +126,159 @@ class ConnectionCatalog:
         self.credentials = credentials or CredentialStore()
         self._lock = threading.RLock()
         self._defer_save = False
-        self.data = {"version": 1, "groups": [], "connections": []}
+        self.data = {"version": 1, "groups": [], "connections": [], "ssh_tunnels": []}
         if self.path.exists():
             data = json.loads(self.path.read_text(encoding="utf-8-sig"))
             if data.get("version") != 1 or not isinstance(data.get("connections"), list) or not isinstance(data.get("groups"), list):
                 raise ValueError("Unsupported preview connection catalog")
             self.data = without_secrets(data)
+            self.data.setdefault("ssh_tunnels", [])
+            if not isinstance(self.data["ssh_tunnels"], list):
+                raise ValueError("SSH tunnels must be an array")
+            self._migrate_inline_tunnels()
+
+    @staticmethod
+    def tunnel_credential_id(identifier):
+        return f"tunnel:{identifier}:ssh"
+
+    def tunnel_config(self, identifier, *, resolve_credentials=True):
+        """Read the current endpoint; a deleted reference never becomes direct TCP."""
+        from .ssh_tunnel import SshTunnelError
+        if not isinstance(identifier, str) or not identifier or len(identifier) > 128:
+            raise SshTunnelError("Selecione um túnel SSH cadastrado.", code="ssh_tunnel_missing")
+        with self._lock:
+            try:
+                item = self._find("ssh_tunnels", identifier)
+            except KeyError:
+                raise SshTunnelError("O túnel SSH desta conexão não existe. Selecione outro túnel nas configurações.",
+                                     code="ssh_tunnel_missing") from None
+            config = normalized_ssh({**item["config"], "enabled": True})
+            config["_tunnel_revision"] = item.get("updated_at", item.get("created_at", ""))
+            if resolve_credentials and (item.get("has_password") or item.get("has_passphrase")):
+                secrets = self.credentials.get(self.tunnel_credential_id(identifier))
+                if tuple(secrets.get("_identity") or ()) == ssh_identity({"ssh": config}):
+                    config.update({key: secrets[key] for key in SSH_SECRET_KEYS if secrets.get(key)})
+            return config
+
+    def resolve_ssh(self, config, *, resolve_credentials=True):
+        result = deepcopy(config)
+        if "ssh_tunnel_id" not in result:
+            return result  # Compatibility for unsaved pre-catalog drafts.
+        result.pop("ssh", None)
+        identifier = result.get("ssh_tunnel_id")
+        if identifier is None or identifier == "":
+            result["ssh_tunnel_id"] = None
+            return result
+        if result.get("db_type") not in {"postgresql", "mysql", "mariadb", "sqlserver"}:
+            raise ValueError("SSH tunnels support PostgreSQL, MySQL, MariaDB and SQL Server connections")
+        result["ssh"] = self.tunnel_config(identifier, resolve_credentials=resolve_credentials)
+        return result
+
+    def save_tunnel(self, tunnel, *, password=None, passphrase=None, save_credentials=None):
+        if not isinstance(tunnel, dict) or not isinstance(tunnel.get("config"), dict):
+            raise ValueError("tunnel and config must be objects")
+        if save_credentials is not None and not isinstance(save_credentials, bool):
+            raise ValueError("save_credentials must be a boolean")
+        with self._lock:
+            existing = self._find("ssh_tunnels", tunnel["id"]) if tunnel.get("id") else None
+            identifier = existing["id"] if existing else uuid.uuid4().hex
+            name = _text(tunnel.get("name"), "tunnel name")
+            if any(item["id"] != identifier and item["name"].casefold() == name.casefold()
+                   for item in self.data["ssh_tunnels"]):
+                raise ValueError("A tunnel with this name already exists")
+            raw = {**(existing["config"] if existing else {}), **deepcopy(tunnel["config"]), "enabled": True}
+            config = normalized_ssh(raw)
+            identity = ssh_identity({"ssh": config})
+            same = bool(existing and ssh_identity({"ssh": existing["config"]}) == identity)
+            secret_key = "password" if config["auth_method"] == "password" else "passphrase"
+            supplied = password if secret_key == "password" else passphrase
+            if supplied is None:
+                supplied = raw.get(secret_key)
+            present = bool(existing and (existing.get("has_password") or existing.get("has_passphrase")))
+            changes = bool(supplied and save_credentials is not False or present and (not same or save_credentials is False))
+            secrets = {secret_key: str(supplied), "_identity": list(identity)} if supplied and save_credentials is not False else {}
+            item = {"id": identifier, "name": name, "config": config,
+                    "has_password": bool(same and existing.get("has_password")),
+                    "has_passphrase": bool(same and existing.get("has_passphrase")),
+                    "created_at": existing.get("created_at", _now()) if existing else _now(), "updated_at": _now()}
+            if changes:
+                item["has_password"] = bool(secrets.get("password"))
+                item["has_passphrase"] = bool(secrets.get("passphrase"))
+            if self._defer_save:
+                item["has_password"] = item["has_passphrase"] = False
+            before = deepcopy(self.data)
+            credential_id = self.tunnel_credential_id(identifier)
+            previous = None
+            try:
+                if changes and not self._defer_save:
+                    previous = self.credentials.get(credential_id) if present else {}
+                    self.credentials.set(credential_id, secrets)
+                if existing:
+                    existing.clear()
+                    existing.update(item)
+                else:
+                    self.data["ssh_tunnels"].append(item)
+                self._save()
+            except BaseException:
+                self.data = before
+                if previous is not None:
+                    self.credentials.set(credential_id, previous)
+                raise
+            return deepcopy(item)
+
+    def _migrate_inline_tunnels(self):
+        """Move existing credentials atomically, keeping different accounts/passwords distinct."""
+        before = deepcopy(self.data)
+        updates, removed, changed = [], [], False
+        try:
+            for connection in self.data["connections"]:
+                config = connection.get("config") or {}
+                if "ssh_tunnel_id" in config or not (config.get("ssh") or {}).get("enabled"):
+                    continue
+                public = normalized_ssh(config["ssh"])
+                secrets = {}
+                if connection.get("has_ssh_password") or connection.get("has_ssh_passphrase"):
+                    old_key = f"{connection['id']}:ssh"
+                    saved = self.credentials.get(old_key)
+                    if tuple(saved.get("_identity") or ()) == ssh_identity(config):
+                        secrets = {key: saved[key] for key in SSH_SECRET_KEYS if saved.get(key)}
+                    removed.append(old_key)
+                match = None
+                for tunnel in self.data["ssh_tunnels"]:
+                    if tunnel["config"] != public:
+                        continue
+                    if self._defer_save and (tunnel.get("has_password") or tunnel.get("has_passphrase")):
+                        continue  # Import previews never consult the OS keyring.
+                    current = self.tunnel_config(tunnel["id"])
+                    if {key: current[key] for key in SSH_SECRET_KEYS if current.get(key)} == secrets:
+                        match = tunnel
+                        break
+                if match is None:
+                    name = f"{public['username']}@{public['host']}"[:240]
+                    base, suffix = name, 2
+                    while any(item["name"].casefold() == name.casefold() for item in self.data["ssh_tunnels"]):
+                        name, suffix = f"{base} ({suffix})", suffix + 1
+                    match = {"id": uuid.uuid4().hex, "name": name, "config": public,
+                             "has_password": bool(secrets.get("password")), "has_passphrase": bool(secrets.get("passphrase")),
+                             "created_at": _now(), "updated_at": _now()}
+                    key = self.tunnel_credential_id(match["id"])
+                    if secrets:
+                        updates.append(key)
+                        self.credentials.set(key, {**secrets, "_identity": list(ssh_identity(config))})
+                    self.data["ssh_tunnels"].append(match)
+                config.pop("ssh", None)
+                config["ssh_tunnel_id"] = match["id"]
+                connection["has_ssh_password"] = connection["has_ssh_passphrase"] = False
+                changed = True
+            if changed:
+                self._save()
+        except BaseException:
+            self.data = before
+            for key in reversed(updates):
+                self.credentials.delete(key)
+            raise
+        for key in removed:
+            self.credentials.delete(key)
 
     def _save(self):
         if self._defer_save:
@@ -176,7 +323,7 @@ class ConnectionCatalog:
                 saved = self.credentials.get(f"{identifier}:ssh")
                 if tuple(saved.get("_identity") or ()) == ssh_identity(result):
                     result["ssh"].update({key: saved[key] for key in SSH_SECRET_KEYS if key in saved})
-            return result
+            return self.resolve_ssh(result, resolve_credentials=resolve_ssh_credentials)
 
     def resolve_ref(self, group, name):
         with self._lock:
@@ -214,6 +361,12 @@ class ConnectionCatalog:
             config["db_type"] = db_type
             config.pop("workspace_path", None)  # A saved profile cannot redirect application storage.
             config.pop("_ssh_trust_path", None)
+            config.pop("_ssh_catalog_path", None)
+            if "ssh_tunnel_id" in config:
+                # A reference is authoritative even if an older client sends an embedded copy.
+                self.resolve_ssh(config, resolve_credentials=False)
+                config.pop("ssh", None)
+                config["ssh_tunnel_id"] = config.get("ssh_tunnel_id") or None
             secrets = {key: str(config.pop(key)) for key in SECRET_KEYS if config.get(key) is not None}
             for key in SECRET_KEYS:
                 config.pop(key, None)
@@ -334,6 +487,32 @@ class ConnectionCatalog:
 
     def dispatch(self, method, params):
         with self._lock:
+            if method == "ssh.tunnels.list":
+                return {"ssh_tunnels": without_secrets(self.data["ssh_tunnels"])}
+            if method == "ssh.tunnels.save":
+                return self.save_tunnel(params.get("tunnel"), password=params.get("password"),
+                                        passphrase=params.get("passphrase"), save_credentials=params.get("save_credentials"))
+            if method == "ssh.tunnels.delete":
+                tunnel = self._find("ssh_tunnels", params.get("tunnel_id"))
+                names = [item["name"] for item in self.data["connections"]
+                         if item.get("config", {}).get("ssh_tunnel_id") == tunnel["id"]]
+                if names:
+                    raise ValueError("O túnel está em uso pelas conexões: " + ", ".join(names[:8]))
+                before = deepcopy(self.data)
+                present = tunnel.get("has_password") or tunnel.get("has_passphrase")
+                key = self.tunnel_credential_id(tunnel["id"])
+                previous = self.credentials.get(key) if present else {}
+                try:
+                    if present:
+                        self.credentials.delete(key)
+                    self.data["ssh_tunnels"].remove(tunnel)
+                    self._save()
+                except BaseException:
+                    self.data = before
+                    if present:
+                        self.credentials.set(key, previous)
+                    raise
+                return {"ssh_tunnels": without_secrets(self.data["ssh_tunnels"])}
             if method == "connections.list":
                 return self.list()
             if method == "connections.export_config":
@@ -447,6 +626,8 @@ class ConnectionCatalog:
                     item["has_password"] = False
                     item["has_ssh_password"] = False
                     item["has_ssh_passphrase"] = False
+                for tunnel in result["ssh_tunnels"]:
+                    tunnel["has_password"] = tunnel["has_passphrase"] = False
                 return result
             groups = {group["id"]: group for group in self.data["groups"]}
             names = [group["name"] for group in groups.values()]
@@ -454,6 +635,11 @@ class ConnectionCatalog:
                 raise ValueError("PyQt6 requires globally unique group names; use the Tauri format for these folders")
             result = without_secrets(self.data.get("legacy_metadata", {}))
             result["connections"], result["groups"] = {}, {}
+            tunnels = without_secrets(self.data["ssh_tunnels"])
+            if tunnels:
+                for tunnel in tunnels:
+                    tunnel["has_password"] = tunnel["has_passphrase"] = False
+                result["ssh_tunnels"] = tunnels
             buckets = result["connections"]
             for item in sorted(self.data["connections"], key=lambda entry: entry.get("order", 0)):
                 group = groups.get(item.get("group_id"))
@@ -512,6 +698,26 @@ class ConnectionCatalog:
         if not isinstance(document, dict):
             raise ValueError("Connection import must be a JSON object")
         groups, profiles = [], []
+        tunnels = document.get("ssh_tunnels", [])
+        if not isinstance(tunnels, list):
+            raise ValueError("Imported SSH tunnels must be an array")
+        tunnel_mapping = {}
+        for tunnel in tunnels:
+            if not isinstance(tunnel, dict) or not isinstance(tunnel.get("config"), dict):
+                raise ValueError("Imported SSH tunnels must contain config objects")
+            original_id = tunnel.get("id")
+            if not isinstance(original_id, str) or not original_id or original_id in tunnel_mapping:
+                raise ValueError("Imported SSH tunnel IDs must be unique nonempty strings")
+            public = normalized_ssh({**tunnel["config"], "enabled": True})
+            name = _text(tunnel.get("name"), "tunnel name")
+            match = next((item for item in self.data["ssh_tunnels"] if item["config"] == public
+                          and item["name"] == name), None)
+            if match is None:
+                base, suffix = name[:240], 2
+                while any(item["name"].casefold() == name.casefold() for item in self.data["ssh_tunnels"]):
+                    name, suffix = f"{base} ({suffix})", suffix + 1
+                match = self.save_tunnel({"name": name, "config": public})
+            tunnel_mapping[original_id] = match["id"]
         if isinstance(document.get("connections"), list):
             groups = document.get("groups", [])
             profiles = document["connections"]
@@ -525,7 +731,7 @@ class ConnectionCatalog:
             if not isinstance(source, dict) or not isinstance(legacy_groups, dict):
                 raise ValueError("Legacy connections and groups must be objects")
             self.data.setdefault("legacy_metadata", {}).update(without_secrets({key: value for key, value in document.items()
-                if key not in {"connections", "groups", "version"}}) if "connections" in document else {})
+                if key not in {"connections", "groups", "version", "ssh_tunnels"}}) if "connections" in document else {})
             for name, config in legacy_groups.items():
                 if not isinstance(config, dict):
                     raise ValueError("Group metadata must be an object")
@@ -595,6 +801,10 @@ class ConnectionCatalog:
             config = profile.get("config")
             if not isinstance(config, dict):
                 raise ValueError("Imported connection config must be an object")
+            if config.get("ssh_tunnel_id"):
+                if config["ssh_tunnel_id"] not in tunnel_mapping:
+                    raise ValueError("Imported connection references an unknown SSH tunnel")
+                config["ssh_tunnel_id"] = tunnel_mapping[config["ssh_tunnel_id"]]
             for key in ("created_at", "last_used", "order"):
                 if key in config and key not in profile:
                     profile[key] = deepcopy(config[key])
@@ -611,4 +821,5 @@ class ConnectionCatalog:
             self._find("connections", saved["id"])["has_ssh_password"] = False
             self._find("connections", saved["id"])["has_ssh_passphrase"] = False
             count += 1
+        self._migrate_inline_tunnels()
         return {"catalog": self.list(), "imported_connections": count, "passwords_imported": False}, credentials_to_remove

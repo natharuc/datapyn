@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/natharuc/datapyn/releases/tag/tauri-v1.0.7"><img src="https://img.shields.io/badge/Tauri-1.0.7-blue.svg" alt="Version"></a>
+  <a href="https://github.com/natharuc/datapyn/releases/tag/tauri-v1.0.8"><img src="https://img.shields.io/badge/Tauri-1.0.8-blue.svg" alt="Version"></a>
   <img src="https://img.shields.io/badge/Python-3.12+-3776AB.svg?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/Tauri-2-24C8D8.svg?logo=tauri&logoColor=white" alt="Tauri">
   <img src="https://img.shields.io/badge/Monaco-VS_Code-007ACC.svg?logo=visualstudiocode&logoColor=white" alt="Monaco">
@@ -109,7 +109,7 @@ Site e documentacao publica: [datapyn.page](https://datapyn.page)
 
 ## Instalacao
 
-Instaladores Tauri: [release 1.0.7](https://github.com/natharuc/datapyn/releases/tag/tauri-v1.0.7). Os arquivos seguem o nome `DataPyn-Tauri-<versao>-<plataforma>`. O link `releases/latest` permanece reservado ao PyQt6 historico.
+Instaladores Tauri: [release 1.0.8](https://github.com/natharuc/datapyn/releases/tag/tauri-v1.0.8). Os arquivos seguem o nome `DataPyn-Tauri-<versao>-<plataforma>`. O link `releases/latest` permanece reservado ao PyQt6 historico.
 
 | Sistema | Artefato | Notas |
 |---------|----------|--------|
@@ -119,7 +119,9 @@ Instaladores Tauri: [release 1.0.7](https://github.com/natharuc/datapyn/releases
 
 O runtime Python e os drivers Python acompanham os pacotes. Requisitos de drivers nativos, armazenamento e atualizacao: [distribuicao Tauri](docs/TAURI_DISTRIBUTION.md).
 
-Para bancos acessiveis por uma VPS ou bastion, configure o [tunel SSH interno](docs/SSH_TUNNELS.md) no cadastro da conexao. O aplicativo suporta senha ou chave privada, confirma a fingerprint e conserva as opcoes TLS do banco.
+Para bancos acessiveis por uma VPS ou bastion, configure o [tunel SSH interno](docs/SSH_TUNNELS.md) em **Configuracoes → Tuneis SSH** e selecione o tunel no cadastro da conexao. O aplicativo suporta senha ou chave privada, confirma a fingerprint e conserva as opcoes TLS do banco.
+
+SQL Server oferece [autenticacao integrada Windows e credenciais de rede NTLM/Kerberos](docs/SQL_SERVER_AUTHENTICATION.md), de acordo com o sistema operacional.
 
 ### Distribuicao historica (PyQt6)
 
@@ -258,7 +260,7 @@ datapyn/
 npm --prefix desktop test
 npm --prefix desktop run build
 uv run pytest -c runtime_tests/pytest.ini runtime_tests -q
-node scripts/tauri/release.mjs verify-version tauri-v1.0.7
+node scripts/tauri/release.mjs verify-version tauri-v1.0.8
 
 # Contratos Rust (a partir de desktop/src-tauri)
 cargo fmt --check

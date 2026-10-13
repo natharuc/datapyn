@@ -4,6 +4,8 @@ import { Braces, ChevronDown, ChevronRight, ChevronsRight, Code2, Copy, Database
 import { runtime, errorText } from "./runtime";
 import { ExplorerController, explorerRows, quoteIdentifier, quoteIdentifierPart,reloadExpanded, type ExplorerNode, type ExplorerContext, type ExplorerDetails } from "./explorer";
 import { Modal } from "./PanelControls";
+import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
+import type { MenuPoint } from "./contextMenuModel";
 import "./explorer.css";
 
 export interface ObjectExplorerProps {
@@ -13,6 +15,7 @@ export interface ObjectExplorerProps {
   onError?: (message: string) => void; disabled?: boolean;
 }
 const objectKinds = new Set(["table", "view", "procedure", "function"]);
+interface ExplorerMenu { node: ExplorerNode; anchor: MenuPoint; ownerDocument: Document; returnFocus: HTMLElement | null; opening: number }
 function NodeIcon({ node }: { node: ExplorerNode }) {
   if (["database", "catalog"].includes(node.kind)) return <Database size={14} />;
   if (node.kind === "column") return node.primary_key ? <KeyRound size={13} /> : <Braces size={13} />;
@@ -25,9 +28,9 @@ export function ObjectExplorer({ sessionId, blockId, scopeInherited, connectionI
   useLocale();
   const controller = useRef(new ExplorerController());
   const [roots, setRoots] = useState<ExplorerNode[]>([]), [children, setChildren] = useState<Record<string, ExplorerNode[]>>({}), [expanded, setExpanded] = useState(new Set<string>()), [loading, setLoading] = useState(new Set<string>());
-  const [error, setError] = useState(""), [query, setQuery] = useState(""), [selected, setSelected] = useState<string>(), [menu, setMenu] = useState<ExplorerNode>();
+  const [error, setError] = useState(""), [query, setQuery] = useState(""), [selected, setSelected] = useState<string>(), [menu, setMenu] = useState<ExplorerMenu>();
   const [details, setDetails] = useState<{ node: ExplorerNode; data?: ExplorerDetails; error?: string }>(), [scroll, setScroll] = useState(0), [height, setHeight] = useState(400);
-  const generation = useRef(0), viewport = useRef<HTMLDivElement>(null), tree = useRef<HTMLDivElement>(null);
+  const generation = useRef(0), menuOpening = useRef(0), viewport = useRef<HTMLDivElement>(null), tree = useRef<HTMLDivElement>(null);
   const load = useCallback(async (node?: ExplorerNode, force = false) => {
     const key = node?.id ?? "$root", revision = generation.current;
     setLoading((prior) => new Set([...prior, key])); setError("");
@@ -64,7 +67,12 @@ export function ObjectExplorer({ sessionId, blockId, scopeInherited, connectionI
   const qualified = (node: ExplorerNode) => node.qualified_name || (node.schema && objectKinds.has(node.kind) ? `${node.schema}.${node.name}` : node.name);
   const quoted = (node: ExplorerNode) => node.qualified_name ? quoteIdentifier(node.qualified_name, dbType) : objectKinds.has(node.kind)&&node.schema?`${quoteIdentifierPart(node.schema,dbType)}.${quoteIdentifierPart(node.name,dbType)}`:quoteIdentifierPart(node.name, dbType);
   const insert = (node: ExplorerNode) => onInsert(quoted(node));
-  async function action(task: () => Promise<unknown> | unknown) { setMenu(undefined); try { await task(); } catch (failure) { const message = errorText(failure); setError(message); onError?.(message); } }
+  async function action(task: () => Promise<unknown> | unknown) {
+    const revision = generation.current;
+    setMenu(undefined); setError("");
+    try { await task(); }
+    catch (failure) { if (revision === generation.current) { const message = errorText(failure); setError(message); onError?.(message); } }
+  }
   const nodeParams = (node: ExplorerNode) => ({ session_id: sessionId, block_id: blockId, ...(blockId || scopeInherited!==undefined?{scope_inherited:Boolean(scopeInherited)}:{}),connection_id: connectionId, database: node.database || database, schema: node.schema || schema, name: node.name, kind: node.kind });
   async function showDetails(node: ExplorerNode) {
     const revision = generation.current; setDetails({ node });
@@ -72,24 +80,64 @@ export function ObjectExplorer({ sessionId, blockId, scopeInherited, connectionI
     catch (failure) { if (revision === generation.current) setDetails((prior) => prior?.node.id === node.id ? { node, error: errorText(failure) } : prior); }
   }
   async function copy(text: string) { await navigator.clipboard.writeText(text); }
-  async function selectQuery(node: ExplorerNode) { const { code } = await runtime.request<{ code: string }>("explorer.query", { ...nodeParams(node), limit: 1000 }); onInsert(code, "sql", true); }
+  async function selectQuery(node: ExplorerNode) {
+    const revision = generation.current;
+    const { code } = await runtime.request<{ code: string }>("explorer.query", { ...nodeParams(node), limit: 1000 });
+    if (revision === generation.current) onInsert(code, "sql", true);
+  }
   async function allColumns(node: ExplorerNode) {
+    const revision = generation.current;
     const info = await runtime.request<ExplorerDetails>("explorer.details", nodeParams(node)), columns = info.columns ?? [];
+    if (revision !== generation.current) return;
     const names = columns.map((column) => quoteIdentifierPart(String(column.name), dbType)).join(",\n       ");
     if (!names) throw new Error(t("Não há metadados de colunas disponíveis para este objeto."));
     onInsert(dbType === "sqlserver" ? `SELECT TOP 1000 ${names}\nFROM ${quoted(node)};` : `SELECT ${names}\nFROM ${quoted(node)}\nLIMIT 1000;`, "sql", true);
   }
   async function definition(node: ExplorerNode, drop = false) {
+    const revision = generation.current;
     const info = await runtime.request<ExplorerDetails>("explorer.details", nodeParams(node));
+    if (revision !== generation.current) return;
     if (!info.definition) throw new Error(t("O driver não disponibilizou a definição deste objeto."));
     const guard=dbType === "sqlserver" ? `IF OBJECT_ID(N'${quoted(node).replaceAll("'","''")}', N'U') IS NOT NULL\n    DROP TABLE ${quoted(node)};` : `DROP ${node.kind.toUpperCase()} IF EXISTS ${quoted(node)};`;
     onInsert(`${drop ? `${guard}\n\n` : ""}${info.definition}`, "sql", true);
   }
-  const columnTable=menu?.kind === "column" ? [...roots,...Object.values(children).flat()].find(node=>objectKinds.has(node.kind) && children[node.id]?.includes(menu)) : undefined;
+  const menuNode = menu?.node;
+  const columnTable=menuNode?.kind === "column" ? [...roots,...Object.values(children).flat()].find(node=>objectKinds.has(node.kind) && children[node.id]?.some(child=>child.id===menuNode.id)) : undefined;
   async function useContext(node: ExplorerNode) {
     const context = { database: ["database", "catalog"].includes(node.kind) ? node.name : node.database || database, schema: node.kind === "schema" ? node.name : ["database", "catalog"].includes(node.kind) ? undefined : schema };
     if (onContextChange) await onContextChange(context);
     else await runtime.request("explorer.use_database", { session_id: sessionId, block_id: blockId, ...(blockId || scopeInherited!==undefined?{scope_inherited:Boolean(scopeInherited)}:{}),connection_id: connectionId, ...context });
+  }
+  function openMenu(node: ExplorerNode, ownerDocument: Document, anchor: MenuPoint) {
+    setSelected(node.id);
+    tree.current?.focus({ preventScroll: true });
+    setMenu({ node, ownerDocument, anchor, returnFocus: tree.current, opening: ++menuOpening.current });
+  }
+  function menuItems(node: ExplorerNode): ContextMenuItem[] {
+    const items: ContextMenuItem[] = [];
+    const add = (id: string, label: string, task: () => Promise<unknown> | unknown, icon: React.ReactNode, options: Partial<ContextMenuItem> = {}) => {
+      items.push({ id, label, icon, ...options, onSelect: () => void action(task) });
+    };
+    if (node.kind !== "category") add("insert", t("Inserir nome no bloco em foco"), () => insert(node), <ChevronsRight size={14} />, { disabled });
+    add("copy-name", t("Copiar nome"), () => copy(node.name), <Copy size={14} />);
+    if (node.qualified_name) add("copy-qualified", t("Copiar nome qualificado"), () => copy(node.qualified_name!), <Copy size={14} />);
+    if (objectKinds.has(node.kind)) {
+      add("details", t("Detalhes, colunas e índices"), () => showDetails(node), <Braces size={14} />, { separator: true });
+      add("definition", t("Definição / CREATE"), () => definition(node), <Code2 size={14} />, { disabled });
+    }
+    if (["table", "view"].includes(node.kind)) {
+      add("select", t("SELECT primeiras 1000 linhas"), () => selectQuery(node), <Table2 size={14} />, { separator: true, disabled });
+      add("select-columns", t("SELECT com todas as colunas"), () => allColumns(node), <Table2 size={14} />, { disabled });
+      add("count", "COUNT(*)", () => onInsert(`SELECT COUNT(*) FROM ${quoted(node)};`, "sql", true), <Table2 size={14} />, { disabled });
+      if (node.kind === "table") add("drop-create", t("Script DROP e CREATE"), () => definition(node, true), <Code2 size={14} />, { disabled });
+    }
+    if (node.kind === "column") {
+      if (columnTable) add("copy-column", `${t("Copiar como")} ${columnTable.name}.${node.name}`, () => copy(`${columnTable.name}.${node.name}`), <Copy size={14} />);
+      for (const clause of ["WHERE", "GROUP BY", "ORDER BY"]) add(clause, clause, () => onInsert(`${clause} ${quoteIdentifierPart(node.name, dbType)}${clause === "WHERE" ? " = " : ""}`), <Code2 size={14} />, { separator: clause === "WHERE", disabled });
+    }
+    if (["database", "catalog", "schema"].includes(node.kind)) add("use-context", `${t("Usar")} ${node.kind === "schema" ? "schema" : t("banco / catálogo")} ${t("no bloco")}`, () => useContext(node), <Database size={14} />, { separator: true, disabled });
+    if (node.has_children) add("refresh", t("Atualizar este grupo"), () => load(node, true), <RefreshCw size={14} />, { separator: true, disabled: loading.has(node.id) || loading.has("$root") });
+    return items;
   }
   function keyboard(event: React.KeyboardEvent) {
     const index = rows.findIndex((row) => row.node.id === selected), node = rows[index]?.node;
@@ -97,27 +145,25 @@ export function ObjectExplorer({ sessionId, blockId, scopeInherited, connectionI
       event.preventDefault(); const next = event.key === "Home" ? 0 : event.key === "End" ? rows.length - 1 : Math.max(0, Math.min(rows.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)));
       setSelected(rows[next]?.node.id); if (viewport.current) { if (next * rowHeight < scroll) viewport.current.scrollTop = next * rowHeight; else if ((next + 1) * rowHeight > scroll + height) viewport.current.scrollTop = (next + 1) * rowHeight - height; }
     } else if (node && ["ArrowLeft", "ArrowRight"].includes(event.key)) { event.preventDefault(); if (expanded.has(node.id) !== (event.key === "ArrowRight")) toggle(node); }
-    else if (node && event.key === "Enter") { event.preventDefault(); if (event.ctrlKey || event.metaKey) insert(node); else toggle(node); }
-    else if (node && event.shiftKey && event.key === "F10") { event.preventDefault(); setMenu(node); }
+    else if (node && event.key === "Enter") { event.preventDefault(); if (event.ctrlKey || event.metaKey) { if (!disabled) insert(node); } else toggle(node); }
+    else if (node && ((event.shiftKey && event.key === "F10") || event.key === "ContextMenu")) {
+      event.preventDefault(); event.stopPropagation();
+      const ownerDocument = event.currentTarget.ownerDocument;
+      const bounds = ownerDocument.getElementById(`explorer-row-${node.id}`)?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
+      openMenu(node, ownerDocument, { x: bounds.left + 18, y: bounds.bottom });
+    }
   }
   return <section className="object-explorer" aria-label="Object Explorer"><div className="explorer-toolbar"><strong>Object Explorer</strong><button className="icon-button" title={t("Atualizar metadados")} aria-label={t("Atualizar metadados")} disabled={!connected || loading.has("$root")} onClick={() => void refreshTree()}><RefreshCw size={14} /></button></div>
     <div className="explorer-search"><Search size={14} /><input aria-label={t("Filtrar objetos carregados")} value={query} placeholder={t("Filtrar objetos…")} onChange={(event) => { setQuery(event.target.value); if (viewport.current) viewport.current.scrollTop = 0; }} /></div>
     {query && <p className="explorer-hint">{t("Filtro sobre os metadados carregados. Expanda os grupos para carregar outros objetos.")}</p>}{error && <p className="catalog-error" role="alert">{t(error)}</p>}
     {!connected && <p className="explorer-hint">{t("Conecte a sessão para explorar objetos do banco.")}</p>}{loading.has("$root") && <p className="explorer-hint"><LoaderCircle size={14} className="spin" /> {t("Carregando metadados…")}</p>}
     <div ref={viewport} className="explorer-viewport" onScroll={(event) => setScroll(event.currentTarget.scrollTop)}><div role="tree" ref={tree} tabIndex={0} aria-label={t("Objetos do banco de dados")} aria-activedescendant={selected ? `explorer-row-${selected}` : undefined} style={{ position: "relative", height: rows.length * rowHeight }} onKeyDown={keyboard}>
-      {rows.slice(first, end).map(({ node, depth }, offset) => <div key={node.id} id={`explorer-row-${node.id}`} role="treeitem" aria-level={depth + 1} aria-selected={selected === node.id} aria-expanded={node.has_children ? expanded.has(node.id) : undefined} className={`explorer-row ${selected === node.id ? "selected" : ""} ${node.kind}`} style={{ position: "absolute", top: (first + offset) * rowHeight, height: rowHeight, paddingLeft: 7 + depth * 13 }} title={`${qualified(node)}${node.data_type ? `\n${node.data_type}` : ""}`} onClick={() => { setSelected(node.id); tree.current?.focus(); }} onDoubleClick={() => toggle(node)} onContextMenu={(event) => { event.preventDefault(); setSelected(node.id); setMenu(node); }} draggable={objectKinds.has(node.kind) || ["database", "catalog", "schema", "column"].includes(node.kind)} onDragStart={(event) => { event.dataTransfer.setData("text/plain", quoted(node)); if (["database", "catalog", "schema"].includes(node.kind)) event.dataTransfer.setData("application/x-datapyn-context", JSON.stringify({ connection_id: connectionId, database: ["database", "catalog"].includes(node.kind) ? node.name : node.database || database, schema: node.kind === "schema" ? node.name : ["database", "catalog"].includes(node.kind) ? undefined : schema })); }}>
+      {rows.slice(first, end).map(({ node, depth }, offset) => <div key={node.id} id={`explorer-row-${node.id}`} role="treeitem" aria-level={depth + 1} aria-selected={selected === node.id} aria-expanded={node.has_children ? expanded.has(node.id) : undefined} className={`explorer-row ${selected === node.id ? "selected" : ""} ${node.kind}`} style={{ position: "absolute", top: (first + offset) * rowHeight, height: rowHeight, paddingLeft: 7 + depth * 13 }} title={`${qualified(node)}${node.data_type ? `\n${node.data_type}` : ""}`} onClick={() => { setSelected(node.id); tree.current?.focus(); }} onDoubleClick={() => toggle(node)} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); openMenu(node, event.currentTarget.ownerDocument, { x: event.clientX, y: event.clientY }); }} draggable={objectKinds.has(node.kind) || ["database", "catalog", "schema", "column"].includes(node.kind)} onDragStart={(event) => { event.dataTransfer.setData("text/plain", quoted(node)); if (["database", "catalog", "schema"].includes(node.kind)) event.dataTransfer.setData("application/x-datapyn-context", JSON.stringify({ connection_id: connectionId, database: ["database", "catalog"].includes(node.kind) ? node.name : node.database || database, schema: node.kind === "schema" ? node.name : ["database", "catalog"].includes(node.kind) ? undefined : schema })); }}>
         <button className="explorer-toggle" tabIndex={-1} title={expanded.has(node.id) ? "Recolher" : "Expandir"} onClick={(event) => { event.stopPropagation(); toggle(node); }} disabled={!node.has_children}>{loading.has(node.id) ? <LoaderCircle size={12} className="spin" /> : node.has_children ? expanded.has(node.id) ? <ChevronDown size={12} /> : <ChevronRight size={12} /> : null}</button><NodeIcon node={node} /><span>{node.name}</span>{node.data_type && <small>{node.data_type}</small>}
         {node.kind !== "category" && <button className="explorer-insert" aria-label={t("Inserir {name} no editor",{name:node.name})} title={t("Inserir no bloco em foco")} disabled={disabled} onMouseDown={(event) => event.preventDefault()} onClick={(event) => { event.stopPropagation(); insert(node); }}><ChevronsRight size={14} /></button>}
       </div>)}
     </div>{connected && !rows.length && !loading.size && !error && <p className="explorer-hint">{query ? t("Nenhum objeto carregado corresponde ao filtro.") : t("Nenhum objeto disponível neste contexto.")}</p>}</div>
-    {menu && <Modal title={menu.name} className="connection-action-menu" onClose={() => setMenu(undefined)}><div className="connection-actions">
-      {menu.kind !== "category" && <button onClick={() => { insert(menu); setMenu(undefined); }}><ChevronsRight size={14} />{t("Inserir nome no bloco em foco")}</button>}<button onClick={() => void action(() => copy(menu.name))}><Copy size={14} />{t("Copiar nome")}</button>{menu.qualified_name && <button onClick={() => void action(() => copy(menu.qualified_name!))}><Copy size={14} />{t("Copiar nome qualificado")}</button>}
-      {objectKinds.has(menu.kind) && <><button onClick={() => void action(() => showDetails(menu))}><Braces size={14} />{t("Detalhes, colunas e índices")}</button><button onClick={() => void action(() => definition(menu))}><Code2 size={14} />{t("Definição / CREATE")}</button></>}
-      {["table", "view"].includes(menu.kind) && <><button onClick={() => void action(() => selectQuery(menu))}><Table2 size={14} />{t("SELECT primeiras 1000 linhas")}</button><button onClick={() => void action(() => allColumns(menu))}><Table2 size={14} />{t("SELECT com todas as colunas")}</button><button onClick={() => { onInsert(`SELECT COUNT(*) FROM ${quoted(menu)};`, "sql", true); setMenu(undefined); }}><Table2 size={14} />COUNT(*)</button>{menu.kind === "table" && <button onClick={() => void action(() => definition(menu, true))}><Code2 size={14} />{t("Script DROP e CREATE")}</button>}</>}
-      {menu.kind === "column" && <>{columnTable && <button onClick={()=>void action(()=>copy(`${columnTable.name}.${menu.name}`))}><Copy size={14}/>{t("Copiar como")} {columnTable.name}.{menu.name}</button>}{["WHERE", "GROUP BY", "ORDER BY"].map((clause) => <button key={clause} onClick={() => { onInsert(`${clause} ${quoteIdentifierPart(menu.name, dbType)}${clause === "WHERE" ? " = " : ""}`); setMenu(undefined); }}>{clause}</button>)}</>}
-      {["database", "catalog", "schema"].includes(menu.kind) && <button disabled={disabled} onClick={() => void action(() => useContext(menu))}><Database size={14} />{t("Usar")} {menu.kind === "schema" ? "schema" : t("banco / catálogo")} {t("no bloco")}</button>}
-      {menu.has_children && <button onClick={() => void action(() => load(menu, true))}><RefreshCw size={14} />{t("Atualizar este grupo")}</button>}
-    </div></Modal>}
-    {details && <Modal title={t("Detalhes · {name}",{name:qualified(details.node)})} className="explorer-details" onClose={() => setDetails(undefined)}>{details.error ? <p className="catalog-error">{t(details.error)}</p> : !details.data ? <p className="explorer-hint">{t("Carregando detalhes…")}</p> : <><div className="explorer-detail-tables">{(details.data.row_count != null || !!details.data.size_pretty) && <p className="explorer-hint">{details.data.row_count != null ? t("{count} linhas",{count:String(details.data.row_count)}) : ""}{details.data.size_pretty ? ` · ${String(details.data.size_pretty)}` : ""}</p>}{["columns", "indexes", "keys", "primary_key", "foreign_keys", "parameters"].map((key) => { const raw = details.data![key]; const data = Array.isArray(raw) ? raw as Array<Record<string, unknown>> : raw && typeof raw === "object" ? [raw as Record<string, unknown>] : []; if (!data.length) return null; const names = [...new Set(data.flatMap((row) => Object.keys(row)))]; const labels: Record<string,string> = { columns: t("Colunas"), indexes: t("Índices"), keys: t("Chaves"), primary_key: t("Chave primária"), foreign_keys: t("Chaves estrangeiras"), parameters: t("Parâmetros") }; return <section key={key}><h3>{labels[key]}</h3><table><thead><tr>{names.map((name) => <th key={name}>{name}</th>)}</tr></thead><tbody>{data.map((row, index) => <tr key={index}>{names.map((name) => <td key={name}>{typeof row[name] === "object" ? JSON.stringify(row[name]) : String(row[name] ?? "")}</td>)}</tr>)}</tbody></table></section>; })}{details.data.definition && <section><h3>{t("Definição")}</h3><pre>{details.data.definition}</pre></section>}{!details.data.definition && !details.data.columns?.length && !details.data.indexes?.length && !details.data.keys?.length && <p className="explorer-hint">{t("O driver não retornou detalhes deste objeto.")}</p>}</div><footer className="modal-footer">{details.data.definition && <button className="secondary-button" onClick={() => { onInsert(details.data!.definition!, "sql", true); setDetails(undefined); }}>{t("Abrir definição em novo bloco")}</button>}<button className="primary-button" onClick={() => setDetails(undefined)}>{t("Fechar")}</button></footer></>}</Modal>}
+    {menu && <ContextMenu key={menu.opening} ownerDocument={menu.ownerDocument} anchor={menu.anchor} returnFocus={menu.returnFocus} label={menu.node.name} items={menuItems(menu.node)} onClose={() => setMenu(undefined)} />}
+    {details && <Modal title={t("Detalhes · {name}",{name:qualified(details.node)})} className="explorer-details" onClose={() => setDetails(undefined)}>{details.error ? <p className="catalog-error" role="alert">{t(details.error)}</p> : !details.data ? <p className="explorer-hint">{t("Carregando detalhes…")}</p> : <><div className="explorer-detail-tables">{(details.data.row_count != null || !!details.data.size_pretty) && <p className="explorer-hint">{details.data.row_count != null ? t("{count} linhas",{count:String(details.data.row_count)}) : ""}{details.data.size_pretty ? ` · ${String(details.data.size_pretty)}` : ""}</p>}{["columns", "indexes", "keys", "primary_key", "foreign_keys", "parameters"].map((key) => { const raw = details.data![key]; const data = Array.isArray(raw) ? raw as Array<Record<string, unknown>> : raw && typeof raw === "object" ? [raw as Record<string, unknown>] : []; if (!data.length) return null; const names = [...new Set(data.flatMap((row) => Object.keys(row)))]; const labels: Record<string,string> = { columns: t("Colunas"), indexes: t("Índices"), keys: t("Chaves"), primary_key: t("Chave primária"), foreign_keys: t("Chaves estrangeiras"), parameters: t("Parâmetros") }; return <section key={key}><h3>{labels[key]}</h3><table><thead><tr>{names.map((name) => <th key={name}>{name}</th>)}</tr></thead><tbody>{data.map((row, index) => <tr key={index}>{names.map((name) => <td key={name}>{typeof row[name] === "object" ? JSON.stringify(row[name]) : String(row[name] ?? "")}</td>)}</tr>)}</tbody></table></section>; })}{details.data.definition && <section><h3>{t("Definição")}</h3><pre>{details.data.definition}</pre></section>}{!details.data.definition && !details.data.columns?.length && !details.data.indexes?.length && !details.data.keys?.length && <p className="explorer-hint">{t("O driver não retornou detalhes deste objeto.")}</p>}</div><footer className="modal-footer">{details.data.definition && <button className="secondary-button" disabled={disabled} onClick={() => { onInsert(details.data!.definition!, "sql", true); setDetails(undefined); }}>{t("Abrir definição em novo bloco")}</button>}<button className="primary-button" onClick={() => setDetails(undefined)}>{t("Fechar")}</button></footer></>}</Modal>}
   </section>;
 }

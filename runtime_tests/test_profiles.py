@@ -141,7 +141,10 @@ def test_clone_ssh_credentials_is_explicit_and_never_copies_host_trust(root, mon
     copied_catalog = ConnectionCatalog(target / "connections.json", secrets)
     copied = copied_catalog.list()["connections"][0]
     assert copied["id"] != saved["id"]
-    assert copied["has_ssh_password"] is include_credentials
+    assert not copied["has_ssh_password"]
+    tunnel = copied_catalog.list()["ssh_tunnels"][0]
+    assert tunnel["has_password"] is include_credentials
+    assert copied["config"]["ssh_tunnel_id"] == tunnel["id"]
     assert copied_catalog.config(copied["id"])["ssh"].get("password") == ("ssh-secret" if include_credentials else None)
     assert "ssh-secret" not in (target / "connections.json").read_text()
     assert not (target / "ssh_known_hosts.json").exists()

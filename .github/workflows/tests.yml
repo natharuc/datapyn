@@ -23,7 +23,10 @@ jobs:
         with:
           version: "latest"
       - name: Install dependencies
-        run: uv sync --dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libkrb5-dev pkg-config
+          uv sync --dev --frozen
       - name: pip-audit
         run: uv run pip-audit
 
@@ -53,7 +56,7 @@ jobs:
       - name: Install system dependencies (Ubuntu)
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get install -y libkrb5-dev pkg-config \
             libmariadb-dev \
             freeglut3-dev \
             xvfb \

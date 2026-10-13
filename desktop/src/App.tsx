@@ -51,7 +51,7 @@ import {useWindowLayout} from "./useWindowLayout";
 import {flushNativePopoutLayouts,nativePopoutLabel} from "./nativePopoutLayout";
 import { findInDocuments, hasFocusedDocument } from "./documentWindows";
 import {OutputRevealTracker} from "./outputReveal";
-import {hasVisibleShortcutDialog} from "./shortcutModalGuard";
+import {hasLocalShortcutDialog,hasVisibleShortcutDialog} from "./shortcutModalGuard";
 import {SessionCompletionIndex,SessionLanguageContexts,completionConnectionScope,inheritsSessionScope} from "./sessionCompletion";
 import {BlockScopePicker} from "./BlockScopePicker";
 import {prepareExecutionContextAfterEvent} from "./executionContextRefresh";
@@ -166,19 +166,26 @@ export function App() {
   const [preferences, setPreferences] = useState(loadPreferences);
   const [leftVisible, setLeftVisible] = useState(preferences.leftVisible), [rightVisible, setRightVisible] = useState(preferences.rightVisible);
   const [connectionDialog, setConnectionDialog] = useState(false), [settingsDialog, setSettingsDialog] = useState(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState("appearance");
+  const manageSshTunnels = () => { setSettingsInitialTab("ssh"); setSettingsDialog(true); };
   const [aboutDialog,setAboutDialog]=useState(false);
   const [updateDialog,setUpdateDialog]=useState(false);
   const [connectionPicker, setConnectionPicker] = useState<string>(), [connectionsManager, setConnectionsManager] = useState(false);
   const [explorerRefresh, setExplorerRefresh] = useState(0);
   const connectionSignatures=useRef<Map<string,string>>();
+  const tunnelSignatures=useRef<Map<string,string>>();
   useEffect(()=>{
-    const next=new Map(catalogState.catalog.connections.map(item=>[item.id,JSON.stringify(item.config)]));
+    const next=new Map(catalogState.catalog.connections.map(item=>[item.id,JSON.stringify([item.config,catalogState.catalog.ssh_tunnels?.find(tunnel=>tunnel.id===item.config.ssh_tunnel_id)])]));
+    const nextTunnels=new Map((catalogState.catalog.ssh_tunnels ?? []).map(item=>[item.id,JSON.stringify(item)]));
+    const previousTunnels=tunnelSignatures.current;tunnelSignatures.current=nextTunnels;
     const previous=connectionSignatures.current;connectionSignatures.current=next;
     if(!previous)return;
     const changed=new Set([...previous.keys(),...next.keys()].filter(id=>previous.get(id)!==next.get(id)));
-    if(!changed.size)return;
+    const changedTunnels=new Set([...previousTunnels?.keys() ?? [],...nextTunnels.keys()].filter(id=>previousTunnels?.get(id)!==nextTunnels.get(id)));
+    if(!changed.size && !changedTunnels.size)return;
     for(const current of workspace.getSnapshot().sessions){
-      let affected=false;
+      let affected=!current.savedConnectionId && changedTunnels.has(current.connection?.ssh_tunnel_id ?? "");
+      if(affected)languageContexts.current.invalidateConnection(current.id);
       for(const id of changed){
         languageContexts.current.invalidateConnection(current.id,id);
         if(current.savedConnectionId===id || current.blocks.some(block=>block.connection_id===id))affected=true;
@@ -596,7 +603,8 @@ export function App() {
       const eventDocument=(event.target as Node | null)?.ownerDocument ?? document;
       if (eventDocument.activeElement?.closest('[role="menu"]')) return;
       if (connectionDialog || settingsDialog || closingId || connectionPicker || connectionsManager || hasVisibleShortcutDialog(document) || (eventDocument !== document && hasVisibleShortcutDialog(eventDocument))) {
-        if (event.key === "Escape") { event.preventDefault(); setSettingsDialog(false); if (!connectionDialog) setClosingId(undefined); }
+        // Modal owns Escape even when a disabled form has moved focus to body.
+        if (event.key === "Escape" && !hasLocalShortcutDialog(eventDocument) && !connectionDialog) { event.preventDefault(); setClosingId(undefined); }
         return;
       }
       if (event.key === "Escape") {
@@ -710,7 +718,7 @@ export function App() {
     {isDesktop() && !profile && <div className="workspace-loading" role="status" aria-live="polite">{profileLoadError || state.runtimeStatus === "unavailable" ? <><span>{profileLoadError || state.message}</span><button className="text-button" onClick={()=>state.runtimeStatus === "unavailable" ? run(workspace.retryRuntime()) : setProfileRetry(n=>n+1)}>{translateUi("Tentar novamente")}</button></> : <><LoaderCircle className="spin" size={22}/><span>{translateUi(state.runtimeStatus === "ready" ? "Restaurando workspace…" : "Iniciando runtime Python…")}</span></>}</div>}
     {state.runtimeStatus === "unavailable" && <div className="runtime-banner"><Activity size={14} /><span>{isDesktop() ? state.message : "Prévia da interface. O runtime Python está disponível no aplicativo desktop."}</span>{isDesktop() && <button className="text-button" onClick={() => run(workspace.retryRuntime())}><RefreshCw size={12} /> {translateUi("Reconectar")}</button>}</div>}
     <main className="workbench">{(!isDesktop() || profile) && <Suspense fallback={<p className="explorer-empty">{translateUi("Carregando painéis…")}</p>}><DockingWorkbench key={profile?.active_id ?? "startup"} initialLayout={dockLayout} locked={editingLocked} onControlsReady={controls=>{docking.current=controls;setDockControls(controls);}} onPanelsChange={dockPanelsChanged} onVisiblePanelsChange={setVisibleDockPanels} onRestoreError={reportMessage} onInitialized={()=>setStartupLayout(profile?.active_id)} onPopoutReady={attachPopoutKeyboard} onCaptureReady={capture=>{captureLayout.current=capture;}} onLayoutChange={setDockLayout} theme={preferences.theme} leftWidth={preferences.leftWidth} rightWidth={preferences.rightWidth} resultHeight={resultHeight} leftVisible={leftVisible} rightVisible={rightVisible} activeBottom={panel} activeRight={rightPanel} resetRevision={dockReset} onActivate={id=>{if(isBottomPanel(id))setPanel(id);if(id === "variables" || id === "pynia")setRightPanel(id);}} panels={{
-      connections:<ConnectionsSidebar activeConnectionId={session.savedConnectionId} onConnect={connectSaved} onDisconnect={() => workspace.disconnect(session.id)} onError={reportMessage} disabled={session.busy || dataImportPending(session.dataImport) || openingConnection || editingLocked || !profile} newTabDisabled={editingLocked || !profile}/>,
+      connections:<ConnectionsSidebar onManageTunnels={manageSshTunnels} activeConnectionId={session.savedConnectionId} onConnect={connectSaved} onDisconnect={() => workspace.disconnect(session.id)} onError={reportMessage} disabled={session.busy || dataImportPending(session.dataImport) || openingConnection || editingLocked || !profile} newTabDisabled={editingLocked || !profile}/>,
       explorer:<ObjectExplorer sessionId={session.id} blockId={focusedBlock?.id} scopeInherited={focusedScope.scopeInherited} connectionId={focusedScope.connectionId} database={focusedScope.database} schema={focusedScope.schema} dbType={catalogState.catalog.connections.find(item=>item.id===focusedScope.connectionId)?.config.db_type ?? session.connection?.db_type} connected={!connectionBlocked && preparedSession === `${profile?.active_id}:${session.id}` && Boolean(session.connection || focusedBlock?.connection_id || session.savedConnectionId)} refresh={explorerRefresh} disabled={session.busy} onError={reportMessage}
           onInsert={(code, language = "sql", newBlock = false) => { if (newBlock) { const block = workspace.addBlock(session.id,language,code,session.focusedBlockId); if (focusedBlock) workspace.updateBlock(session.id,block.id,{connection_id:focusedScope.connectionId,database_name:focusedScope.database,schema:focusedScope.schema}); requestAnimationFrame(()=>focusEditor(block.id)); } else insertInEditor(session.focusedBlockId,code); }}
           onContextChange={context => applyBlockScope(session.id,session.focusedBlockId,context)}/>,
@@ -778,11 +786,11 @@ export function App() {
     {workspaceManager && <Suspense fallback={null}><WorkspaceManagerDialog busy={state.sessions.some(s=>s.busy) || switchingProfile} onSelect={selectProfile} onClose={()=>setWorkspaceManager(false)} onMessage={reportMessage}/></Suspense>}
     <NotificationToasts center={notificationCenter} entries={notificationState.toasts} onActivate={openNotification} leading={<UpdateNotice controller={updates.controller} onOpen={()=>setUpdateDialog(true)}/>}/>
     {notificationHistory && <NotificationHistory center={notificationCenter} entries={notificationState.entries} onActivate={openNotification} onSettings={()=>{setNotificationHistory(false);setNotificationDialog(true);}} onClose={()=>setNotificationHistory(false)}/>}
-    {connectionDialog && <ConnectionDialog initial={session.connection} connectionId={session.savedConnectionId} hasPassword={activeSavedConnection?.has_password} hasSshPassword={activeSavedConnection?.has_ssh_password} hasSshPassphrase={activeSavedConnection?.has_ssh_passphrase} onClose={() => setConnectionDialog(false)} onConnect={async (config, metadata) => { await workspace.connect(session.id, config, session.savedConnectionId, metadata?.use_saved_database_password !== false); setExplorerRefresh(n=>n+1); }} />}
+    {connectionDialog && <ConnectionDialog tunnels={catalogState.catalog.ssh_tunnels} onManageTunnels={manageSshTunnels} initial={session.connection ? {...session.connection, ssh_tunnel_id: session.connection.ssh_tunnel_id !== undefined ? session.connection.ssh_tunnel_id : activeSavedConnection?.config.ssh_tunnel_id} : undefined} connectionId={session.savedConnectionId} hasPassword={activeSavedConnection?.has_password} hasSshPassword={activeSavedConnection?.has_ssh_password} hasSshPassphrase={activeSavedConnection?.has_ssh_passphrase} onClose={() => setConnectionDialog(false)} onConnect={async (config, metadata) => { await workspace.connect(session.id, config, session.savedConnectionId, metadata?.use_saved_database_password !== false); setExplorerRefresh(n=>n+1); }} />}
     <SshHostTrustDialog />
-    {settingsDialog && <SettingsDialog preferences={preferences} shortcuts={shortcuts} transfer={configurationActions} onClose={() => setSettingsDialog(false)} onSave={async(p,next) => { await saveNotificationFlags(runtime,p);setPreferences(p);if(p.notifications && !preferences.notifications && isDesktop())run(requestPermission());setShortcuts(next); workspace.patchSession(session.id,s=>({...s,extras:{...s.extras,shared_delimiter:p.sharedDelimiter}})); try { localStorage.setItem("datapyn.desktop.shortcuts.v1", JSON.stringify(next)); } catch { reportMessage("Atalhos aplicados. Não foi possível persistir nesta máquina."); } setSettingsDialog(false); }} />}
+    {settingsDialog && <SettingsDialog initialTab={settingsInitialTab} preferences={preferences} shortcuts={shortcuts} transfer={configurationActions} onClose={() => { setSettingsDialog(false); setSettingsInitialTab("appearance"); }} onSave={async(p,next) => { await saveNotificationFlags(runtime,p);setPreferences(p);if(p.notifications && !preferences.notifications && isDesktop())run(requestPermission());setShortcuts(next); workspace.patchSession(session.id,s=>({...s,extras:{...s.extras,shared_delimiter:p.sharedDelimiter}})); try { localStorage.setItem("datapyn.desktop.shortcuts.v1", JSON.stringify(next)); } catch { reportMessage("Atalhos aplicados. Não foi possível persistir nesta máquina."); } setSettingsDialog(false); }} />}
     {connectionPicker && <ConnectionPicker currentId={session.blocks.find(b=>b.id === connectionPicker)?.connection_id ?? session.savedConnectionId} onSelect={c => { if (connectionPicker === session.blocks[0].id) run(connectSaved(c).then(()=>workspace.updateBlock(session.id,session.blocks[0].id,{connection_id:undefined,database_name:undefined,schema:undefined}))); else workspace.updateBlock(session.id,connectionPicker,{connection_id:c.id,database_name:undefined,schema:undefined}); setConnectionPicker(undefined); requestAnimationFrame(()=>focusEditor(session.focusedBlockId)); }} onDefault={()=>{workspace.updateBlock(session.id,connectionPicker,{connection_id:undefined,database_name:undefined,schema:undefined});setConnectionPicker(undefined);}} onClose={()=>setConnectionPicker(undefined)}/>}
-    {connectionsManager && <div className="modal-overlay"><section className="modal connection-manager" role="dialog" aria-modal="true" aria-label={translateUi("Gerenciar conexões")}><header className="modal-header"><h2>{translateUi("Gerenciar conexões")}</h2><button onClick={()=>setConnectionsManager(false)}>{translateUi("×")}</button></header><ConnectionsSidebar activeConnectionId={session.savedConnectionId} onConnect={connectSaved} onError={reportMessage}/></section></div>}
+    {connectionsManager && <div className="modal-overlay"><section className="modal connection-manager" role="dialog" aria-modal="true" aria-label={translateUi("Gerenciar conexões")}><header className="modal-header"><h2>{translateUi("Gerenciar conexões")}</h2><button onClick={()=>setConnectionsManager(false)}>{translateUi("×")}</button></header><ConnectionsSidebar onManageTunnels={manageSshTunnels} activeConnectionId={session.savedConnectionId} onConnect={connectSaved} onError={reportMessage}/></section></div>}
     {closingId && <div className="modal-overlay"><section className="modal confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="close-title"><header className="modal-header"><Save size={18} /><div><h2 id="close-title">{translateUi("Salvar alterações?")}</h2><p>{workspace.session(closingId)?.title}</p></div></header><p className="confirm-copy">{translateUi("Salve a análise em um arquivo .dpw antes de fechar a aba.")}</p><footer className="modal-footer"><button className="secondary-button" onClick={() => setClosingId(undefined)}>{translateUi("Voltar")}</button><button className="secondary-button" onClick={() => run(closeConfirmed(false))}>{translateUi("Descartar")}</button><button className="primary-button" onClick={() => run(closeConfirmed(true))}>{translateUi("Salvar e fechar")}</button></footer></section></div>}
   </div>;
 }

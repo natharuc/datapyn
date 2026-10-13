@@ -1,12 +1,13 @@
 import { runtime, errorText, type RuntimeTransport } from "./runtime";
 import type { ConnectionConfig } from "./workspace";
+import type { SavedSshTunnel } from "./sshTunnels";
 
 export interface ConnectionGroup { id: string; name: string; parent_id: string | null; color: string; order: number }
 export interface SavedConnection {
   id: string; name: string; group_id: string | null; color: string; favorite: boolean; order: number;
   config: ConnectionConfig; has_password: boolean; has_ssh_password?: boolean; has_ssh_passphrase?: boolean; created_at?: string; last_used?: string;
 }
-export interface ConnectionCatalog { version: number; groups: ConnectionGroup[]; connections: SavedConnection[] }
+export interface ConnectionCatalog { version: number; groups: ConnectionGroup[]; connections: SavedConnection[]; ssh_tunnels?: SavedSshTunnel[] }
 export interface CatalogSnapshot { catalog: ConnectionCatalog; loading: boolean; error: string; loaded: boolean }
 export const CONNECTION_MIME = "application/x-datapyn-connection";
 export const GROUP_MIME = "application/x-datapyn-group";
