@@ -11,6 +11,18 @@ function transport(handler: (method: string, params: Record<string, unknown>) =>
 }
 
 describe("block database and schema picker", () => {
+  it("routes physical transaction modes and never replaces automatic schemas with a late manual response",async()=>{
+    const resolvers:Array<(value:ExplorerResult)=>void>=[],requests:Record<string,unknown>[]=[];
+    const client=new ScopeOptionsClient(transport(async(_,params)=>{requests.push(params);return new Promise(resolve=>resolvers.push(resolve));}));
+    const manualScope={...scope,block_id:"block",automatic_transactions:false},automaticScope={...scope,block_id:"block",automatic_transactions:true};
+    const manual=client.list(manualScope,"schema"),automatic=client.list(automaticScope,"schema");
+    resolvers[1]({nodes:[node("automatic","schema")]});expect((await automatic).options[0].name).toBe("automatic");
+    resolvers[0]({nodes:[node("manual","schema")]});expect((await manual).options[0].name).toBe("manual");
+    expect((await client.list(automaticScope,"schema")).options[0].name).toBe("automatic");
+    expect((await client.list({...scope,block_id:"block"},"schema")).options[0].name).toBe("automatic");
+    expect((await client.list(manualScope,"schema")).options[0].name).toBe("manual");
+    expect(requests.map(request=>request.automatic_transactions)).toEqual([false,true]);
+  });
   it("separates list caches when a block switches between pinned and inherited physical affinity",async()=>{
     const requests:Record<string,unknown>[]=[];const client=new ScopeOptionsClient(transport(async(_,params)=>{requests.push(params);return{nodes:[node(params.scope_inherited?"inherited":"pinned","schema")]};}));
     expect((await client.list({...scope,block_id:"block"},"schema")).options[0].name).toBe("pinned");

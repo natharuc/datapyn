@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import { createPortal } from "react-dom";
 import { contextMenuIndex, contextMenuPosition, type MenuPoint } from "./contextMenuModel";
 import "./contextMenu.css";
+import {Check} from "lucide-react";
 
 export interface ContextMenuItem {
   id?: string;
@@ -10,6 +11,7 @@ export interface ContextMenuItem {
   disabled?: boolean;
   danger?: boolean;
   separator?: boolean;
+  checked?: boolean;
   onSelect: () => void;
 }
 
@@ -103,10 +105,10 @@ export function ContextMenu({ ownerDocument, anchor, returnFocus, label, items, 
     }}>
     {items.map((item, index) => <div className="context-menu-entry" role="none" key={item.id ?? `${index}:${item.label}`}>
       {item.separator && <div className="context-menu-separator" role="separator" />}
-      <button ref={element => { buttons.current[index] = element; }} role="menuitem" type="button" tabIndex={-1}
+      <button ref={element => { buttons.current[index] = element; }} role={item.checked === undefined ? "menuitem" : "menuitemcheckbox"} aria-checked={item.checked} type="button" tabIndex={-1}
         disabled={item.disabled} className={item.danger ? "danger" : undefined}
         onClick={() => { if (!item.disabled) { close(); item.onSelect(); } }}>
-        {item.icon}<span>{item.label}</span>
+        {item.checked !== undefined ? <Check size={13} style={{visibility:item.checked ? "visible" : "hidden"}}/> : item.icon}<span>{item.label}</span>
       </button>
     </div>)}
   </div>, ownerDocument.body);

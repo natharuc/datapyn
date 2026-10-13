@@ -63,9 +63,12 @@ def preview(value: Any, limit: int = 240) -> str:
 
 
 def describe_variables(namespace: dict) -> list[dict]:
+    from types import FunctionType
     variables = []
     for name, value in list(namespace.items()):
         if name.startswith("_") or name in {"pd", "np", "pl", "plt", "display"} or isinstance(value, ModuleType):
+            continue
+        if name == "sql" and type(value) is FunctionType and value.__dict__.get("_datapyn_sql_helper") is True:
             continue
         variables.append({"name": name, "type": type(value).__name__, "preview": preview(value)})
         if len(variables) >= 200:

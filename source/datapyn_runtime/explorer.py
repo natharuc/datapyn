@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from copy import deepcopy
+from contextlib import contextmanager
 import json
+import re
 import time
 
 from .database import SQLiteConnector
@@ -89,6 +91,135 @@ class ObjectExplorer:
             frame = frame[0]
         return [{str(key).lower(): value for key, value in row.items()} for row in frame.to_dict("records")]
 
+    @contextmanager
+    def _inspector(self):
+        """Reflect the owning socket without SQLAlchemy committing/resetting it."""
+        from sqlalchemy import inspect
+        borrow = getattr(self.connector, "table_export_connection", None)
+        if getattr(self.connector, "automatic_transactions", True) is False and callable(borrow):
+            with borrow() as connection:
+                yield inspect(connection)
+        else:
+            yield inspect(self.connector.engine)
+
+    def refresh_sql_temporaries(self, code, *, force=False):
+        """Discover names from executed SQL, confirming existence on this block only."""
+        if getattr(self.connector, "automatic_transactions", True) is not False:
+            return False
+        from .sql_context import _PATH, _PART, sql_code_mask
+        from .table_export import _temporary_exists
+        previous = getattr(self.connector, "_datapyn_temporary_tables", {})
+        # A SELECT/DML must add no metadata round trips regardless of how many
+        # temporary tables a block owns. Only changed objects need reflection;
+        # transaction completion checks existence, retaining known columns.
+        code = (code or "")[:1_048_576]
+        if not force and not re.search(r"\b(?:CREATE|ALTER|DROP|RENAME|INTO|COMMIT|ROLLBACK|ABORT|END)\b", code, re.IGNORECASE):
+            return False
+        masked = sql_code_mask(code, self.db_type)
+        keywords = sql_code_mask(code, self.db_type, identifiers=True)
+        completed = bool(re.search(r"\b(?:COMMIT|ROLLBACK|ABORT)\b", keywords, re.IGNORECASE))
+        # PostgreSQL also accepts standalone END as COMMIT. Do not interpret
+        # the END of CASE/procedural expressions as a transaction completion.
+        completed = completed or (self.db_type == "postgresql" and bool(re.search(r"(?:^|;)\s*END(?:\s+(?:WORK|TRANSACTION))?\s*(?:;|$)", keywords, re.IGNORECASE)))
+        names = set(previous) if completed or force else set()
+        reflect = set()
+        def table_name(path):
+            tokens = _PART.findall(path)
+            if not tokens:
+                return ""
+            token = tokens[-1]
+            return token[1:-1].replace(token[-1] * 2, token[-1]) if token[0] in '["`' else token.lower() if self.db_type == "postgresql" else token
+        pattern = re.compile(r"\b(?P<action>CREATE|ALTER|DROP|RENAME)\s+(?:OR\s+REPLACE\s+)?(?:LOCAL\s+|GLOBAL\s+)?(?P<temporary>TEMP(?:ORARY)?\s+)?TABLE\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?(?P<name>" + _PATH + r")|\b(?P<into_keyword>INTO)\s+(?P<into>" + _PATH + r")", re.IGNORECASE)
+        for match in pattern.finditer(masked):
+            keyword = "action" if match.group("action") else "into_keyword"
+            if keywords[match.start(keyword):match.end(keyword)].upper() != match.group(keyword).upper():
+                continue
+            name = table_name(match.group("name") or match.group("into"))
+            if not name:
+                continue
+            if match.group("into"):
+                preceding = keywords[:match.start()].rsplit(";", 1)[-1]
+                if self.db_type != "sqlserver" or not name.startswith("#") or not re.search(r"\bSELECT\b", preceding, re.IGNORECASE) or re.search(r"\bINSERT\b", preceding, re.IGNORECASE):
+                    continue
+                names.add(name)
+                reflect.add(name)
+            elif name in previous or (self.db_type == "sqlserver" and name.startswith("#")) or match.group("temporary"):
+                names.add(name)
+                if match.group("action").upper() in {"CREATE", "ALTER", "RENAME"}:
+                    reflect.add(name)
+                if match.group("action").upper() in {"ALTER", "RENAME"}:
+                    suffix = masked[match.end():].split(";", 1)[0]
+                    rename = re.match(r"\s+(?:RENAME\s+TO|TO)\s+(" + _PATH + r")", suffix, re.IGNORECASE)
+                    if rename:
+                        renamed = table_name(rename.group(1))
+                        names.add(renamed)
+                        reflect.add(renamed)
+        if not names:
+            return False
+        borrow = getattr(self.connector, "table_export_connection", None)
+        if not callable(borrow):
+            return False
+        registry = deepcopy(previous)
+        try:
+            from sqlalchemy import inspect
+            with borrow() as connection:
+                inspector = inspect(connection)
+                for name in sorted(names):
+                    try:
+                        if not _temporary_exists(connection, name, self.db_type):
+                            registry.pop(name, None)
+                            continue
+                        if name in previous and name not in reflect:
+                            continue
+                        schema = "temp" if self.db_type == "sqlite" else ""
+                        columns = self._temporary_columns(connection, inspector, name, schema)
+                        registry[name] = {"schema": schema, "columns": self._column_metadata(columns)}
+                    except Exception:
+                        # An aborted transaction/permission error proves no disappearance.
+                        continue
+        except Exception:
+            return False
+        if registry == previous:
+            return False
+        self.connector._datapyn_temporary_tables = registry
+        self.connector.has_temporary_tables = bool(registry)
+        self.cache.clear()
+        self.column_cache.clear()
+        return True
+
+    def _temporary_columns(self, connection, inspector, name, schema):
+        if self.db_type != "sqlserver" or not name.startswith("#"):
+            return inspector.get_columns(name, schema=schema or None)
+        # SQLAlchemy resolves #names using LIKE across all of tempdb; another
+        # session's identically named table makes that reflection ambiguous.
+        # OBJECT_ID resolves this session's actual table and never borrows the
+        # columns (or data) of another block/user's private temporary table.
+        from sqlalchemy import text
+        from src.services.entity_metadata_service import build_display_data_type
+        rows = connection.execute(text("""
+            SELECT c.name, t.name AS data_type, c.is_nullable AS nullable,
+                   CASE WHEN t.name IN ('nvarchar', 'nchar') AND c.max_length > 0
+                        THEN c.max_length / 2 ELSE c.max_length END AS max_length,
+                   c.precision AS numeric_precision, c.scale AS numeric_scale,
+                   CASE WHEN t.name IN ('datetime2', 'datetimeoffset', 'time')
+                        THEN c.scale END AS datetime_precision, d.definition AS [default]
+            FROM tempdb.sys.columns AS c
+            JOIN tempdb.sys.types AS t ON t.user_type_id = c.user_type_id
+            LEFT JOIN tempdb.sys.default_constraints AS d
+                ON d.object_id = c.default_object_id AND d.parent_column_id = c.column_id
+            WHERE c.object_id = OBJECT_ID(:name, 'U')
+            ORDER BY c.column_id
+        """), {"name": "tempdb.." + quote("sqlserver", name)}).mappings().all()
+        if not rows:
+            raise ValueError("Temporary table metadata is unavailable")
+        return [{**dict(row), "type": build_display_data_type(row, "sqlserver")} for row in rows]
+
+    @staticmethod
+    def _column_metadata(columns):
+        return [{"name": str(item["name"]), "dtype": str(item["type"]), "type": str(item["type"]),
+                 "nullable": bool(item.get("nullable", True)),
+                 "default": str(item["default"]) if item.get("default") is not None else None} for item in columns]
+
     def _node(self, name, kind, *, schema="", database="", children=False, category=None, **fields):
         key = json.dumps([database, schema, kind, name, category], separators=(",", ":"))
         return {"id": key, "name": str(name), "kind": kind, "has_children": children,
@@ -113,15 +244,14 @@ class ObjectExplorer:
         if self.db_type == "databricks":
             frame = self.connector.execute_query(f"SHOW SCHEMAS IN {quote(self.db_type, database or self.context()['database'])}")
             return [str(value) for value in frame.iloc[:, 0].tolist() if str(value) != "information_schema"]
-        from sqlalchemy import inspect
-        return [str(value) for value in inspect(self.connector.engine).get_schema_names()
-                if str(value) not in {"information_schema", "pg_catalog", "pg_toast"} and not str(value).startswith("pg_temp")]
+        with self._inspector() as inspector:
+            return [str(value) for value in inspector.get_schema_names()
+                    if str(value) not in {"information_schema", "pg_catalog", "pg_toast"} and not str(value).startswith("pg_temp")]
 
     def objects(self, schema, category):
         if category in {"table", "view"}:
-            from sqlalchemy import inspect
-            inspector = inspect(self.connector.engine)
-            names = inspector.get_table_names(schema=schema) if category == "table" else inspector.get_view_names(schema=schema)
+            with self._inspector() as inspector:
+                names = inspector.get_table_names(schema=schema) if category == "table" else inspector.get_view_names(schema=schema)
             context = self.context()
             nodes = [self._node(name, category, schema=schema, database=context["database"], children=True) for name in sorted(names)]
             if category == "table" and schema == context["schema"]:
@@ -146,11 +276,8 @@ class ObjectExplorer:
             return deepcopy(temporary["columns"])
         key = (schema, name)
         def load():
-            from sqlalchemy import inspect
-            columns = inspect(self.connector.engine).get_columns(name, schema=schema or None)
-            return [{"name": str(item["name"]), "dtype": str(item["type"]),
-                     "type": str(item["type"]), "nullable": bool(item.get("nullable", True)),
-                     "default": str(item["default"]) if item.get("default") is not None else None} for item in columns]
+            with self._inspector() as inspector:
+                return self._column_metadata(inspector.get_columns(name, schema=schema or None))
         value = self._cached(("columns", *key), load)
         self.column_cache[key] = value
         self.column_cache.move_to_end(key)
@@ -197,14 +324,26 @@ class ObjectExplorer:
                             lambda: self._details(params, name, schema), bool(params.get("refresh")))
 
     def _details(self, params, name, schema):
+        temporary = getattr(self.connector, "_datapyn_temporary_tables", {}).get(name)
+        if temporary and params.get("kind", "table") == "table":
+            result = {"name": name, "schema": temporary["schema"], "kind": "table", "db_type": self.db_type,
+                      "columns": deepcopy(temporary["columns"]), "indexes": [], "temporary": True}
+            try:
+                with self._inspector() as inspector:
+                    result["indexes"] = inspector.get_indexes(name, schema=temporary["schema"] or None)
+                    result["primary_key"] = inspector.get_pk_constraint(name, schema=temporary["schema"] or None)
+            except Exception:
+                pass  # Keep known columns when the driver cannot reflect temp keys.
+            result.update(self.definition(name, temporary["schema"], "table", result))
+            return result
         if isinstance(self.connector, SQLiteConnector):
-            from sqlalchemy import inspect
-            inspector = inspect(self.connector.engine)
             definition = self.connector.connection.execute(f"SELECT sql FROM {quote('sqlite', schema, 'sqlite_master')} WHERE name=?", (name,)).fetchone()
-            return {"name": name, "schema": schema, "db_type": "sqlite", "columns": self.columns(name, schema),
-                    "indexes": inspector.get_indexes(name, schema=schema), "primary_key": inspector.get_pk_constraint(name, schema=schema),
-                    "foreign_keys": inspector.get_foreign_keys(name, schema=schema),
-                    "definition": definition[0] if definition else "", "kind": params.get("kind", "table")}
+            columns = self.columns(name, schema)
+            with self._inspector() as inspector:
+                return {"name": name, "schema": schema, "db_type": "sqlite", "columns": columns,
+                        "indexes": inspector.get_indexes(name, schema=schema), "primary_key": inspector.get_pk_constraint(name, schema=schema),
+                        "foreign_keys": inspector.get_foreign_keys(name, schema=schema),
+                        "definition": definition[0] if definition else "", "kind": params.get("kind", "table")}
         from src.services.entity_metadata_service import EntityMetadataService
         result = EntityMetadataService().fetch_entity_info(self.connector, quote(self.db_type, schema, name))
         result.update({"name": name, "schema": schema, "kind": params.get("kind", "table")})
@@ -213,7 +352,8 @@ class ObjectExplorer:
         return result
 
     def definition(self, name, schema, kind, metadata):
-        entity = quote(self.db_type, schema, name)
+        temporary = name in getattr(self.connector, "_datapyn_temporary_tables", {}) or self.db_type == "sqlserver" and name.startswith("#")
+        entity = quote(self.db_type, name) if temporary else quote(self.db_type, schema, name)
         query = None
         if self.db_type in {"mysql", "mariadb"}:
             query = f"SHOW CREATE {kind.upper()} {entity}"
@@ -285,7 +425,8 @@ class ObjectExplorer:
         limit = params.get("limit", 1000)
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100000:
             raise ValueError("limit must be between 1 and 100000")
-        entity = quote(self.db_type, schema, name)
+        temporary = name in getattr(self.connector, "_datapyn_temporary_tables", {}) or self.db_type == "sqlserver" and name.startswith("#")
+        entity = quote(self.db_type, name) if temporary else quote(self.db_type, schema, name)
         if params.get("kind") == "procedure":
             code = f"EXEC {entity};" if self.db_type == "sqlserver" else f"CALL {entity}();"
         elif self.db_type == "sqlserver":

@@ -319,7 +319,7 @@ def test_sqlserver_temporary_exists_uses_bound_tempdb_name_and_ddl_compiles():
     class Connection:
         def execute(self, statement, parameters):
             assert str(statement) == "SELECT OBJECT_ID(:name, 'U')"
-            assert parameters == {"name": "tempdb..##a]b"}
+            assert parameters == {"name": "tempdb..[##a]]b]"}
             return Result()
     assert _temporary_exists(Connection(), "##a]b", "sqlserver")
     ddl = str(CreateTable(Table("##a]b", MetaData(), Column("value", Integer))).compile(dialect=mssql.dialect()))

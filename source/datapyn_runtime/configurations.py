@@ -29,6 +29,7 @@ MAX_FILES = 128
 EXCLUDED = {"sessions.json", "workspace.json", "workspace_state.json", "workspace-state.json", "session_store.db",
             "session_store.db-shm", "session_store.db-wal", "profiles.json", "workspace_profiles.json", "workspaces.ini", "notificationsecrets.ini",
             "notifications.json", "snapshot_settings.json", "pynia_settings.json", "package_sources.json", "configuration_defaults.json",
+            "transaction_settings.json",
             "ssh_known_hosts.json", "ssh-known-hosts.json"}
 CATEGORIES = {"connections.json": "connections", "shortcuts.json": "shortcuts", "datapyn.ini": "preferences",
               "pyniasettings.ini": "pynia", "mainwindow.ini": "legacy_layout", "dockinglayout.ini": "legacy_layout",
@@ -60,7 +61,7 @@ def _preferences(value):
     if not isinstance(value, dict):
         raise ValueError("Preferences must be an object")
     booleans = {"wordWrap", "lineNumbers", "minimap", "autocomplete", "maximizeFirstBlock", "aiAutocomplete",
-                "leftVisible", "rightVisible", "notifications", "notificationSound"}
+                "leftVisible", "rightVisible", "notifications", "notificationSound", "automaticTransactions"}
     limits = {"uiFontSize": (8, 24), "editorFontSize": (8, 40), "gridFontSize": (7, 40), "tabSize": (1, 8),
               "connectionIdleSeconds": (0, 86400), "leftWidth": (160, 640), "rightWidth": (160, 640),
               "resultHeight": (100, 1200), "displayRowLimit": (0, 1_000_000)}
@@ -297,6 +298,9 @@ class ConfigurationTransfer:
         if not isinstance(token, str) or token != response["preview_token"]:
             raise ValueError("Inspect this configuration folder again before importing; its preview is missing or stale")
         changes = {self.archive / name: raw for name, raw in blobs.items()}
+        if "automaticTransactions" in response["preferences"]:
+            from .transaction_settings import settings_path
+            changes[settings_path()] = _json_bytes({"automatic_transactions": response["preferences"]["automaticTransactions"]})
         if notifications is not None:
             changes[self.workspace / "notifications.json"] = _json_bytes(notifications)
         if snapshots is not None:

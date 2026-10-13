@@ -19,7 +19,8 @@
     "runtime:bundle": "node ../scripts/tauri/runtime.mjs",
     "desktop:build": "node ../scripts/tauri/build.mjs",
     "postinstall": "node scripts/postinstall.mjs",
-    "test:explorer": "node scripts/test-explorer.mjs"
+    "test:explorer": "node scripts/test-explorer.mjs",
+    "test:transactions": "node scripts/test-transactions.mjs"
   },
   "dependencies": {
     "@glideapps/glide-data-grid": "6.0.3",

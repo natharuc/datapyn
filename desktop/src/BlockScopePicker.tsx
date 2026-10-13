@@ -14,6 +14,7 @@ export interface BlockScopePickerProps {
   sessionId: string;
   blockId?: string;
   scopeInherited?: boolean;
+  automaticTransactions?: boolean;
   connectionId?: string;
   dbType?: string;
   database?: string;
@@ -33,16 +34,16 @@ interface ScopePopover {
 }
 
 /** Database and schema remain visible; metadata is fetched only when the picker opens. */
-export function BlockScopePicker({ sessionId, blockId, scopeInherited, connectionId, dbType, database, schema,
+export function BlockScopePicker({ sessionId, blockId, scopeInherited, automaticTransactions, connectionId, dbType, database, schema,
   connected = true, disabled = false, refresh = 0, showSchema = hasSchemaScope(dbType), onChange, onError }: BlockScopePickerProps) {
   useLocale();
   const container = useRef<HTMLDivElement>(null);
   const selectedTrigger = useRef<HTMLButtonElement>();
   const [popover, setPopover] = useState<ScopePopover>();
   const [selecting, setSelecting] = useState(false);
-  const scope = useMemo<BlockScope>(() => ({ session_id: sessionId, block_id: blockId, ...(blockId || scopeInherited!==undefined?{scope_inherited:Boolean(scopeInherited)}:{}),connection_id: connectionId,
-    db_type: dbType, database, schema, revision: refresh }), [sessionId, blockId, scopeInherited, connectionId, dbType, database, schema, refresh]);
-  useEffect(() => { setPopover(undefined); }, [sessionId, connectionId, database, schema, disabled, connected]);
+  const scope = useMemo<BlockScope>(() => ({ session_id: sessionId, block_id: blockId, ...(blockId || scopeInherited!==undefined?{scope_inherited:Boolean(scopeInherited)}:{}), ...(automaticTransactions!==undefined?{automatic_transactions:automaticTransactions}:{}),connection_id: connectionId,
+    db_type: dbType, database, schema, revision: refresh }), [sessionId, blockId, scopeInherited, automaticTransactions, connectionId, dbType, database, schema, refresh]);
+  useEffect(() => { setPopover(undefined); }, [sessionId, connectionId, database, schema, automaticTransactions, disabled, connected]);
   useEffect(() => {
     const element = container.current;
     return element ? observeElementDocument(element, () => setPopover(undefined)) : undefined;

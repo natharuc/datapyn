@@ -586,5 +586,14 @@
   "Autenticação indisponível neste sistema": "Authentication unavailable on this system",
   "Requer domínio, KDC e SPN configurados para Kerberos.": "Requires the domain, KDC and SPN to be configured for Kerberos.",
   "NTLM/Kerberos com credenciais explícitas requerem o formato Python TDS/SPNEGO.": "NTLM/Kerberos with explicit credentials require the Python TDS/SPNEGO format.",
-  "Credenciais de rede explícitas usam Python TDS/SPNEGO. O exemplo exige uma CA válida e as dependências NTLM/Kerberos no destino.": "Explicit network credentials use Python TDS/SPNEGO. The example requires a valid CA and NTLM/Kerberos dependencies at the destination."
+  "Credenciais de rede explícitas usam Python TDS/SPNEGO. O exemplo exige uma CA válida e as dependências NTLM/Kerberos no destino.": "Explicit network credentials use Python TDS/SPNEGO. The example requires a valid CA and NTLM/Kerberos dependencies at the destination.",
+  "Transações automáticas": "Automatic transactions",
+  "Desativado: o SQL controla BEGIN, COMMIT e ROLLBACK. Alterar a opção não finaliza transações pendentes.": "Disabled: SQL controls BEGIN, COMMIT and ROLLBACK. Changing the setting does not end pending transactions.",
+  "Desativar transações automáticas neste bloco": "Disable automatic transactions in this block",
+  "Transações automáticas desativadas globalmente": "Automatic transactions disabled globally",
+  "Configuração de transações inválida.": "Invalid transaction settings.",
+  "Transação aberta": "Open transaction",
+  "Use COMMIT ou ROLLBACK neste bloco para finalizar a transação.": "Use COMMIT or ROLLBACK in this block to end the transaction.",
+  "Transação: estado desconhecido": "Transaction: unknown state",
+  "A conexão foi interrompida ou não foi possível verificar a transação.": "The connection was interrupted or the transaction could not be checked."
 }

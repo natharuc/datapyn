@@ -121,11 +121,12 @@ def tds_endpoint(database_tls_server, monkeypatch, tmp_path):
     digest.update(certificate.public_bytes(serialization.Encoding.DER))
     bindings = GssChannelBindings(application_data=b"tls-server-end-point:" + digest.finalize())
     state = {"authenticated": [], "errors": [], "routing": False, "queries": [], "packets": [], "logins": [],
-             "waiting": threading.Event(), "cancelled": 0}
+             "waiting": threading.Event(), "cancelled": 0, "transactions": [], "sql_auth": False, "sessions": []}
 
     class Handler(socketserver.BaseRequestHandler):
         def handle(self):
             self.request.settimeout(4)
+            transaction_count = 0
             try:
                 kind, _ = _read_packet(self.request)
                 assert kind == 18
@@ -134,20 +135,27 @@ def tds_endpoint(database_tls_server, monkeypatch, tmp_path):
                 stream = TdsTlsStream(self.request, context)
                 kind, login = _read_packet(stream)
                 assert kind == 16
-                # LOGIN7 integrated-security flag; SQL UID/PWD fields empty.
-                assert login[25] & 0x80
-                assert struct.unpack_from("<HHHH", login, 40) == (0, 0, 0, 0)
                 state["logins"].append(login)
-                offset, size = struct.unpack_from("<HH", login, 78)
-                auth = spnego.server(protocol="ntlm", channel_bindings=bindings,
-                                     options=NegotiateOptions.use_ntlm)
-                challenge = auth.step(login[offset:offset + size])
-                stream.sendall(_packet(4, b"\xed" + struct.pack("<H", len(challenge)) + challenge))
-                kind, response = _read_packet(stream)
-                assert kind in {16, 17}
-                auth.step(response)
-                assert auth.complete
-                state["authenticated"].append(auth.client_principal)
+                if state["sql_auth"]:
+                    assert not login[25] & 0x80
+                    user_offset, user_size, password_offset, password_size = struct.unpack_from("<HHHH", login, 40)
+                    assert login[user_offset:user_offset + user_size * 2].decode("utf-16le") == "fixture"
+                    assert password_offset and password_size  # Only isolated fixture credentials.
+                    state["authenticated"].append("fixture")
+                else:
+                    # LOGIN7 integrated-security flag; SQL UID/PWD fields empty.
+                    assert login[25] & 0x80
+                    assert struct.unpack_from("<HHHH", login, 40) == (0, 0, 0, 0)
+                    offset, size = struct.unpack_from("<HH", login, 78)
+                    auth = spnego.server(protocol="ntlm", channel_bindings=bindings,
+                                         options=NegotiateOptions.use_ntlm)
+                    challenge = auth.step(login[offset:offset + size])
+                    stream.sendall(_packet(4, b"\xed" + struct.pack("<H", len(challenge)) + challenge))
+                    kind, response = _read_packet(stream)
+                    assert kind in {16, 17}
+                    auth.step(response)
+                    assert auth.complete
+                    state["authenticated"].append(auth.client_principal)
                 db_offset, db_size = struct.unpack_from("<HH", login, 68)
                 db = login[db_offset:db_offset + db_size * 2]
                 database_environment = b""
@@ -157,17 +165,23 @@ def tds_endpoint(database_tls_server, monkeypatch, tmp_path):
                 stream.sendall(_packet(4, _login_ack() + database_environment + (_routing() if state["routing"] else b"") + _done()))
                 if state["routing"]:
                     return
+                session_state = {"cancelled": 0, "transactions": []}
+                state["sessions"].append(session_state)
                 while True:
                     kind, query = _read_packet(stream)
                     if kind == 14:
                         header_size = struct.unpack_from("<I", query)[0]
                         operation = struct.unpack_from("<H", query, header_size)[0]
+                        state["transactions"].append(operation)
+                        session_state["transactions"].append(operation)
+                        transaction_count = 1 if operation == 5 else 0
                         transaction = (b"\x08\x08" + struct.pack("<Q", 1) + b"\0" if operation == 5
                                        else bytes([9 if operation == 7 else 10, 0, 8]) + struct.pack("<Q", 1))
                         stream.sendall(_packet(4, b"\xe3" + struct.pack("<H", len(transaction)) + transaction + _done()))
                         continue
                     if kind == 6:  # Attention/cancellation response
                         state["cancelled"] += 1
+                        session_state["cancelled"] += 1
                         stream.sendall(_packet(4, b"\xfd" + struct.pack("<HHq", 0x20, 0, 0)))
                         continue
                     assert kind in {1, 3}
@@ -175,14 +189,38 @@ def tds_endpoint(database_tls_server, monkeypatch, tmp_path):
                     state["queries"].append(query[header_size:].decode("utf-16le") if kind == 1 else "SELECT parameterized RPC")
                     state["packets"].append(query)
                     def contains(word):
-                        return word.encode("utf-16le") in query
+                        return word.lower().encode("utf-16le") in query.lower()
+                    sql = query[header_size:].decode("utf-16le").strip().upper() if kind == 1 else ""
+                    if sql.startswith("BEGIN TRANSACTION"):
+                        transaction_count += 1
+                        token = b"\x08\x08" + struct.pack("<Q", 1) + b"\0"
+                        stream.sendall(_packet(4, b"\xe3" + struct.pack("<H", len(token)) + token + _done()))
+                        continue
+                    if sql.startswith("COMMIT TRANSACTION") or sql.startswith("ROLLBACK TRANSACTION"):
+                        transaction_count = 0
+                        token = bytes([9 if sql.startswith("COMMIT") else 10, 0, 8]) + struct.pack("<Q", 1)
+                        stream.sendall(_packet(4, b"\xe3" + struct.pack("<H", len(token)) + token + _done()))
+                        continue
+                    if contains("@@TRANCOUNT"):
+                        column = b"\x81\x02\x00" + (struct.pack("<IH", 0, 1) + b"\x26\x04\x01v\0") * 2
+                        row = b"\xd1\x04" + struct.pack("<i", transaction_count) + b"\x04" + struct.pack("<i", bool(transaction_count))
+                        stream.sendall(_packet(4, column + row + _done(1)))
+                        continue
+                    if contains("SELECT DB_NAME(),"):
+                        column = b"\x81\x02\x00" + (struct.pack("<IH", 0, 1) + b"\xe7\xa0\x0f\x09\x04\xd0\x00\x34\x01v\0") * 2
+                        row = b"\xd1" + b"".join(struct.pack("<H", len(value.encode("utf-16le"))) + value.encode("utf-16le")
+                                                 for value in ("sample", "dbo"))
+                        stream.sendall(_packet(4, column + row + _done(1)))
+                        continue
                     if contains("WAITFOR"):
                         state["waiting"].set()
                         continue
                     if contains("CREATE TABLE") or contains("INSERT INTO") or contains("USE ["):
                         stream.sendall(_packet(4, _done(1)))
                     else:
-                        value = ("dbo" if contains("schema_name()") or contains("SCHEMA_NAME()")
+                        value = ("16.0.1000.1" if contains("SERVERPROPERTY")
+                                 else "dm_exec_sessions" if contains("sys.system_views")
+                                 else "dbo" if contains("schema_name()") or contains("SCHEMA_NAME()")
                                  else "READ COMMITTED" if contains("transaction_isolation_level")
                                  else "test max support" if contains("test max support") else None)
                         if value is not None:
@@ -353,3 +391,140 @@ def test_real_tds_sqlalchemy_connector_batches_temp_export_and_cancel(local_ssh,
         tunnel = connector._ssh_tunnel
         connector.disconnect()
         assert not tunnel.is_alive()
+
+
+def test_real_tds_manual_transactions_survive_execution_export_and_cancel(local_ssh, trust, tds_endpoint, tmp_path):
+    """Real TDS traffic never emits wrapper transaction packets in manual mode."""
+    import pandas as pd
+    from datapyn_runtime.table_export import export_table
+    from src.database.database_connector import DatabaseConnector, OperationCancelled
+
+    local_ssh.destination_port = tds_endpoint["port"]
+    trust.confirm(local_ssh.details())
+    connector = DatabaseConnector()
+    connector.connect("sqlserver", "db.remote.invalid", tds_endpoint["port"], "sample", r"TEST\account", "network-secret",
+                      automatic_transactions=False, sqlserver_auth_mode="ntlm",
+                      ssl_ca=tds_endpoint["tls"]["certificate"], ssh=local_ssh.config(), _ssh_trust_path=str(trust.path))
+    try:
+        raw = connector.get_manual_connection()
+        assert raw.autocommit is True
+        assert len(tds_endpoint["state"]["authenticated"]) == 2  # Metadata plus retained execution.
+        connector.execute_query("USE [sample]")
+        connector.execute_query("BEGIN TRANSACTION")
+        assert connector.get_transaction_state()["transaction_count"] == 1
+        frames = connector.execute_query("SELECT 1\nGO\nSELECT 1")
+        assert len(frames) == 2
+        exported = export_table(pd.DataFrame({"value": [1, 2]}),
+                                {"table": "#manual_test", "temporary": True, "chunksize": 100}, connector)
+        assert exported["row_count"] == 2
+        assert connector.get_manual_connection() is raw
+        assert connector.get_transaction_state()["transaction_count"] == 1
+        streamed = connector.stream_query_to_files("SELECT 1", base_path=tmp_path / "results", export_format="csv")
+        assert streamed.total_rows == 1
+        with connector.engine.connect() as metadata:
+            assert metadata.exec_driver_sql("SELECT 1").scalar() == 1
+        assert connector.get_transaction_state()["transaction_count"] == 1
+        manual_session = tds_endpoint["state"]["sessions"][1]
+        assert manual_session["cancelled"] == 0
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            executing = executor.submit(connector.execute_query, "WAITFOR DELAY '00:00:20'")
+            assert tds_endpoint["state"]["waiting"].wait(2)
+            # The server can observe the final packet just before the client
+            # releases its writer. This case tests cancellation while reading;
+            # the distinct writer-busy case below tests transport abandonment.
+            writer = raw._tds_socket.main_session._writer
+            assert writer._lock.acquire(timeout=1)
+            try:
+                connector.cancel_query()
+            finally:
+                writer._lock.release()
+            with pytest.raises(OperationCancelled):
+                executing.result(timeout=2)
+        state = connector.get_transaction_state()
+        assert state.get("transaction_count") == 1, {"state": state,
+            "transport_aborted": getattr(raw._tds_socket, "_datapyn_aborted", False),
+            "session_state": raw._tds_socket.main_session.state,
+            "cancelled": tds_endpoint["state"]["cancelled"]}
+        assert manual_session["cancelled"] == 1
+        connector.execute_query("ROLLBACK TRANSACTION")
+        assert connector.get_transaction_state()["pending"] is False
+        assert tds_endpoint["state"]["transactions"] == []
+        assert not tds_endpoint["state"]["errors"]
+    finally:
+        connector.disconnect()
+
+
+def test_real_tds_cancel_during_busy_writer_preserves_unknown_manual_state(local_ssh, trust, tds_endpoint, monkeypatch):
+    """A deliberately busy writer abandons transport and cannot claim idle."""
+    from src.database.database_connector import DatabaseConnector, OperationCancelled
+
+    local_ssh.destination_port = tds_endpoint["port"]
+    trust.confirm(local_ssh.details())
+    connector = DatabaseConnector()
+    connector.connect("sqlserver", "db.remote.invalid", tds_endpoint["port"], "sample", r"TEST\account", "network-secret",
+                      automatic_transactions=False, sqlserver_auth_mode="ntlm", ssl_ca=tds_endpoint["tls"]["certificate"],
+                      ssh=local_ssh.config(), _ssh_trust_path=str(trust.path))
+    try:
+        connector.execute_query("BEGIN TRANSACTION")
+        raw = connector._manual_raw_conn
+        writer = raw._tds_socket.main_session._writer
+        sent, release = threading.Event(), threading.Event()
+        original_flush = writer._writer.flush
+        def busy_flush():
+            original_flush()
+            sent.set()
+            assert release.wait(2)
+        monkeypatch.setattr(writer._writer, "flush", busy_flush)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            executing = executor.submit(connector.execute_query, "WAITFOR DELAY '00:00:20'")
+            assert sent.wait(1)
+            try:
+                assert tds_endpoint["state"]["waiting"].wait(1)
+                connector.cancel_query()
+                assert raw._tds_socket._datapyn_aborted is True
+            finally:
+                release.set()
+            with pytest.raises(OperationCancelled):
+                executing.result(timeout=2)
+        assert connector.get_transaction_state() == {"automatic_transactions": False, "pending": None, "state": "unknown"}
+        assert connector.has_pending_transaction()
+        with pytest.raises(ConnectionError, match="interrompida"):
+            connector.execute_query("SELECT 1")
+        assert tds_endpoint["state"]["sessions"][1]["cancelled"] == 0
+        assert tds_endpoint["state"]["transactions"] == []
+    finally:
+        connector.disconnect()
+
+
+def test_real_odbc_manual_mode_does_not_send_transaction_finalization(tds_endpoint):
+    """Exercise the installed ODBC driver against loopback, never SQL Server."""
+    import pyodbc
+    from src.database.database_connector import DatabaseConnector, OperationCancelled
+
+    driver = "ODBC Driver 18 for SQL Server"
+    if driver not in pyodbc.drivers():
+        pytest.skip("ODBC Driver 18 is not installed in this test environment")
+    tds_endpoint["state"]["sql_auth"] = True
+    connector = DatabaseConnector()
+    try:
+        connector.connect("sqlserver", "127.0.0.1", tds_endpoint["port"], "sample", "fixture", "fixture-secret",
+                          driver=driver, trust_server_certificate=True, encrypt=True, automatic_transactions=False)
+        raw = connector.get_manual_connection()
+        assert raw.autocommit is True
+        connector.execute_query("BEGIN TRANSACTION")
+        assert connector.get_transaction_state()["transaction_count"] == 1
+        assert connector.execute_query("SELECT 1").iloc[0, 0] == 1
+        assert connector.get_transaction_state()["transaction_count"] == 1
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            executing = executor.submit(connector.execute_query, "WAITFOR DELAY '00:00:20'")
+            assert tds_endpoint["state"]["waiting"].wait(2)
+            connector.cancel_query()
+            with pytest.raises(OperationCancelled):
+                executing.result(timeout=2)
+        assert connector.get_transaction_state()["transaction_count"] == 1
+        connector.execute_query("COMMIT TRANSACTION")
+        assert connector.get_transaction_state()["pending"] is False
+        assert tds_endpoint["state"]["transactions"] == []
+        assert not tds_endpoint["state"]["errors"]
+    finally:
+        connector.disconnect()

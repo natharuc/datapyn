@@ -6,6 +6,7 @@ export interface BlockScope extends ExplorerContext {
   session_id: string;
   block_id?: string;
   scope_inherited?: boolean;
+  automatic_transactions?: boolean;
   connection_id?: string;
   db_type?: string;
   revision?: number;
@@ -59,7 +60,7 @@ export class ScopeOptionsClient {
   clear() { ++this.epoch; this.cache.clear(); this.pending.clear(); this.revisions.clear(); }
 
   async list(scope: BlockScope, field: ScopeField, refresh = false): Promise<ScopeOptions> {
-    const key = JSON.stringify([scope.session_id, scope.block_id ?? "", Boolean(scope.scope_inherited),scope.connection_id ?? "", scope.db_type ?? "", scope.database ?? "", scope.schema ?? "", scope.revision ?? 0, field]);
+    const key = JSON.stringify([scope.session_id, scope.block_id ?? "", Boolean(scope.scope_inherited),scope.automatic_transactions !== false,scope.connection_id ?? "", scope.db_type ?? "", scope.database ?? "", scope.schema ?? "", scope.revision ?? 0, field]);
     const cached = this.cache.get(key);
     if (!refresh && cached && cached.expires > this.now()) {
       this.cache.delete(key); this.cache.set(key, cached); return cached.value;
@@ -76,6 +77,7 @@ export class ScopeOptionsClient {
     const params = {
       session_id: scope.session_id, ...(scope.block_id ? {block_id:scope.block_id} : {}), connection_id: scope.connection_id,
       ...(scope.block_id || scope.scope_inherited!==undefined?{scope_inherited:Boolean(scope.scope_inherited)}:{}),
+      ...(scope.automatic_transactions!==undefined?{automatic_transactions:scope.automatic_transactions}:{}),
       database: scope.database, ...(field === "database" ? { schema: scope.schema } : {}), node, refresh,
     };
     const request = this.transport.request<ExplorerResult>("explorer.list", params).then(result => {

@@ -195,6 +195,9 @@ def pin_connection(connector):
     """
     from sqlalchemy import create_engine
     from sqlalchemy.pool import StaticPool
+    if getattr(connector, "automatic_transactions", True) is False:
+        # Manual exports borrow the retained session; metadata stays separate.
+        return
     engine = connector.engine
     if not isinstance(engine.pool, StaticPool):
         factory = engine.pool._creator
@@ -218,7 +221,7 @@ def _temporary_exists(connection, name, dialect):
     if dialect == "sqlite":
         return connection.execute(text("SELECT 1 FROM sqlite_temp_master WHERE type='table' AND name=:name"), {"name": name}).first() is not None
     if dialect in {"sqlserver", "mssql"}:
-        return connection.execute(text("SELECT OBJECT_ID(:name, 'U')"), {"name": "tempdb.." + name}).scalar() is not None
+        return connection.execute(text("SELECT OBJECT_ID(:name, 'U')"), {"name": "tempdb.." + identifier(name, dialect)}).scalar() is not None
     if dialect in {"postgres", "postgresql"}:
         return connection.execute(text("SELECT to_regclass(:name)"), {"name": 'pg_temp.' + identifier(name, dialect)}).scalar() is not None
     if dialect in {"mysql", "mariadb"}:
@@ -247,7 +250,9 @@ def refresh_temporary_tables(connector):
         return
     try:
         dialect = connector.db_type
-        with connector.engine.connect() as connection:
+        borrow = getattr(connector, "table_export_connection", None)
+        context = borrow() if getattr(connector, "automatic_transactions", True) is False and callable(borrow) else connector.engine.connect()
+        with context as connection:
             if dialect == "databricks":
                 existing = {str(row.get("tableName", "")).casefold() for row in connection.exec_driver_sql("SHOW TABLES").mappings()
                             if str(row.get("isTemporary", "")).lower() == "true"}
@@ -336,7 +341,9 @@ def export_table(frame, params, connector, progress=None, cancelled=None):
         return len(rows)
     from contextlib import nullcontext
     cancel_scope = _databricks_cancel_scope(connector.engine, control) if dialect == "databricks" else nullcontext()
-    with cancel_scope, connector.engine.begin() as connection:
+    borrow = getattr(connector, "table_export_connection", None)
+    connection_scope = borrow() if callable(borrow) else connector.engine.begin()
+    with cancel_scope, connection_scope as connection:
         if not temporary:
             frame.to_sql(name, connection, schema=schema, if_exists=mode, index=False,
                          chunksize=chunksize, method=insert_batch, dtype=dtype or None)

@@ -13,6 +13,7 @@ export interface Variable { name: string; type: string; preview: string }
 export interface LanguageContextUpdate {
   session_id: string; block_id?: string; connection_id?: string; database?: string; schema?: string; version: number;
   scope_inherited?: boolean;
+  automatic_transactions?: boolean;
   variables: Record<string, {type: string; module?: string; columns?: string[]}>;
   metadata_invalidated?: boolean;
   metadata_invalidation_scope?: "connection" | "block";
@@ -38,9 +39,18 @@ export interface ExecutionContextChange {
   connection_id?: string | null;
   requested_scope: { connection_id?: string | null; database?: string | null; schema?: string | null };
 }
+export interface TransactionState {
+  automatic_transactions: boolean;
+  pending: boolean | null;
+  state: "idle" | "active" | "failed" | "unknown" | "unsupported";
+  transaction_count?: number;
+  xact_state?: number;
+}
 export interface ExecutionFinished {
   session_id: string; execution_id: string; block_id?: string; status: "succeeded" | "failed" | "cancelled";
   scope_inherited?: boolean;
+  automatic_transactions?: boolean;
+  transaction_state?: TransactionState;
   duration_ms: number; error?: string; results: ResultRef[]; variables: Variable[];
   rich_outputs?: RichOutput[];
   command_results?: SqlCommandResult[];
@@ -75,7 +85,8 @@ export function isRuntimeEvent(value: unknown): value is RuntimeEvent {
   if (event === "notifications.delivery_finished") return typeof payload.execution_id === "string" && Boolean(payload.deliveries && typeof payload.deliveries === "object");
   if (event === "namespace.changed") return Array.isArray(payload.variables) && Array.isArray(payload.results);
   if (event === "language.context_updated") return typeof payload.version === "number" && Number.isFinite(payload.version)
-    && Boolean(payload.variables && typeof payload.variables === "object" && !Array.isArray(payload.variables));
+    && Boolean(payload.variables && typeof payload.variables === "object" && !Array.isArray(payload.variables))
+    && (payload.automatic_transactions === undefined || typeof payload.automatic_transactions === "boolean");
   if (event === "result.export_progress") return typeof payload.operation_id === "string" && Boolean(payload.operation_id)
     && ["preparing", "writing", "completed", "cancelled"].includes(String(payload.phase))
     && typeof payload.current === "number" && Number.isFinite(payload.current) && payload.current >= 0
@@ -88,7 +99,15 @@ export function isRuntimeEvent(value: unknown): value is RuntimeEvent {
   if (event === "execution.started") return true;
   if (event === "execution.output") return typeof payload.stream === "string" && typeof payload.text === "string";
   if (event === "execution.export_progress") return typeof payload.path === "string" && typeof payload.rows === "number";
-  return event === "execution.finished" && ["succeeded", "failed", "cancelled"].includes(String(payload.status));
+  if (event !== "execution.finished" || !["succeeded", "failed", "cancelled"].includes(String(payload.status))) return false;
+  if (payload.automatic_transactions !== undefined && typeof payload.automatic_transactions !== "boolean") return false;
+  if (payload.transaction_state !== undefined) {
+    const state=payload.transaction_state as Partial<TransactionState> | null;
+    if (!state || typeof state.automatic_transactions !== "boolean"
+      || (typeof state.pending !== "boolean" && state.pending !== null)
+      || !["idle", "active", "failed", "unknown", "unsupported"].includes(String(state.state))) return false;
+  }
+  return true;
 }
 
 export interface RuntimeTransport {

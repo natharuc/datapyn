@@ -9,6 +9,44 @@ const update=(version:number,connection="a",database="db",schema="public",tables
   schema_snapshot:{db_type:"postgresql",tables:tables.map(name=>({key:`${schema}.${name}`,name,schema})),columns:{[`${schema}.${tables[0]}`]:[{name:"Id",data_type:"integer"}]}}}});
 
 describe("language metadata delivery",()=>{
+  it("keeps temporary suggestions tied to their physical mode despite late manual replies",()=>{
+    const contexts=new SessionLanguageContexts(),session=newSession();session.id="s";session.savedConnectionId="a";session.database="db";session.schema="public";
+    const block=session.blocks[0],peer=newBlock("sql");session.blocks.push(peer);
+    const publish=(version:number,automatic_transactions:boolean,names:string[],block_id=block.id)=>contexts.accept({event:"language.context_updated",payload:{session_id:"s",connection_id:"a",database:"db",schema:"public",block_id,scope_inherited:true,automatic_transactions,version,
+      variables:{df:{type:"DataFrame",module:"pandas.core.frame",columns:["value"]}},requested_scope:{connection_id:"a",database:"db",schema:"public"},
+      schema_snapshot:{db_type:"sqlserver",tables:names.map(name=>({key:name,name,temporary:name.startsWith("#"),schema:""})),columns:{"#private":[{name:"OwnColumn"}]}}}});
+    publish(1,false,["#private"]);
+    const index=new SessionCompletionIndex();
+    expect(index.context(session,block.id,contexts,undefined,false)?.tables).toEqual(["#private"]);
+    expect(index.context(session,block.id,contexts,undefined,true)?.tables).toEqual([]);
+    publish(2,true,["regular"]);
+    publish(3,false,["#private"]); // A request queued before the toggle arrives last.
+    expect(index.context(session,block.id,contexts,undefined,true)?.tables).toEqual(["regular"]);
+    expect(index.context(session,block.id,contexts,undefined,false)?.tables).toEqual(["#private"]);
+    expect(index.context(session,peer.id,contexts,undefined,false)?.tables).toEqual([]);
+    expect(index.context(session,block.id,contexts,undefined,true)?.variables).toContainEqual(expect.objectContaining({name:"df",columns:["value"]}));
+    expect(contexts.invalidate("s","a","db","public",block.id,true,false)).toBe(true);
+    expect(index.context(session,block.id,contexts,undefined,false)?.tables).toEqual([]);
+    expect(index.context(session,block.id,contexts,undefined,true)?.tables).toEqual(["regular"]);
+  });
+  it("never aliases unresolved defaults or namespace-only events across physical modes",()=>{
+    const contexts=new SessionLanguageContexts();
+    contexts.accept({event:"language.context_updated",payload:{session_id:"s",connection_id:"a",database:"db",schema:"public",automatic_transactions:false,version:1,variables:{df:{type:"DataFrame"}},schema_snapshot:{tables:[{name:"#private",key:"#private",temporary:true}]}}});
+    expect(contexts.get("s","a",undefined,undefined,undefined,false,false)?.tables).toEqual(["#private"]);
+    expect(contexts.get("s","a")?.tables).toBeUndefined();
+    contexts.accept({event:"language.context_updated",payload:{session_id:"s",connection_id:"a",version:2,variables:{df:{type:"DataFrame"}}}});
+    expect(contexts.get("s","a")?.tables).toEqual([]);
+    expect(contexts.get("s","a",undefined,undefined,undefined,false,false)?.tables).toEqual(["#private"]);
+  });
+  it("physical block invalidation clears both modes and preserves peers and Python variables",()=>{
+    const contexts=new SessionLanguageContexts();
+    for(const [index,[block_id,automatic_transactions]] of ([["block",true],["block",false],["peer",false]] as const).entries())contexts.accept({event:"language.context_updated",payload:{session_id:"s",connection_id:"a",database:"db",schema:"public",block_id,automatic_transactions,version:index+1,variables:{df:{type:"DataFrame"}},schema_snapshot:{tables:[{name:"private",key:"private"}]}}});
+    contexts.accept({event:"language.context_updated",payload:{session_id:"s",connection_id:"a",database:"db",schema:"public",block_id:"block",automatic_transactions:false,version:4,variables:{df:{type:"DataFrame"}},metadata_invalidated:true,metadata_invalidation_scope:"block"}});
+    expect(contexts.get("s","a","db","public","block",false,true)?.tables).toBeUndefined();
+    expect(contexts.get("s","a","db","public","block",false,false)?.tables).toEqual([]);
+    expect(contexts.get("s","a","db","public","peer",false,false)?.tables).toEqual(["private"]);
+    expect(contexts.get("s","a","db","public","block",false,true)?.variables).toHaveProperty("df");
+  });
   it("preserves the physical default schema independently from the focused SQL Server schema",()=>{
     const contexts=new SessionLanguageContexts();
     contexts.accept({event:"language.context_updated",payload:{session_id:"s",connection_id:"esim",database:"ESIM",schema:"sales",version:1,variables:{},

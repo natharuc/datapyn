@@ -24,6 +24,7 @@ from .desktop_services import DesktopServices
 from .pynia import PyniaService
 from . import profiles
 from .sql_commands import command_result, command_results
+from .transaction_settings import editor_context_key
 
 MAX_SESSIONS = 16
 MAX_QUEUED_JOBS = 64
@@ -354,6 +355,8 @@ class SessionRuntime:
                                       or old_context.get("block_id") == context.get("block_id")
                                       or (context.get("scope_inherited") is True
                                           and old_context.get("scope_inherited") is True))
+                        if context.get("metadata_invalidation_scope") == "block":
+                            same_owner = same_owner and (old_context.get("automatic_transactions", True) == context.get("automatic_transactions", True))
                         if same_connection and same_owner:
                             old_context["schema"] = {}
                             old_context["schema_complete"] = False
@@ -372,6 +375,8 @@ class SessionRuntime:
                     "session_id": self.session_id, "connection_id": merged.get("connection_id"),
                     "database": merged.get("database", ""), "schema": merged.get("schema_name", ""),
                     "version": self.language_version, "variables": self.language_variables,
+                    **({"automatic_transactions": context["automatic_transactions"]}
+                       if isinstance(context.get("automatic_transactions"), bool) else {}),
                     **({"block_id": context["block_id"]} if context.get("block_id") else {}),
                     **({"scope_inherited": True} if context.get("scope_inherited") is True else {}),
                     **({"schema_snapshot": context["schema"]} if "schema" in context else {}),
@@ -483,12 +488,7 @@ class SessionRuntime:
 
     @staticmethod
     def context_key(params):
-        key = "|".join(str(params.get(name) or "") for name in ("connection_id", "database", "schema")) or "default"
-        if params.get("block_id"):
-            key += "|block:" + str(params["block_id"])
-        if params.get("scope_inherited") is True:
-            key += "|scope:inherited"
-        return key
+        return editor_context_key(params)
 
     def editor_context(self, params, *, refresh=True, force=False):
         with self._lock:
@@ -723,8 +723,15 @@ class Supervisor:
                 executor.shutdown(wait=False, cancel_futures=True)
             self.emit(response)
 
-    def _route(self, params):
+    def _route(self, params, *, capture_transaction_policy=True):
         routed = dict(params)
+        if capture_transaction_policy:
+            routed.pop("_execution_scope_id", None)
+            routed.pop("_metadata_scope", None)
+            from .transaction_settings import settings_path, validate_execution_options, effective_automatic_transactions
+            validate_execution_options(routed)
+            routed["_transaction_settings_path"] = str(settings_path())
+            routed["_automatic_transactions_snapshot"] = effective_automatic_transactions(routed)
         identifier = routed.get("connection_id")
         credential_identifier = routed.pop("credential_connection_id", None)
         if credential_identifier is not None:
@@ -857,6 +864,9 @@ class Supervisor:
                     "executions": executions, "packages": packages, "pynia": pynia, "background": background}
         if method.startswith("connections.") or method.startswith("groups."):
             return self.catalog.dispatch(method, params)
+        if method in {"transactions.settings.get", "transactions.settings.set"}:
+            from .transaction_settings import settings_get, settings_set
+            return settings_get() if method.endswith(".get") else settings_set(params)
         if method in {"ssh.tunnels.list", "ssh.tunnels.save", "ssh.tunnels.delete"}:
             return self.catalog.dispatch(method, params)
         if method == "ssh.tunnels.test":
@@ -981,7 +991,7 @@ class Supervisor:
                     "A validação foi pausada: o bloco ultrapassa o limite de 1 MiB."
                     if params.get("locale") == "pt-BR" else
                     "Validation paused: this block exceeds the 1 MiB limit.")}
-            routed = self._route(params)
+            routed = self._route(params, capture_transaction_policy=False)
             context = self._session(params).editor_context(routed, refresh=False) if params.get("session_id") else {}
             self.background.submit(request_id, method, routed, context)
             return None

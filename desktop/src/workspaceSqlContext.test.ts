@@ -100,4 +100,10 @@ describe("SQL commands update the executed block context",()=>{
     const refresh=prepareExecutionContextAfterEvent({session_id:current.id,execution_id:"old",block_id:block.id,status:"succeeded",duration_ms:1,results:[],variables:[],context_change:change()},()=>current,preparation);
     current={...current,database:"manually_selected",schema:"other"};await refresh;expect(request).not.toHaveBeenCalled();
   });
+  it.each([[false,false],[true,true],[true,false]] as const)("refreshes the selected transaction policy after USE: global=%s block disabled=%s",async(globalEnabled,blockDisabled)=>{
+    const current=session(),block=current.blocks[0],request=vi.fn(async()=>({status:"ready",context_version:1})),preparation=new ScopePreparation({request:request as RuntimeTransport["request"]});
+    current.database="new_catalog";current.schema="new_schema";block.disable_automatic_transactions=blockDisabled;
+    await prepareExecutionContextAfterEvent({session_id:current.id,execution_id:"use",block_id:block.id,status:"succeeded",duration_ms:1,results:[],variables:[],context_change:change()},()=>current,preparation,globalEnabled);
+    expect(request).toHaveBeenCalledExactlyOnceWith("language.prepare",expect.objectContaining({block_id:block.id,automatic_transactions:globalEnabled && !blockDisabled,database:"new_catalog",schema:"new_schema"}));
+  });
 });

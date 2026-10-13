@@ -3,7 +3,8 @@ export interface ExplorerContext { database?: string; schema?: string }
 export interface ExplorerNode extends ExplorerContext { id: string; name: string; kind: string; has_children: boolean; qualified_name?: string; data_type?: string; nullable?: boolean; [key: string]: unknown }
 export interface ExplorerResult { nodes: ExplorerNode[]; context?: ExplorerContext }
 export interface ExplorerDetails { columns?: Array<Record<string, unknown>>; indexes?: Array<Record<string, unknown>>; keys?: Array<Record<string, unknown>>; definition?: string; [key: string]: unknown }
-export interface ExplorerScope extends ExplorerContext { session_id: string; block_id?: string; scope_inherited?: boolean; connection_id?: string }
+export interface ExplorerScope extends ExplorerContext { session_id: string; block_id?: string; scope_inherited?: boolean; connection_id?: string; automatic_transactions?: boolean }
+const explorerScopeKey=(scope:ExplorerScope)=>JSON.stringify([scope.session_id,scope.block_id ?? "",Boolean(scope.scope_inherited),scope.connection_id ?? "",scope.database ?? "",scope.schema ?? "",scope.automatic_transactions !== false]);
 
 export class ExplorerController {
   private generation = 0;
@@ -12,7 +13,8 @@ export class ExplorerController {
   private pending = new Map<string, Promise<ExplorerNode[]>>();
   constructor(private transport: RuntimeTransport = runtime) {}
   setScope(scope: ExplorerScope) {
-    if (JSON.stringify(this.scope) !== JSON.stringify(scope)) { this.scope = scope; this.clear(); }
+    const changed=!this.scope || explorerScopeKey(this.scope)!==explorerScopeKey(scope);
+    this.scope=scope;if(changed)this.clear();
   }
   clear() { ++this.generation; this.cache.clear(); this.pending.clear(); }
   async list(node?: ExplorerNode, refresh = false): Promise<ExplorerNode[]> {

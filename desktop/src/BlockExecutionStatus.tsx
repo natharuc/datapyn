@@ -44,6 +44,8 @@ export const BlockExecutionStatus=memo(function BlockExecutionStatus({block}:{bl
   return <span className={`block-status ${block.status}`} title={t(labels[block.status])} aria-label={t(labels[block.status])}>
     {active && <LoaderCircle size={12} className="spin" aria-hidden="true"/>}
     {block.status!=="succeeded" && <span className="block-status-label">{t(labels[block.status])}</span>}
+    {!active && block.transactionState?.pending === true && <span className="block-transaction-state" title={t("Use COMMIT ou ROLLBACK neste bloco para finalizar a transação.")}>{t("Transação aberta")}</span>}
+    {!active && block.transactionState?.pending === null && <span className="block-transaction-state" title={t("A conexão foi interrompida ou não foi possível verificar a transação.")}>{t("Transação: estado desconhecido")}</span>}
     {duration!==undefined && <time className="block-elapsed" aria-label={t("Tempo de execução")}>{formatExecutionTime(duration)}</time>}
   </span>;
 });

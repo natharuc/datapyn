@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { InlineRequestGate, LanguageRequestGate, languageParams, mergeCompletions, type LanguageCompletion } from "./editorLanguage";
 import type { RuntimeTransport } from "./runtime";
 describe("editor language requests", () => {
+  it.each([true,false])("routes the effective transaction mode %s while keeping legacy context optional",automaticTransactions=>{
+    expect(languageParams({variables:[],tables:[],sessionId:"s",blockId:"block",automaticTransactions},{language:"sql",code:"SELECT * FROM #temp"})).toMatchObject({automatic_transactions:automaticTransactions});
+    expect(languageParams({variables:[],tables:[]},{language:"sql",code:"SELECT 1"})).not.toHaveProperty("automatic_transactions");
+  });
   it.each([true,false])("sends explicit modern connector inheritance %s while legacy context remains optional",scopeInherited=>{
     expect(languageParams({variables:[],tables:[],sessionId:"s",blockId:"block",scopeInherited},{language:"sql",code:"SELECT 1"})).toMatchObject({block_id:"block",scope_inherited:scopeInherited});
     expect(languageParams({variables:[],tables:[],sessionId:"s"},{language:"sql",code:"SELECT 1"})).not.toHaveProperty("scope_inherited");
