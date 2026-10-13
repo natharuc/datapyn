@@ -63,7 +63,8 @@ describe("Dockview floating pointer compatibility", () => {
     const esm = join(root, packagePath, DOCKVIEW_PATCH_TARGETS[0]), original = readFileSync(esm);
     writeFileSync(join(root, packagePath, DOCKVIEW_PATCH_TARGETS[1]), "unknown upstream code\n");
     expect(() => patchDockview(root)).toThrow("unexpected installed content");
-    expect(readFileSync(esm)).toEqual(original);
+    // Keep exact byte equality without a deep assertion over the full bundle.
+    expect(readFileSync(esm).equals(original)).toBe(true);
   }));
 
   it("fails closed on a dependency upgrade, changed exports, or changed patch definition", () => fixture(root => {
