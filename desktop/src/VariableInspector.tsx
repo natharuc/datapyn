@@ -9,7 +9,7 @@ import { ResultGrid } from "./ResultGrid";
 import "./dataActions.css";
 
 interface Inspection {name: string; type: string; preview: string; result?: ResultRef; offset: number; total_entries: number; entries: Array<{key: string; type: string; value: string}>}
-export interface VariableInspectorProps extends Pick<DataActionsProps,"connectionType"|"availableConnections"|"currentConnectionId"|"currentDatabase"|"currentSchema"|"onInsertSql"|"onTableExported"|"initialExportSettings"|"onExportSettingsChange"> {sessionId: string; variables: Variable[]; disabled?: boolean; onResult: (result: ResultRef) => void; onVariables: (variables: Variable[]) => void; onInsert?: (name: string) => void}
+export interface VariableInspectorProps extends Pick<DataActionsProps,"transactionScope"|"connectionType"|"availableConnections"|"currentConnectionId"|"currentDatabase"|"currentSchema"|"onInsertSql"|"onTableExported"|"initialExportSettings"|"onExportSettingsChange"> {sessionId: string; variables: Variable[]; disabled?: boolean; onResult: (result: ResultRef) => void; onVariables: (variables: Variable[]) => void; onInsert?: (name: string) => void}
 export function VariableInspector({sessionId, variables, disabled, onResult, onVariables, onInsert, ...exportProps}: VariableInspectorProps) {
   useLocale();
   const [view,setView]=useState<DataView>();

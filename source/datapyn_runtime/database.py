@@ -7,24 +7,56 @@ from pathlib import Path
 import sqlite3
 from collections import OrderedDict
 from copy import deepcopy
+from contextlib import contextmanager
 import hashlib
 import json
 import time
 
 
+class PendingTransactionError(ConnectionError):
+    code = "transaction_pending"
+
+    def __init__(self):
+        super().__init__("Há uma transação pendente neste bloco. Mantenha transações automáticas desativadas e execute COMMIT ou ROLLBACK antes de trocar o modo/conexão.")
+
+
+def pending_transaction(connector):
+    """Uncertain manual sessions are retained, never assumed safe to discard."""
+    check = getattr(connector, "has_pending_transaction", None)
+    if callable(check):
+        try:
+            return bool(check())
+        except Exception:
+            return True
+    return getattr(connector, "automatic_transactions", True) is False
+
+
 class SQLiteConnector:
     """Small offline connector for the migration pilot and deterministic tests."""
 
-    def __init__(self, database: str):
+    def __init__(self, database: str, automatic_transactions=True, memory_location=None):
         import sqlalchemy
         from sqlalchemy.pool import StaticPool
 
+        if not isinstance(automatic_transactions, bool):
+            raise ValueError("automatic_transactions must be a boolean")
+        self.automatic_transactions = automatic_transactions
         self.database = database
-        self.connection = sqlite3.connect(database)
+        if database == ":memory:" and (memory_location or not automatic_transactions):
+            import uuid
+            location = memory_location or f"file:datapyn-{uuid.uuid4().hex}?mode=memory&cache=shared"
+            factory = lambda: sqlite3.connect(location, uri=True, isolation_level="" if automatic_transactions else None)
+        else:
+            factory = lambda: sqlite3.connect(database, isolation_level="" if automatic_transactions else None)
+        self.connection = factory()
         # A real SQLAlchemy engine keeps pd.read_sql(..., db_engine) compatible.
         self.engine = sqlalchemy.create_engine(
-            "sqlite://", creator=lambda: self.connection, poolclass=StaticPool
+            "sqlite://", creator=(lambda: self.connection) if automatic_transactions else factory, poolclass=StaticPool
         )
+        # Internal borrowed connections need an initialized dialect, just like
+        # the production driver's metadata engine. This precedes user SQL.
+        with self.engine.connect():
+            pass
         self.db_type = "sqlite"
         self.connection_params = {"database": database, "host": "", "port": 0, "username": ""}
         self._last_command_results = []
@@ -46,12 +78,35 @@ class SQLiteConnector:
                 # Feedback observers cannot change the query transaction.
                 pass
 
-    def execute_query(self, query: str, parameters=None):
+    def get_transaction_state(self):
+        pending = self.connection.in_transaction
+        return {"automatic_transactions": self.automatic_transactions, "pending": pending,
+                "state": "active" if pending else "idle"}
+
+    def has_pending_transaction(self):
+        return self.connection.in_transaction
+
+    @contextmanager
+    def table_export_connection(self):
+        if self.automatic_transactions:
+            with self.engine.begin() as connection:
+                yield connection
+        else:
+            from src.database.transaction_scope import borrowed_sqlalchemy_connection
+            with borrowed_sqlalchemy_connection(self.engine, self.connection) as connection:
+                yield connection
+
+    def execute_query(self, query: str, parameters=None, *, automatic_transactions=None):
         import pandas as pd
         from .sql_commands import command_label
         from .sql_context import sql_code_mask
 
         self._last_command_results = []
+        if automatic_transactions is not None:
+            if not isinstance(automatic_transactions, bool):
+                raise ValueError("automatic_transactions must be a boolean")
+            if automatic_transactions != self.automatic_transactions:
+                raise ValueError("The execution transaction mode differs from its connection")
 
         if isinstance(parameters, list):
             from src.utils.sql_parameter_service import prepare_generic_sql
@@ -81,9 +136,11 @@ class SQLiteConnector:
                         self._record_command_result(statement, statement_index, cursor.rowcount)
                 finally:
                     cursor.close()
-            self.connection.commit()
+            if self.automatic_transactions:
+                self.connection.commit()
         except BaseException:
-            self.connection.rollback()
+            if self.automatic_transactions:
+                self.connection.rollback()
             raise
         if not results:
             frame = pd.DataFrame({"Result": ["Command(s) executed successfully."]})
@@ -95,16 +152,20 @@ class SQLiteConnector:
 
     def schema(self):
         tables = []
-        for name, kind in self.connection.execute(
-            "SELECT name, type FROM sqlite_master WHERE type IN ('table','view') ORDER BY name LIMIT 1000"
-        ):
-            escaped = name.replace('"', '""')
-            columns = [
-                {"name": row[1], "dtype": row[2] or "unknown", "nullable": not bool(row[3])}
-                for row in self.connection.execute(f'PRAGMA table_info("{escaped}")')
-            ]
-            tables.append({"name": name, "schema": "main", "kind": kind, "columns": columns})
-        return {"db_type": "sqlite", "database": self.database, "schemas": ["main"], "tables": tables}
+        namespaces = [("main", "sqlite_master")]
+        if not self.automatic_transactions:
+            namespaces.append(("temp", "sqlite_temp_master"))
+        for schema_name, catalog in namespaces:
+            for name, kind in self.connection.execute(
+                f"SELECT name, type FROM {catalog} WHERE type IN ('table','view') ORDER BY name LIMIT 1000"
+            ):
+                escaped = name.replace('"', '""')
+                columns = [
+                    {"name": row[1], "dtype": row[2] or "unknown", "nullable": not bool(row[3])}
+                    for row in self.connection.execute(f'PRAGMA {schema_name}.table_info("{escaped}")')
+                ]
+                tables.append({"name": name, "schema": schema_name, "kind": kind, "columns": columns})
+        return {"db_type": "sqlite", "database": self.database, "schemas": [name for name, _ in namespaces], "tables": tables}
 
     def disconnect(self):
         self.engine.dispose()
@@ -136,7 +197,8 @@ def connect(config: dict):
         if (config.get("ssh") or {}).get("enabled"):
             from .ssh_tunnel import SshTunnelError
             raise SshTunnelError("SQLite cannot use an SSH tunnel", code="ssh_database_unsupported")
-        return SQLiteConnector(str(config.get("database") or ":memory:"))
+        return SQLiteConnector(str(config.get("database") or ":memory:"), config.get("automatic_transactions", True),
+                               config.get("_sqlite_memory_location"))
 
     from src.database.database_connector import DatabaseConnector
 
@@ -146,6 +208,7 @@ def connect(config: dict):
     options = dict(config)
     for key in ("db_type", "host", "port", "database", "username", "password", "workspace_path", "name", "group", "color", "created_at", "last_used", "favorite", "order", "save_password", "databricks_auth_mode"):
         options.pop(key, None)
+    options.pop("_execution_scope_id", None)
     try:
         connected = connector.connect(
             db_type=db_type,
@@ -177,24 +240,31 @@ def schema(connector):
         raise ConnectionError("Connect this session to a database first")
     if isinstance(connector, SQLiteConnector):
         return connector.schema()
-    from sqlalchemy import inspect
+    from .explorer import ObjectExplorer
 
-    inspector = inspect(connector.engine)
-    schemas = inspector.get_schema_names()
     tables = []
-    for schema_name in schemas[:100]:
-        if schema_name in {"information_schema", "pg_catalog"}:
-            continue
-        for name in inspector.get_table_names(schema=schema_name):
-            columns = [
-                {"name": column["name"], "dtype": str(column["type"]), "nullable": bool(column.get("nullable", True))}
-                for column in inspector.get_columns(name, schema=schema_name)
-            ]
-            tables.append({"name": name, "schema": schema_name, "kind": "table", "columns": columns})
+    with ObjectExplorer(connector)._inspector() as inspector:
+        schemas = inspector.get_schema_names()
+        for schema_name in schemas[:100]:
+            if schema_name in {"information_schema", "pg_catalog"}:
+                continue
+            for name in inspector.get_table_names(schema=schema_name):
+                columns = [
+                    {"name": column["name"], "dtype": str(column["type"]), "nullable": bool(column.get("nullable", True))}
+                    for column in inspector.get_columns(name, schema=schema_name)
+                ]
+                tables.append({"name": name, "schema": schema_name, "kind": "table", "columns": columns})
+                if len(tables) >= 1000:
+                    break
             if len(tables) >= 1000:
                 break
-        if len(tables) >= 1000:
-            break
+    if getattr(connector, "automatic_transactions", True) is False:
+        for name, temporary in getattr(connector, "_datapyn_temporary_tables", {}).items():
+            schema_name = temporary.get("schema", "")
+            tables = [table for table in tables if (table["name"], table["schema"]) != (name, schema_name)]
+            columns = [{"name": column["name"], "dtype": str(column.get("dtype") or column.get("type") or "unknown"),
+                        "nullable": bool(column.get("nullable", True))} for column in temporary.get("columns", [])]
+            tables.append({"name": name, "schema": schema_name, "kind": "table", "columns": columns})
     return {"db_type": connector.db_type, "database": connector.connection_params.get("database", ""), "schemas": schemas, "tables": tables}
 
 
@@ -202,6 +272,7 @@ class ConnectorPool:
     """Session-local engines keyed by profile and database/schema context."""
 
     def __init__(self, idle_timeout=300):
+        import uuid
         self.items = OrderedDict()
         self.explorers = {}
         self.active_key = None
@@ -215,6 +286,7 @@ class ConnectorPool:
         self.namespace_settings = OrderedDict()
         self._ssh_catalog_signature = None
         self._ssh_configs = OrderedDict()
+        self._sqlite_memory_prefix = f"file:datapyn-{uuid.uuid4().hex}"
 
     def _current_tunnel_config(self, config):
         """An atomic catalog revision invalidates the small, kernel-local secret cache."""
@@ -331,7 +403,8 @@ class ConnectorPool:
             self.block_affinity[str(block_id)] = new_key
         inherits = params.get("scope_inherited") is True or ("scope_inherited" not in params and not params.get("database") and not params.get("schema"))
         if inherits and old_key[0] == (self.default_id or "transient"):
-            self.default_config = config
+            self.default_config = {field: value for field, value in config.items()
+                                   if field not in {"automatic_transactions", "_execution_scope_id"}}
             self.default_active_key = new_key
         elif self.default_active_key == old_key:
             self.default_active_key = None
@@ -348,7 +421,7 @@ class ConnectorPool:
             if self.active_key is not None and not params.get("database") and not params.get("schema"):
                 current = self.items[self.active_key]
                 active_config = self.configs.get(self.active_key, {})
-                if not active_config.get("ssh_tunnel_id") and not self._ssh_connection_expired(current, active_config):
+                if not params.get("_execution_scope_id") and not params.get("_metadata_scope") and not active_config.get("ssh_tunnel_id") and not self._ssh_connection_expired(current, active_config):
                     return current
                 # A block-only connection may have no default configuration.
                 # Recreate its physical transport instead of returning a dead cache.
@@ -358,6 +431,33 @@ class ConnectorPool:
                     identifier = None
             else:
                 raise ConnectionError("Connect this session to a database first")
+        config = dict(config)
+        config.pop("_execution_scope_id", None)
+        config.pop("automatic_transactions", None)
+        if config.get("db_type") == "sqlite" and (config.get("database") or ":memory:") == ":memory:":
+            logical = self._key(identifier, {"db_type": "sqlite", "database": ":memory:"})
+            suffix = hashlib.sha256(json.dumps(logical).encode()).hexdigest()[:20]
+            config["_sqlite_memory_location"] = f"{self._sqlite_memory_prefix}-{suffix}?mode=memory&cache=shared"
+        scope_id = params.get("_execution_scope_id")
+        from .transaction_settings import context_automatic_transactions
+        manual_mode = not context_automatic_transactions(params)
+        if manual_mode:
+            # Preserve the legacy shared connection for automatic blocks. Only
+            # explicit manual lanes require a distinct physical session.
+            config["_execution_scope_id"] = str(scope_id or "__metadata__")
+            config["automatic_transactions"] = False
+        metadata_scope = params.get("_metadata_scope") is True
+        affinity = self.block_affinity.get(str(scope_id or (params.get("block_id") if metadata_scope else "") or ""))
+        # Check before any credential/SSH invalidation could dispose this lane.
+        if scope_id and affinity in self.items and pending_transaction(self.items[affinity]):
+            desired = dict(config)
+            if params.get("database") and desired.get("db_type") != "sqlite":
+                desired["database"] = str(params["database"])
+            if params.get("schema") is not None and desired.get("db_type") != "sqlite":
+                desired["schema"] = str(params["schema"])
+            current = self.configs[affinity]
+            if self._key(identifier, desired) != self._key(affinity[0], current):
+                raise PendingTransactionError()
         try:
             config = dict(self._current_tunnel_config(config))
         except Exception:
@@ -365,6 +465,8 @@ class ConnectorPool:
             # transports available for a later operation to accidentally reuse.
             for old_key, old_config in list(self.configs.items()):
                 if not config.get("ssh_tunnel_id") or old_config.get("ssh_tunnel_id") != config.get("ssh_tunnel_id"):
+                    continue
+                if pending_transaction(self.items[old_key]):
                     continue
                 old = self.items.pop(old_key)
                 self._forget(old_key)
@@ -382,6 +484,10 @@ class ConnectorPool:
             revision = (config.get("ssh") or {}).get("_tunnel_revision")
             for old_key, old_config in list(self.configs.items()):
                 if old_config.get("ssh_tunnel_id") != tunnel_id or (old_config.get("ssh") or {}).get("_tunnel_revision") == revision:
+                    continue
+                if pending_transaction(self.items[old_key]):
+                    if old_key == affinity:
+                        raise PendingTransactionError()
                     continue
                 if self.default_active_key == old_key:
                     retired_default = (old_key[0], old_config)
@@ -409,8 +515,25 @@ class ConnectorPool:
             next_scope = self._normalized_config(config)
             was_default = all(previous_scope.get(field) == next_scope.get(field) for field in ("database", "schema"))
         key = self._key(identifier, config)
-        affinity = self.block_affinity.get(str(params.get("block_id") or ""))
-        if params.get("scope_inherited") and self.default_active_key in self.items and self.default_active_key[:2] == key:
+        affinity = self.block_affinity.get(str(scope_id or params.get("block_id") or ""))
+        owner_scope = False
+        if metadata_scope and manual_mode and params.get("block_id"):
+            strip = lambda value: {field: item for field, item in value.items()
+                                   if field not in {"automatic_transactions", "_execution_scope_id"}}
+            # A late metadata request can arrive after this block executed in
+            # its other mode. Find its retained manual lane without borrowing
+            # another block's connection or changing the current affinity.
+            for candidate in dict.fromkeys([affinity, *self.items]):
+                stored = self.configs.get(candidate)
+                if (stored is None or stored.get("_execution_scope_id") != str(params["block_id"])
+                        or getattr(self.items[candidate], "automatic_transactions", True) is not False):
+                    continue
+                if self._key(identifier, strip(config)) == self._key(candidate[0], strip(stored)):
+                    affinity, owner_scope = candidate, True
+                    break
+        if owner_scope:
+            key = affinity
+        elif params.get("scope_inherited") and self.default_active_key in self.items and self.default_active_key[:2] == key:
             key = self.default_active_key
         elif affinity in self.items and affinity[:2] == key:
             key = affinity
@@ -430,6 +553,8 @@ class ConnectorPool:
         if key in self.items:
             existing = self.items[key]
             if self._ssh_connection_expired(existing, self.configs.get(key, config)):
+                if pending_transaction(existing):
+                    raise PendingTransactionError()
                 was_default = was_default or self.default_active_key == key
                 self.items.pop(key)
                 self._forget(key)
@@ -444,9 +569,10 @@ class ConnectorPool:
         if key not in self.items:
             if len(self.items) >= 8:
                 evict = next((item for item, existing in self.items.items()
-                              if item != self.active_key and not getattr(existing, "has_temporary_tables", False)), None)
+                              if item != self.active_key and not getattr(existing, "has_temporary_tables", False)
+                              and not pending_transaction(existing)), None)
                 if evict is None:
-                    raise ConnectionError("This session retains eight connections with temporary tables; disconnect one before opening another")
+                    raise ConnectionError("This session retains eight connections with temporary tables or pending transactions; finish a transaction or disconnect one before opening another")
                 old_connector = self.items.pop(evict)
                 self._forget(evict)
                 if self.active_key == evict:
@@ -462,8 +588,12 @@ class ConnectorPool:
             self.items.move_to_end(key)
         self.active_key = key
         self.last_used[key] = time.monotonic()
+        if scope_id:
+            self.block_affinity[str(scope_id)] = key
         if default or was_default or (params.get("scope_inherited") and self.default_active_key is None):
             self.default_config = dict(config)
+            self.default_config.pop("_execution_scope_id", None)
+            self.default_config.pop("automatic_transactions", None)
             self.default_id = identifier
             self.default_active_key = key
         return connector
@@ -516,6 +646,8 @@ class ConnectorPool:
             if isinstance(connector, SQLiteConnector) and connector.database == ":memory:":
                 continue
             if now - self.last_used.get(key, now) >= self.idle_timeout:
+                if pending_transaction(connector):
+                    continue
                 try:
                     connector.disconnect()
                 except Exception:

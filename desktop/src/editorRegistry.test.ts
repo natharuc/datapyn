@@ -4,6 +4,17 @@ import {registerDocument} from "./documentWindows";
 
 afterEach(()=>{models.clear();pendingInsertions.clear();contexts.clear();contextVersions.clear();completionGates.clear();inlineGates.clear();diagnosticRefreshers.clear();editorPreferences.clear();vi.unstubAllGlobals();});
 describe("Editor focus across viewport virtualization",()=>{
+  it("invalidates remote completion caches on effective physical mode changes even without metadata",()=>{
+    const context={variables:[{name:"df",type:"DataFrame"}],tables:[],sessionId:"s",blockId:"block",connectionId:"main",database:"db",schema:"public"};
+    setCompletionContext("block",context);setCompletionContext("peer",{...context,blockId:"peer",automaticTransactions:false});
+    const initial=contextVersions.get("block")!,peerVersion=contextVersions.get("peer"),invalidate=vi.fn(),cancel=vi.fn(),refresh=vi.fn();
+    completionGates.set("block",{invalidate} as never);inlineGates.set("block",{cancel} as never);diagnosticRefreshers.set("block",refresh);
+    setCompletionContext("block",{...context,automaticTransactions:true});expect(contextVersions.get("block")).toBe(initial);expect(invalidate).not.toHaveBeenCalled();
+    setCompletionContext("block",{...context,automaticTransactions:false});expect(contextVersions.get("block")).toBe(initial+1);
+    expect(invalidate).toHaveBeenCalledOnce();expect(cancel).toHaveBeenCalledOnce();expect(refresh).toHaveBeenCalledOnce();
+    expect(contexts.get("block")?.variables).toBe(context.variables);expect(contextVersions.get("peer")).toBe(peerVersion);
+    setCompletionContext("block",{...context,automaticTransactions:true});expect(contextVersions.get("block")).toBe(initial+2);expect(invalidate).toHaveBeenCalledTimes(2);
+  });
   it("invalidates completion and diagnostics when connector inheritance changes in the same SQL scope",()=>{
     const context={variables:[],tables:[],sessionId:"s",blockId:"block",connectionId:"main",database:"db",schema:"public",scopeInherited:false};
     setCompletionContext("block",context);const version=contextVersions.get("block"),invalidate=vi.fn(),refresh=vi.fn();

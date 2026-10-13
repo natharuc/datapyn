@@ -228,6 +228,8 @@ fn allowed_method(method: &str) -> bool {
             | "notifications.test"
             | "snapshot.settings.get"
             | "snapshot.settings.set"
+            | "transactions.settings.get"
+            | "transactions.settings.set"
             | "snapshot.list"
             | "snapshot.save"
             | "snapshot.restore"
@@ -987,6 +989,10 @@ mod tests {
         assert!(allowed_method("result.export_table"));
         assert!(allowed_method("variable.archive.export"));
         assert!(allowed_method("variable.archive.import"));
+        assert!(allowed_method("transactions.settings.get"));
+        assert!(allowed_method("transactions.settings.set"));
+        assert!(!allowed_method("transactions.exec"));
+        assert!(!allowed_method("transactions.settings.unknown"));
         assert!(!allowed_method("shell.execute"));
         assert!(!allowed_method(""));
     }

@@ -8,6 +8,8 @@ export interface PreparationScope {
   connectionId?: string;
   database?: string;
   schema?: string;
+  /** Effective execution policy; each mode owns a different physical session. */
+  automaticTransactions?: boolean;
   /** Used only to distinguish comments and escaped strings in the metadata key. */
   dbType?: string;
 }
@@ -113,7 +115,7 @@ export function preparationCodeKey(code: string, dbType?: string): string {
   return JSON.stringify([[...references].sort(), [...prefixes].sort(), routines]);
 }
 
-const scopeKey = (scope: PreparationScope) => JSON.stringify([scope.connectionId ?? "", scope.database ?? "", scope.schema ?? "", scope.blockId ?? ""]);
+const scopeKey = (scope: PreparationScope) => JSON.stringify([scope.connectionId ?? "", scope.database ?? "", scope.schema ?? "", scope.blockId ?? "", scope.automaticTransactions !== false]);
 
 /** Preparation follows focus and scope changes, independently of editor typing. */
 export class ScopePreparation {
@@ -137,6 +139,7 @@ export class ScopePreparation {
     let entry: PreparationEntry;
     const params = { session_id: normalized.sessionId, ...(normalized.blockId ? {block_id:normalized.blockId} : {}), connection_id: normalized.connectionId,
       ...(normalized.blockId || normalized.scopeInherited!==undefined?{scope_inherited:Boolean(normalized.scopeInherited)}:{}),
+      ...(normalized.automaticTransactions!==undefined?{automatic_transactions:normalized.automaticTransactions !== false}:{}),
       database: normalized.database, schema: normalized.schema, code, ...(force ? { refresh: true } : {}) };
     // Start asynchronously so synchronous transport errors participate in the
     // same retry path, and the entry exists before a runtime event can arrive.
@@ -204,7 +207,7 @@ export class ScopePreparation {
       const requested = payload.requested_scope;
       this.releaseScope({ sessionId: payload.session_id, blockId:payload.block_id, connectionId: requested ? requested.connection_id ?? undefined : payload.connection_id,
         database: requested ? requested.database ?? undefined : payload.database,
-        schema: requested ? requested.schema ?? undefined : payload.schema });
+        schema: requested ? requested.schema ?? undefined : payload.schema, automaticTransactions:payload.automatic_transactions });
     }
   }
 }

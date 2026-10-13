@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 import traceback
+import types
 
 from . import database
 from .paths import workspace_root
@@ -21,6 +22,7 @@ from .language import namespace_snapshot
 from .desktop_services import enable_user_packages
 from .rich_outputs import RichOutputs
 from .sql_commands import command_result, command_results as normalized_commands, frame_command_results, is_command_frame
+from .transaction_settings import editor_context_key, context_automatic_transactions
 
 MAX_OUTPUT_BYTES = 256 * 1024
 from .result_store import ResultStore, MAX_PAGE_ROWS, MAX_RESULT_HANDLES
@@ -212,11 +214,7 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
         for key in list(connection_labels):
             if key not in pool.items:
                 del connection_labels[key]
-        context_key = "|".join(str(params.get(key) or "") for key in ("connection_id", "database", "schema")) or "default"
-        if params.get("block_id"):
-            context_key += "|block:" + str(params["block_id"])
-        if params.get("scope_inherited") is True:
-            context_key += "|scope:inherited"
+        context_key = editor_context_key(params)
         context_params = dict(params)
         resolved = pool.explorer().context()
         namespace.update({
@@ -231,12 +229,14 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
     def publish_context(params=None, *, metadata=False, invalidated=False, invalidation_scope="connection"):
         params = context_params if params is None else params
         key = context_key
-        context = {"key": key, "variables": namespace_snapshot(namespace), "connection_id": pool.active_key[0] if pool.active_key else None}
+        context = {"key": key, "variables": namespace_snapshot(namespace), "connection_id": pool.active_key[0] if pool.active_key else None,
+                   "automatic_transactions": context_automatic_transactions(params)}
         if params.get("block_id"):
             context["block_id"] = params["block_id"]
         if params.get("scope_inherited"):
             context["scope_inherited"] = True
         if connector is not None:
+            context["automatic_transactions"] = getattr(connector, "automatic_transactions", True)
             resolved = pool.explorer().context()
             context.update(db_type=resolved["db_type"], database=resolved["database"], schema_name=resolved["schema"],
                            requested_scope={field: params.get(field) for field in ("connection_id", "database", "schema")})
@@ -283,6 +283,13 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
             if method == "shutdown":
                 return
             if method == "execution.run":
+                from .transaction_settings import effective_automatic_transactions
+                params = dict(params)
+                params["automatic_transactions"] = params.get("_automatic_transactions_snapshot")
+                if params["automatic_transactions"] is None:
+                    params["automatic_transactions"] = effective_automatic_transactions(job["params"])
+                if params.get("block_id") or params["automatic_transactions"] is False:
+                    params["_execution_scope_id"] = str(params.get("block_id") or "__session__")
                 execution_id = params["execution_id"]
                 started = time.perf_counter()
                 emit("execution.started", {"session_id": session_id, "execution_id": execution_id})
@@ -296,15 +303,24 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                 connection_error = None
                 command_results = []
                 execution_connection = None
+                executing_connector = None
+                previous_affinity = pool.block_affinity.get(str(params.get("_execution_scope_id") or ""))
+                previous_connector = pool.items.get(previous_affinity)
+                physical_scope_changed = False
+                sql_helper_scope = {"active": True}
+                managed_sql_queries = []
                 previous_context = None
                 previous_search_path = None
                 sql_scope_changed = False
                 rich_capture.begin()
                 try:
                     before = {name: id(value) for name, value in namespace.items() if store.is_frame(value)}
-                    if params.get("connection_id") or params.get("_connection_config") or pool.default_config is not None:
+                    if (params.get("connection_id") or params.get("_connection_config") or params.get("config")
+                            or pool.default_config is not None or connector is not None):
                         activate(params, default=bool(params.get("scope_inherited")))
                     if connector is not None:
+                        executing_connector = connector
+                        physical_scope_changed = previous_connector is not None and previous_connector is not connector
                         previous_context = pool.explorer().context()
                         previous_search_path = connector.connection_params.get("postgresql_search_path")
                         execution_connection = {"database": connector.connection_params.get("database", "")}
@@ -342,7 +358,8 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                             previous_callback = getattr(connector, "command_result_callback", None)
                             connector.command_result_callback = command_completed
                             try:
-                                value = connector.execute_query(params["code"], parameters=parameters or None)
+                                value = connector.execute_query(params["code"], parameters=parameters or None,
+                                                                automatic_transactions=params["automatic_transactions"])
                             finally:
                                 # Read before metadata probes can execute another SQL
                                 # statement and replace the connector's snapshot.
@@ -363,6 +380,31 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                                     results.append(store.register(frame, name))
                     else:
                         enable_user_packages()
+                        def make_sql_helper(target, mode, scope):
+                            def run_sql(query, parameters=None):
+                                nonlocal command_results
+                                if not scope["active"]:
+                                    raise ConnectionError("Use sql() from the currently executing block")
+                                if target is None:
+                                    raise ConnectionError("Connect this block to a database first")
+                                from .sql_commands import command_results as normalize_results, is_command_frame
+                                if isinstance(query, str):
+                                    managed_sql_queries.append(query)
+                                try:
+                                    value = target.execute_query(query, parameters=parameters, automatic_transactions=mode)
+                                finally:
+                                    feedback = getattr(target, "get_last_command_results", None)
+                                    if callable(feedback):
+                                        command_results.extend(normalize_results(feedback()))
+                                if is_command_frame(value):
+                                    return None
+                                return value
+                            return run_sql
+                        previous_sql = namespace.get("sql")
+                        if "sql" not in namespace or (type(previous_sql) is types.FunctionType and previous_sql.__dict__.get("_datapyn_sql_helper") is True):
+                            helper = make_sql_helper(executing_connector, params["automatic_transactions"], sql_helper_scope)
+                            helper._datapyn_sql_helper = True
+                            namespace["sql"] = helper
                         code = params["code"]
                         if params.get("shared_parameters"):
                             from src.utils.sql_parameter_service import prepare_python_code_with_shared_parameters
@@ -386,7 +428,10 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                     rich_outputs = rich_capture.outputs
                 except BaseException as exc:
                     code = getattr(exc, "code", "")
-                    if isinstance(code, str) and code.startswith("ssh_"):
+                    if code == "transaction_pending":
+                        affinity = pool.block_affinity.get(str(params.get("_execution_scope_id") or ""))
+                        executing_connector = pool.items.get(affinity)
+                    if isinstance(code, str) and code.startswith(("ssh_", "transaction_")):
                         from .errors import serialize_runtime_error
                         connection_error = serialize_runtime_error(exc)
                         error = connection_error["message"]
@@ -395,6 +440,7 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                     else:
                         error = traceback.format_exc()[-32_768:]
                 finally:
+                    sql_helper_scope["active"] = False
                     delimiter_context.__exit__(None, None, None)
                     sys.stdout, sys.stderr = old_stdout, old_stderr
                     capture.close()
@@ -408,7 +454,17 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                     "results": results,
                     "command_results": command_results,
                     "variables": describe_variables(namespace),
+                    "automatic_transactions": params["automatic_transactions"],
                 }
+                transaction_state = getattr(executing_connector, "get_transaction_state", None)
+                if callable(transaction_state):
+                    try:
+                        state = transaction_state()
+                        payload["transaction_state"] = {key: value for key, value in state.items()
+                                                        if key in {"automatic_transactions", "pending", "state", "transaction_count", "xact_state"}}
+                    except Exception:
+                        payload["transaction_state"] = {"automatic_transactions": params["automatic_transactions"],
+                                                        "pending": None, "state": "unknown"}
                 if params.get("block_id"):
                     payload["block_id"] = params["block_id"]
                 if "scope_inherited" in params:
@@ -422,7 +478,7 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                     payload["rich_outputs"] = rich_outputs
                 if download_result is not None:
                     payload["export"] = download_result
-                if params["language"] == "sql" and previous_context is not None and connector is not None:
+                if (params["language"] == "sql" or managed_sql_queries) and previous_context is not None and connector is not None:
                     current_context = pool.explorer().context()
                     sql_scope_changed = current_context != previous_context or (connector.db_type == "postgresql" and connector.connection_params.get("postgresql_search_path") != previous_search_path)
                     if current_context != previous_context:
@@ -439,32 +495,39 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                             connection_labels[pool.active_key] = connection_labels.pop(old_key)
                         namespace.update(db_database=current_context["database"], db_schema=current_context["schema"])
                         identifier = pool.active_key[0] if pool.active_key else pool.default_id
-                        context_key = "|".join(str(value or "") for value in (None if identifier == "transient" else identifier, current_context["database"], current_context["schema"]))
-                        if params.get("block_id"):
-                            context_key += "|block:" + str(params["block_id"])
-                        if params.get("scope_inherited") is True:
-                            context_key += "|scope:inherited"
+                        context_key = editor_context_key({**params, "connection_id": None if identifier == "transient" else identifier,
+                                                          "database": current_context["database"], "schema": current_context["schema"]})
                 # A failed block may have partially changed a frame in place.
                 # Keep the previous durable generation until a later success.
                 snapshot_dirty = error is None
+                metadata_code = params["code"] if params["language"] == "sql" else "\n".join(managed_sql_queries)
+                temporary_metadata_changed = False
+                if metadata_code and executing_connector is connector and getattr(connector, "automatic_transactions", True) is False:
+                    refresh = getattr(pool.explorer(), "refresh_sql_temporaries", None)
+                    if callable(refresh):
+                        try:
+                            temporary_metadata_changed = refresh(metadata_code, force=error is not None)
+                        except Exception as exc:
+                            emit("language.refresh_failed", {"session_id": session_id, "block_id": params.get("block_id"), "error": type(exc).__name__})
                 # All blocks share this interpreter's namespace. Publish its
                 # immutable names/types/columns before clients observe the
                 # completed execution, without waiting for database metadata.
-                publish_context(params)
+                if connector is None or executing_connector is connector:
+                    publish_context(params)
                 from .notifications import capture_completion
                 notification = capture_completion(params, payload, namespace, store, connection_context=execution_connection)
                 send({"event": "execution.finished", "payload": payload, "job_id": job_id,
                       **({"notification_delivery": notification} if notification is not None else {})})
                 from .sql_context import changes_metadata
-                invalidated = params["language"] == "sql" and connector is not None and (sql_scope_changed or changes_metadata(params["code"]))
+                invalidated = executing_connector is not None and executing_connector is connector and (physical_scope_changed or bool(metadata_code) and (sql_scope_changed or temporary_metadata_changed or changes_metadata(metadata_code)))
                 if invalidated:
                     from .table_export import refresh_temporary_tables
                     pool.explorer().cache.clear()
                     pool.explorer().column_cache.clear()
                     try:
-                        if changes_metadata(params["code"]):
+                        if changes_metadata(metadata_code):
                             refresh_temporary_tables(connector)
-                        publish_context(params, invalidated=True, invalidation_scope="connection" if changes_metadata(params["code"]) else "block")
+                        publish_context(params, invalidated=True, invalidation_scope="connection" if changes_metadata(metadata_code) else "block")
                     except Exception as exc:
                         emit("language.refresh_failed", {"session_id": session_id, "block_id": params.get("block_id"), "error": str(exc)[:2048]})
                 continue
@@ -487,7 +550,7 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                     pool.idle_timeout = params["seconds"]
                     result = {"seconds": pool.idle_timeout}
                 elif method == "schema.get":
-                    activate(params)
+                    activate({**params, "_metadata_scope": True})
                     result = database.schema(connector)
                 elif method == "result.page":
                     result = store.page(params)
@@ -505,6 +568,19 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                     node = params.get("node") or {}
                     if node.get("database"):
                         routed.setdefault("database", node["database"])
+                    if method == "explorer.use_database":
+                        affinity = pool.block_affinity.get(str(params.get("block_id") or ""))
+                        owner = pool.items.get(affinity)
+                        if owner is not None and database.pending_transaction(owner):
+                            from .explorer import ObjectExplorer
+                            current = ObjectExplorer(owner).context()
+                            changed = (routed.get("connection_id") not in {None, affinity[0]}
+                                       or routed.get("database") not in {None, "", current["database"]}
+                                       or routed.get("schema") not in {None, current["schema"]})
+                            if changed:
+                                raise database.PendingTransactionError()
+                    else:
+                        routed["_metadata_scope"] = True
                     activate(routed, default=method == "explorer.use_database")
                     if method == "explorer.use_database":
                         result = pool.explorer().context()
@@ -515,17 +591,13 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                         result = pool.explorer().dispatch(method, params)
                 elif method == "language.context":
                     try:
-                        activate(params)
+                        activate({**params, "_metadata_scope": True})
                         if params.get("refresh"):
                             pool.explorer().cache.clear()
                             pool.explorer().column_cache.clear()
                         publish_context(params, metadata=True)
                     except Exception as exc:
-                        key = "|".join(str(params.get(key) or "") for key in ("connection_id", "database", "schema")) or "default"
-                        if params.get("block_id"):
-                            key += "|block:" + str(params["block_id"])
-                        if params.get("scope_inherited") is True:
-                            key += "|scope:inherited"
+                        key = editor_context_key(params)
                         config = params.get("_connection_config") or params.get("config") or pool.default_config or {}
                         send({"language_context": {"key": key, "variables": namespace_snapshot(namespace),
                               "connection_id": params.get("connection_id") or pool.default_id,
@@ -535,6 +607,7 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                               "requested_scope": {field: params.get(field) for field in ("connection_id", "database", "schema")},
                               "block_id": params.get("block_id"),
                               "scope_inherited": params.get("scope_inherited") is True,
+                              "automatic_transactions": context_automatic_transactions(params),
                               "schema_error": f"{type(exc).__name__}: {exc}"[:2048]}})
                     result = {"status": "updated"}
                 elif method in {"data.import", "variable.inspect", "variable.delete", "result.export", "result.export_text", "result.summary", "result.chart", "result.chart_export", "result.export_table", "document.read", "document.script_export", "variable.archive.list", "variable.archive.export", "variable.archive.import"}:
@@ -552,6 +625,8 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                         destination_activated = False
                         try:
                             routed = dict(params)
+                            routed["automatic_transactions"] = params.get("_automatic_transactions_snapshot", True)
+                            routed["_execution_scope_id"] = str(params.get("block_id") or "__session__")
                             routed.pop("schema", None)
                             if params.get("connection_schema"):
                                 routed["schema"] = params["connection_schema"]

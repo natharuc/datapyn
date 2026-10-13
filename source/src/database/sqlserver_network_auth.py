@@ -95,6 +95,9 @@ def connect_network(*args, **options):
                                         code="sqlserver_auth_unavailable")
 
     options = dict(options)
+    autocommit = options.pop("autocommit", False)
+    if not isinstance(autocommit, bool):
+        raise TypeError("autocommit must be a boolean")
     mode = options.pop("_datapyn_auth_mode")
     user = options.pop("_datapyn_username")
     password = options.pop("_datapyn_password")
@@ -141,7 +144,7 @@ def connect_network(*args, **options):
         stream.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         stream.settimeout(login.connect_timeout)
         tds_socket = _TdsSocket(sock=stream, login=login, row_strategy=tuple_row_strategy,
-                                autocommit=False, isolation_level=0)
+                                autocommit=autocommit, isolation_level=0)
         tds_socket.main_session._writer = _SerializedTdsWriter(tds_socket.main_session._writer, stream, tds_socket)
         route = tds_socket.login()
         if route is not None:
@@ -149,7 +152,8 @@ def connect_network(*args, **options):
                 "O SQL Server solicitou um redirecionamento de rede. Cadastre o endpoint final; "
                 "a conexão não será desviada para fora do destino ou túnel selecionado.",
                 code="sqlserver_routing_blocked")
-        tds_socket.main_session.begin_tran()
+        if not autocommit:
+            tds_socket.main_session.begin_tran()
         tds_socket.sock.settimeout(login.query_timeout)
         return NonMarsConnection(pooling=False, key=(), tds_socket=tds_socket)
     except BaseException:

@@ -43,6 +43,7 @@ import {documentCopySettings,documentExportSettings,mergeConfigurationDefaults,t
 import {Modal} from "./PanelControls";
 import {useOwnerDocumentRevision} from "./useOwnerDocument";
 import {readNotificationFlags,saveNotificationFlags} from "./notificationPreferences";
+import {applyTransactionPreferences,readTransactionSettings} from "./transactionPreferences";
 import {startupEditorId} from "./splashProtocol";
 import {useStartupSplash} from "./useStartupSplash";
 import {PANEL_IDS,isBottomPanel,type BottomPanelId,type DockingControls,type PanelId} from "./dockingLayout";
@@ -99,7 +100,7 @@ function blockConnectionConfig(session:SessionDocument,block:Block) {
   return connections.getSnapshot().catalog.connections.find(connection=>connection.id===id)?.config ??
     (block.connection_id===undefined || block.connection_id===session.savedConnectionId ? session.connection : undefined);
 }
-const blockScope=(session:SessionDocument,block:Block)=>({...completionConnectionScope(session,block,blockConnectionConfig(session,block)),scopeInherited:inheritsSessionScope(block)});
+const blockScope=(session:SessionDocument,block:Block,automaticTransactions=true)=>({...completionConnectionScope(session,block,blockConnectionConfig(session,block)),scopeInherited:inheritsSessionScope(block),automaticTransactions:automaticTransactions && block.disable_automatic_transactions !== true});
 
 function IconButton({ title, children, onClick, disabled = false, className = "" }: { title: string; children: React.ReactNode; onClick?: () => void; disabled?: boolean; className?: string }) {
   return <button type="button" className={`icon-button ${className}`} title={translateUi(title)} aria-label={translateUi(title)} onClick={onClick} disabled={disabled}>{children}</button>;
@@ -114,33 +115,36 @@ export function App() {
   const openingConnection=connectionPending(session.connectionState);
   const connectionBlocked=openingConnection||session.connectionState?.phase==="error";
   const retryConnectionId=session.connectionState?.phase==="error"&&session.connectionState.name?session.connectionState.connectionId:session.connectionState?.connectionId??session.savedConnectionId;
+  const [preferences, setPreferences] = useState(loadPreferences);
+  const transactionPolicy = useRef(preferences.automaticTransactions); transactionPolicy.current=preferences.automaticTransactions;
   const languageContexts=useRef(new SessionLanguageContexts()),completionIndex=useRef(new SessionCompletionIndex());
   const [languageRevision,setLanguageRevision]=useState(0),[preparationRevision,setPreparationRevision]=useState(0);
   const preparation=useRef(new ScopePreparation(runtime,scope=>{
-    if(languageContexts.current.invalidate(scope.sessionId,scope.connectionId,scope.database,scope.schema,scope.blockId,scope.scopeInherited))setLanguageRevision(n=>n+1);
+    if(languageContexts.current.invalidate(scope.sessionId,scope.connectionId,scope.database,scope.schema,scope.blockId,scope.scopeInherited,scope.automaticTransactions))setLanguageRevision(n=>n+1);
   }));
   const scopeMetadata=useCallback((current:SessionDocument,block:Block)=>{
-    const scope=blockScope(current,block);
-    return languageContexts.current.get(current.id,scope.connectionId,scope.database,scope.schema,block.id,scope.scopeInherited);
+    const scope=blockScope(current,block,transactionPolicy.current);
+    return languageContexts.current.get(current.id,scope.connectionId,scope.database,scope.schema,block.id,scope.scopeInherited,scope.automaticTransactions);
   },[]);
   const applyBlockScope=useCallback(async(sessionId:string,blockId:string,context:ExplorerContext)=>{
     workspace.setContext(sessionId,context,blockId);workspace.focusBlock(sessionId,blockId);
     const current=workspace.session(sessionId),block=current?.blocks.find(item=>item.id===blockId);
     if(!current || !block)return;
     await workspace.ensureSession(sessionId);
-    await preparation.current.request({sessionId,blockId,...blockScope(current,block),dbType:blockConnectionConfig(current,block)?.db_type},block.code,true);
+    await preparation.current.request({sessionId,blockId,...blockScope(current,block,transactionPolicy.current),dbType:blockConnectionConfig(current,block)?.db_type},block.code,true);
     setExplorerRefresh(n=>n+1);
   },[]);
   const diagnosticContext = useCallback((sessionId: string) => { const current = workspace.session(sessionId); return current ? completionIndex.current.diagnosticsContext(current) : { globalImports: "", preamble: "" }; }, []);
   const diagnosticRevisionFor = useCallback((current: SessionDocument, block: Block) => {
-    const connection = blockScope(current, block);
-    const scope = languageContexts.current.get(current.id, connection.connectionId, connection.database, connection.schema,block.id,connection.scopeInherited);
+    const connection = blockScope(current, block,transactionPolicy.current);
+    const scope = languageContexts.current.get(current.id, connection.connectionId, connection.database, connection.schema,block.id,connection.scopeInherited,connection.automaticTransactions);
     return block.language === "python" ? `${scope?.namespaceVersion ?? 0}:${completionIndex.current.diagnosticsRevision(current)}` : String(scope?.version ?? 0);
   }, []);
   useEffect(()=>setCompletionContextResolver(blockId=>{
     const snapshot=workspace.getSnapshot(),active=workspace.session();
     const owner=active?.blocks.some(b=>b.id===blockId) ? active : snapshot.sessions.find(s=>s.blocks.some(b=>b.id===blockId));
-    return owner ? completionIndex.current.context(owner,blockId,languageContexts.current,blockConnectionConfig(owner,owner.blocks.find(b=>b.id===blockId)!)) : undefined;
+    const block=owner?.blocks.find(b=>b.id===blockId);
+    return owner && block ? completionIndex.current.context(owner,blockId,languageContexts.current,blockConnectionConfig(owner,block),blockScope(owner,block,transactionPolicy.current).automaticTransactions) : undefined;
   }),[]);
   useEffect(()=>{
     let disposed=false,cleanup:(()=>void)|undefined;
@@ -157,13 +161,13 @@ export function App() {
       if(event.event==="language.context_updated" && event.payload.metadata_invalidated){blockScopeOptions.clear();setPreparationRevision(n=>n+1);setExplorerRefresh(n=>n+1);}
       if(event.event==="execution.finished" && event.payload.context_change){
         blockScopeOptions.clear();setPreparationRevision(n=>n+1);setExplorerRefresh(n=>n+1);
-        void prepareExecutionContextAfterEvent(event.payload,id=>workspace.session(id),preparation.current).catch(failure=>reportMessage(errorText(failure)));
+        void prepareExecutionContextAfterEvent(event.payload,id=>workspace.session(id),preparation.current,transactionPolicy.current).catch(failure=>reportMessage(errorText(failure)));
       }
       if(event.event==="language.context_updated" && event.payload.metadata_state==="error")reportMessage(event.payload.schema_error || translateUi("Não foi possível carregar os metadados SQL."));
     }).then(fn=>{if(disposed)fn();else cleanup=fn;});
     return()=>{disposed=true;cleanup?.();};
   },[]);
-  const [preferences, setPreferences] = useState(loadPreferences);
+  const transactionPreferencesRevision = useRef(0);
   const [leftVisible, setLeftVisible] = useState(preferences.leftVisible), [rightVisible, setRightVisible] = useState(preferences.rightVisible);
   const [connectionDialog, setConnectionDialog] = useState(false), [settingsDialog, setSettingsDialog] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState("appearance");
@@ -365,6 +369,7 @@ export function App() {
     root.style.setProperty("--editor-font", preferences.editorFont);
     setLocale(preferences.locale);
     workspace.setSharedDelimiter(preferences.sharedDelimiter);
+    workspace.setAutomaticTransactions(preferences.automaticTransactions);
     workspace.setNewSessionPreferences({maximizeFirstBlock:preferences.maximizeFirstBlock});
     root.style.setProperty("--left-width", `${preferences.leftWidth}px`); root.style.setProperty("--right-width", `${preferences.rightWidth}px`);
     try { savePreferences({ ...preferences, leftVisible, rightVisible, resultHeight }); } catch { /* Explicit .dpw saves remain available. */ }
@@ -376,9 +381,10 @@ export function App() {
     requestAnimationFrame(() => focusEditor(session.focusedBlockId));
     return()=>{current=false;};
   }, [session.id, session.savedConnectionId,state.runtimeStatus,profile?.active_id,switchingProfile]);
-  const applyProfile=(loaded:ProfileState,defaults:ConfigurationDefaults={})=>{
-    const prefs=normalizePreferences((loaded.state?.preferences ?? (loaded.state || profile ? DEFAULT_PREFERENCES : preferences)) as Partial<Preferences>);
+  const applyProfile=(loaded:ProfileState,defaults:ConfigurationDefaults,automaticTransactions:boolean)=>{
+    const prefs=normalizePreferences({...((loaded.state?.preferences ?? (loaded.state || profile ? DEFAULT_PREFERENCES : preferences)) as Partial<Preferences>),automaticTransactions});
     workspace.setNewSessionPreferences({maximizeFirstBlock:prefs.maximizeFirstBlock});
+    workspace.setAutomaticTransactions(prefs.automaticTransactions);
     chartSources.current.clear();
     workspaceExtras.current=Object.fromEntries(Object.entries(loaded.state ?? {}).filter(([key])=>!["documents","activeIndex","preferences","shortcuts","layout","saved_at","revision"].includes(key)));
     updateConfigurationDefaults(mergeConfigurationDefaults(defaults,(workspaceExtras.current.imported_defaults ?? {}) as ConfigurationDefaults));
@@ -393,10 +399,11 @@ export function App() {
     setActiveResult({});setProfile(loaded);setGridView(undefined);setFormatColumnRequest(undefined);setExplorerRefresh(n=>n+1);
   };
   const applyProfileRef=useRef(applyProfile);applyProfileRef.current=applyProfile;
-  useEffect(()=>{if(state.runtimeStatus !== "ready" || profile)return;let active=true;setProfileLoadError("");void Promise.all([nativeDrafts.current.load(),connections.refresh(),runtime.request<{defaults:ConfigurationDefaults}>("configurations.defaults.get")]).then(([loaded,,settings])=>{if(active)applyProfileRef.current(loaded,settings.defaults);}).catch(failure=>{if(active){setProfileLoadError(errorText(failure));reportMessage(errorText(failure));}});return()=>{active=false;};},[state.runtimeStatus,profile,profileRetry]);
+  useEffect(()=>{if(state.runtimeStatus !== "ready" || profile)return;let active=true;setProfileLoadError("");void Promise.all([nativeDrafts.current.load(),connections.refresh(),runtime.request<{defaults:ConfigurationDefaults}>("configurations.defaults.get"),readTransactionSettings(runtime)]).then(([loaded,,settings,transactions])=>{if(active)applyProfileRef.current(loaded,settings.defaults,transactions.automatic_transactions);}).catch(failure=>{if(active){setProfileLoadError(errorText(failure));reportMessage(errorText(failure));}});return()=>{active=false;};},[state.runtimeStatus,profile,profileRetry]);
   flushWorkspace.current=async()=>{workspace.persist();if(profile){await flushNativePopoutLayouts();const mainWindow=await windowLayout.capture().catch(()=>mainWindowLayout);nativeDrafts.current.schedule(profile.active_id,{...workspaceExtras.current,...workspace.nativeSnapshot(),preferences:{...preferences,leftVisible,rightVisible,resultHeight},shortcuts:{...shortcuts},layout:{...layoutExtras.current,panel,rightPanel,mainWindow,docking:captureLayout.current() ?? dockLayout}});}await nativeDrafts.current.flush();if(state.runtimeStatus === "ready"){const flushed=await runtime.request<{sessions:Array<{error?:string;saved?:boolean;session_id:string}>}>("system.flush_workspace");const failures=flushed.sessions.filter(s=>s.error);if(failures.length)throw new Error(failures.map(s=>`${s.session_id}: ${s.error}`).join("; "));}};
   useEffect(()=>{if(!profile || switchingProfile || state.runtimeStatus !== "ready" || startupLayout !== profile.active_id || !windowLayout.ready)return;const snapshot:NativeWorkspaceState={...workspaceExtras.current,...workspace.nativeSnapshot(),preferences:{...preferences,leftVisible,rightVisible,resultHeight},shortcuts:{...shortcuts},layout:{...layoutExtras.current,panel,rightPanel,mainWindow:mainWindowLayout,docking:dockLayout}};nativeDrafts.current.schedule(profile.active_id,snapshot);},[profile?.active_id,state.documentRevision,preferences,shortcuts,leftVisible,rightVisible,resultHeight,panel,rightPanel,dockLayout,mainWindowLayout,startupLayout,windowLayout.ready,switchingProfile,state.runtimeStatus]);
   useEffect(()=>{if(state.runtimeStatus !== "ready" || !profile)return;let active=true;void readNotificationFlags(runtime).then(flags=>{if(active)setPreferences(p=>({...p,...flags}));}).catch(failure=>reportMessage(errorText(failure)));return()=>{active=false;};},[state.runtimeStatus,profile?.active_id]);
+  useEffect(()=>{if(state.runtimeStatus !== "ready" || !profile)return;let active=true;const revision=++transactionPreferencesRevision.current;void readTransactionSettings(runtime).then(settings=>{if(active && revision===transactionPreferencesRevision.current){workspace.setAutomaticTransactions(settings.automatic_transactions);setPreferences(p=>({...p,automaticTransactions:settings.automatic_transactions}));}}).catch(failure=>reportMessage(errorText(failure)));return()=>{active=false;};},[state.runtimeStatus,profile?.active_id]);
   useEffect(()=>{if(state.runtimeStatus === "ready" && profile)void runtime.request("connection.idle_timeout",{seconds:preferences.connectionIdleSeconds}).catch(failure=>reportMessage(errorText(failure)));},[state.runtimeStatus,profile?.active_id,preferences.connectionIdleSeconds]);
   useEffect(()=>{
     if(!isDesktop())return;let disposed=false,unlisten:(()=>void)|undefined,closing=false;
@@ -414,7 +421,7 @@ export function App() {
   },[profile?.active_id,session.id,catalogState,switchingProfile]);
   const selectProfile=async(profileId:string)=>{
     if(state.sessions.some(s=>s.busy||dataImportPending(s.dataImport)))throw new Error("Aguarde ou cancele as execuções e importações antes de trocar de workspace.");
-    setSwitchingProfile(true);workspace.setEditingLocked(true);try{await flushWorkspace.current();const selected=await nativeDrafts.current.select(profileId);const [,settings]=await Promise.all([connections.refresh(),runtime.request<{defaults:ConfigurationDefaults}>("configurations.defaults.get")]);applyProfile(selected,settings.defaults);setWorkspaceManager(false);}finally{workspace.setEditingLocked(false);setSwitchingProfile(false);}
+    setSwitchingProfile(true);workspace.setEditingLocked(true);try{await flushWorkspace.current();const selected=await nativeDrafts.current.select(profileId);const [,settings,transactions]=await Promise.all([connections.refresh(),runtime.request<{defaults:ConfigurationDefaults}>("configurations.defaults.get"),readTransactionSettings(runtime)]);applyProfile(selected,settings.defaults,transactions.automatic_transactions);setWorkspaceManager(false);}finally{workspace.setEditingLocked(false);setSwitchingProfile(false);}
   };
   const configurationActions:ConfigurationTransferActions={
     busy:!profile || switchingProfile || state.sessions.some(s=>s.busy||dataImportPending(s.dataImport)),
@@ -430,7 +437,10 @@ export function App() {
         await flushWorkspace.current();
         const imported=await runtime.request<ConfigurationPreview>("configurations.import",{path,preview_token:preview.preview_token});
         await connections.refresh();
-        const nextPreferences=normalizePreferences({...preferences,...imported.preferences} as Partial<Preferences>);
+        ++transactionPreferencesRevision.current;
+        const transactionSettings=await readTransactionSettings(runtime);
+        const nextPreferences=normalizePreferences({...preferences,...imported.preferences,automaticTransactions:transactionSettings.automatic_transactions} as Partial<Preferences>);
+        workspace.setAutomaticTransactions(nextPreferences.automaticTransactions);
         const nextShortcuts={...shortcuts,...imported.shortcuts} as Record<Command,string>;
         updateConfigurationDefaults(imported.defaults ?? {});
         setPreferences(nextPreferences);setLeftVisible(nextPreferences.leftVisible);setRightVisible(nextPreferences.rightVisible);setResultHeight(nextPreferences.resultHeight);setShortcuts(nextShortcuts);
@@ -578,7 +588,7 @@ export function App() {
       case "reloadSchema": {
         setExplorerRefresh(n => n + 1);
         const current=workspace.session(),block=current?.blocks.find(item=>item.id===current.focusedBlockId);
-        if(current && block?.language==="sql")run(preparation.current.request({sessionId:current.id,blockId:block.id,...blockScope(current,block),dbType:blockConnectionConfig(current,block)?.db_type},block.code,true));
+        if(current && block?.language==="sql")run(preparation.current.request({sessionId:current.id,blockId:block.id,...blockScope(current,block,transactionPolicy.current),dbType:blockConnectionConfig(current,block)?.db_type},block.code,true));
         break;
       }
       case "restoreView": restoreDockLayout(); break;
@@ -636,9 +646,10 @@ export function App() {
   useEffect(() => {
     const ids = new Set(state.sessions.map(s=>s.id)); languageContexts.current.retain(ids); completionIndex.current.retain(ids); preparation.current.retain(ids);
     for(const id of lastNotificationContexts.current.keys())if(!ids.has(id))lastNotificationContexts.current.delete(id);
-    const context=completionIndex.current.context(session,session.focusedBlockId,languageContexts.current,blockConnectionConfig(session,session.blocks.find(b=>b.id===session.focusedBlockId) ?? session.blocks[0]));
+    const block=session.blocks.find(b=>b.id===session.focusedBlockId) ?? session.blocks[0];
+    const context=completionIndex.current.context(session,session.focusedBlockId,languageContexts.current,blockConnectionConfig(session,block),blockScope(session,block,preferences.automaticTransactions).automaticTransactions);
     if(context)setCompletionContext(session.focusedBlockId,context);
-  }, [session.id, session.focusedBlockId, session.blocks, session.variables, session.results, session.savedConnectionId, session.database, session.schema,languageRevision,state.sessions,catalogState.catalog]);
+  }, [session.id, session.focusedBlockId, session.blocks, session.variables, session.results, session.savedConnectionId, session.database, session.schema,languageRevision,state.sessions,catalogState.catalog,preferences.automaticTransactions]);
 
   const commandExecutions = session.commandExecutions ?? [];
   const executionOutput = session.executionOutput;
@@ -656,13 +667,13 @@ export function App() {
   const showingCommands = commandExecutions.length > 0 && (activeResult[session.id] === "__commands__" || !session.results.length && !session.richOutputs?.length && !session.images.length);
   const result = showingCommands || activeResult[session.id] === "__images__" && (session.richOutputs?.length || session.images.length) ? undefined : session.results.find((item) => item.result_id === activeResult[session.id]) ?? session.results.at(-1);
   const focusedBlock = session.blocks.find((block) => block.id === session.focusedBlockId);
-  const focusedScope = focusedBlock ? blockScope(session, focusedBlock) : {connectionId:session.savedConnectionId,database:session.database,schema:session.schema,scopeInherited:true};
-  const entityScope = entityInfo ? blockScope(session, session.blocks.find(block=>block.id===entityInfo.blockId) ?? session.blocks[0]) : focusedScope;
+  const focusedScope = focusedBlock ? blockScope(session, focusedBlock,preferences.automaticTransactions) : {connectionId:session.savedConnectionId,database:session.database,schema:session.schema,scopeInherited:true,automaticTransactions:preferences.automaticTransactions};
+  const entityScope = entityInfo ? blockScope(session, session.blocks.find(block=>block.id===entityInfo.blockId) ?? session.blocks[0],preferences.automaticTransactions) : focusedScope;
   // Warm the focused scope once on focus/context changes, never on each keystroke.
   useEffect(()=>{
     if(state.runtimeStatus!=="ready" || editingLocked || connectionBlocked || preparedSession!==`${profile?.active_id}:${session.id}` || focusedBlock?.language!=="sql" || !(focusedScope.connectionId || session.connection))return;
     void preparation.current.request({sessionId:session.id,blockId:focusedBlock.id,...focusedScope,dbType:blockConnectionConfig(session,focusedBlock)?.db_type},focusedBlock.code).catch(failure=>reportMessage(errorText(failure)));
-  },[session.id,session.focusedBlockId,focusedBlock?.language,focusedScope.connectionId,focusedScope.database,focusedScope.schema,focusedScope.scopeInherited,state.runtimeStatus,preparedSession,profile?.active_id,editingLocked,connectionBlocked,preparationRevision,session.connection,catalogState.catalog]);
+  },[session.id,session.focusedBlockId,focusedBlock?.language,focusedScope.connectionId,focusedScope.database,focusedScope.schema,focusedScope.scopeInherited,focusedScope.automaticTransactions,state.runtimeStatus,preparedSession,profile?.active_id,editingLocked,connectionBlocked,preparationRevision,session.connection,catalogState.catalog]);
   const exportScope=exportContext(session,catalogState.catalog.connections);
   const exportConnections=useMemo(()=>catalogState.catalog.connections.map(item=>({id:item.id,name:item.name,db_type:item.config.db_type,database:item.config.database})),[catalogState.catalog]);
   const insertSql=(code:string)=>{
@@ -719,7 +730,7 @@ export function App() {
     {state.runtimeStatus === "unavailable" && <div className="runtime-banner"><Activity size={14} /><span>{isDesktop() ? state.message : "Prévia da interface. O runtime Python está disponível no aplicativo desktop."}</span>{isDesktop() && <button className="text-button" onClick={() => run(workspace.retryRuntime())}><RefreshCw size={12} /> {translateUi("Reconectar")}</button>}</div>}
     <main className="workbench">{(!isDesktop() || profile) && <Suspense fallback={<p className="explorer-empty">{translateUi("Carregando painéis…")}</p>}><DockingWorkbench key={profile?.active_id ?? "startup"} initialLayout={dockLayout} locked={editingLocked} onControlsReady={controls=>{docking.current=controls;setDockControls(controls);}} onPanelsChange={dockPanelsChanged} onVisiblePanelsChange={setVisibleDockPanels} onRestoreError={reportMessage} onInitialized={()=>setStartupLayout(profile?.active_id)} onPopoutReady={attachPopoutKeyboard} onCaptureReady={capture=>{captureLayout.current=capture;}} onLayoutChange={setDockLayout} theme={preferences.theme} leftWidth={preferences.leftWidth} rightWidth={preferences.rightWidth} resultHeight={resultHeight} leftVisible={leftVisible} rightVisible={rightVisible} activeBottom={panel} activeRight={rightPanel} resetRevision={dockReset} onActivate={id=>{if(isBottomPanel(id))setPanel(id);if(id === "variables" || id === "pynia")setRightPanel(id);}} panels={{
       connections:<ConnectionsSidebar onManageTunnels={manageSshTunnels} activeConnectionId={session.savedConnectionId} onConnect={connectSaved} onDisconnect={() => workspace.disconnect(session.id)} onError={reportMessage} disabled={session.busy || dataImportPending(session.dataImport) || openingConnection || editingLocked || !profile} newTabDisabled={editingLocked || !profile}/>,
-      explorer:<ObjectExplorer sessionId={session.id} blockId={focusedBlock?.id} scopeInherited={focusedScope.scopeInherited} connectionId={focusedScope.connectionId} database={focusedScope.database} schema={focusedScope.schema} dbType={catalogState.catalog.connections.find(item=>item.id===focusedScope.connectionId)?.config.db_type ?? session.connection?.db_type} connected={!connectionBlocked && preparedSession === `${profile?.active_id}:${session.id}` && Boolean(session.connection || focusedBlock?.connection_id || session.savedConnectionId)} refresh={explorerRefresh} disabled={session.busy} onError={reportMessage}
+      explorer:<ObjectExplorer sessionId={session.id} blockId={focusedBlock?.id} scopeInherited={focusedScope.scopeInherited} automaticTransactions={focusedScope.automaticTransactions} connectionId={focusedScope.connectionId} database={focusedScope.database} schema={focusedScope.schema} dbType={catalogState.catalog.connections.find(item=>item.id===focusedScope.connectionId)?.config.db_type ?? session.connection?.db_type} connected={!connectionBlocked && preparedSession === `${profile?.active_id}:${session.id}` && Boolean(session.connection || focusedBlock?.connection_id || session.savedConnectionId)} refresh={explorerRefresh} disabled={session.busy} onError={reportMessage}
           onInsert={(code, language = "sql", newBlock = false) => { if (newBlock) { const block = workspace.addBlock(session.id,language,code,session.focusedBlockId); if (focusedBlock) workspace.updateBlock(session.id,block.id,{connection_id:focusedScope.connectionId,database_name:focusedScope.database,schema:focusedScope.schema}); requestAnimationFrame(()=>focusEditor(block.id)); } else insertInEditor(session.focusedBlockId,code); }}
           onContextChange={context => applyBlockScope(session.id,session.focusedBlockId,context)}/>,
       editor:<div className={`editor-area${session.maximizedBlockId ? " has-maximized-block" : ""}`} ref={codeArea}>
@@ -741,7 +752,7 @@ export function App() {
         </div>,
       results:<section className="results-panel">
             <DataImportStatus state={session.dataImport} onCancel={()=>run(workspace.cancelImport(session.id))} onDismiss={()=>workspace.clearImportStatus(session.id)}/>
-            <Suspense fallback={null}><DataActions hideResultActions={showingCommands} onImportData={(path,settings)=>workspace.importData(session.id,path,settings)} importState={session.dataImport} onCancelImport={()=>workspace.cancelImport(session.id)} sessionId={session.id} result={result} connectionType={exportScope.connectionType} availableConnections={exportConnections} currentConnectionId={exportScope.connectionId} currentDatabase={exportScope.database} currentSchema={exportScope.schema} onInsertSql={insertSql} onTableExported={()=>setExplorerRefresh(n=>n+1)} disabled={session.busy || dataImportPending(session.dataImport) || state.runtimeStatus !== "ready"} view={gridView} initialExportSettings={exportOptions} defaultOpenFolder={Boolean(session.extras.export_open_folder ?? configurationDefaults.export_open_folder ?? true)} onOpenFolderChange={export_open_folder=>{updateConfigurationDefaults({export_open_folder});workspace.patchSession(session.id,s=>({...s,extras:{...s.extras,export_open_folder}}));}} onExportSettingsChange={export_settings=>{updateConfigurationDefaults({export_settings});workspace.patchSession(session.id,s=>({...s,extras:{...s.extras,export_settings}}));}} onImported={showResult} onChart={createChart} onMessage={reportMessage}/></Suspense>
+            <Suspense fallback={null}><DataActions hideResultActions={showingCommands} onImportData={(path,settings)=>workspace.importData(session.id,path,settings)} importState={session.dataImport} onCancelImport={()=>workspace.cancelImport(session.id)} sessionId={session.id} result={result} connectionType={exportScope.connectionType} availableConnections={exportConnections} currentConnectionId={exportScope.connectionId} currentDatabase={exportScope.database} currentSchema={exportScope.schema} transactionScope={{block_id:focusedBlock?.id,automatic_transactions:preferences.automaticTransactions && focusedBlock?.disable_automatic_transactions !== true,disable_automatic_transactions:focusedBlock?.disable_automatic_transactions === true,scope_inherited:focusedBlock ? inheritsSessionScope(focusedBlock) : true}} onInsertSql={insertSql} onTableExported={()=>setExplorerRefresh(n=>n+1)} disabled={session.busy || dataImportPending(session.dataImport) || state.runtimeStatus !== "ready"} view={gridView} initialExportSettings={exportOptions} defaultOpenFolder={Boolean(session.extras.export_open_folder ?? configurationDefaults.export_open_folder ?? true)} onOpenFolderChange={export_open_folder=>{updateConfigurationDefaults({export_open_folder});workspace.patchSession(session.id,s=>({...s,extras:{...s.extras,export_open_folder}}));}} onExportSettingsChange={export_settings=>{updateConfigurationDefaults({export_settings});workspace.patchSession(session.id,s=>({...s,extras:{...s.extras,export_settings}}));}} onImported={showResult} onChart={createChart} onMessage={reportMessage}/></Suspense>
             {charts.length > 0 && <div className="result-tabs chart-tabs"><button className={!activeChart?"active":""} onClick={()=>setActiveChart(undefined)}>{translateUi("Dados")}</button>{charts.map(chart=><div className="chart-tab" key={chart.id}><button className={activeChart === chart.id?"active":""} onClick={()=>setActiveChart(chart.id)} onDoubleClick={()=>setEditingChart({id:chart.id,title:chart.title})}>{chart.title}</button><button aria-label={`Excluir ${chart.title}`} onClick={()=>{workspace.patchSession(session.id,s=>({...s,modified:true,extras:{...s.extras,charts:charts.filter(c=>c.id !== chart.id)}}));if(activeChart === chart.id)setActiveChart(undefined);}}>{translateUi("×")}</button></div>)}</div>}
             {(session.results.length > 0 || commandExecutions.length > 0 || (session.richOutputs?.length ?? session.images.length) > 0) && <div className="result-tabs">{session.results.map((item) => <div className="chart-tab" key={item.result_id} style={{borderTop:`2px solid ${effectiveConnectionColor(session.blocks.find(b=>b.results?.some(r=>r.result_id === item.result_id))?.connection_id ?? session.savedConnectionId ?? "",catalogState.catalog) ?? "transparent"}`}}><button className={result?.result_id === item.result_id ? "active" : ""} onClick={() => {setActiveResult((previous) => ({ ...previous, [session.id]: item.result_id }));setActiveChart(undefined);}}><Table2 size={12} />{item.variable_name || t("Resultado")}<span>{item.row_count.toLocaleString(preferences.locale)}</span></button><button aria-label={`${t("Fechar resultado")} ${item.variable_name}`} disabled={session.busy} onClick={()=>{workspace.closeResult(session.id,item.result_id);setGridView(undefined);}}><X size={11}/></button></div>)}{commandExecutions.length > 0 && <button className={showingCommands ? "active" : ""} onClick={() => {setActiveChart(undefined);setActiveResult(previous=>({...previous,[session.id]:"__commands__"}));}}><Terminal size={12}/>{translateUi("Mensagens")}</button>}{(session.richOutputs?.length ?? session.images.length) > 0 && <button className={!result && !showingCommands ? "active" : ""} onClick={() => {setActiveChart(undefined);setActiveResult((previous) => ({ ...previous, [session.id]: "__images__" }));}}>{translateUi("Resultados Python")}<span>{session.richOutputs?.length ?? session.images.length}</span></button>}</div>}
             {activeChart ? (()=>{const chart=charts.find(c=>c.id === activeChart);return chart ? <Suspense fallback={<p>{translateUi("Carregando gráfico…")}</p>}><SavedChartView key={`${session.id}:${chart.id}`} session={session} chart={chart} sourceCache={chartSources.current} prepareSource={()=>workspace.ensureSession(session.id)} currentResult={result} view={gridViewOwner.current?.sessionId === session.id && gridViewOwner.current.resultId === result?.result_id ? gridView : undefined}
@@ -757,7 +768,7 @@ export function App() {
       pyniaOutput:<Suspense fallback={<p>{translateUi("Carregando Pynia…")}</p>}><PyniaOutputPanel defaults={configurationDefaults.pynia} sessionId={session.id} sessionTitle={session.title} initialState={session.extras.pynia_chat_state as Record<string,unknown>}/></Suspense>,
       variables:<>
 
-        <Suspense fallback={<p className="explorer-empty">{translateUi("Carregando variáveis…")}</p>}><VariableInspector sessionId={session.id} variables={session.variables} connectionType={exportScope.connectionType} availableConnections={exportConnections} currentConnectionId={exportScope.connectionId} currentDatabase={exportScope.database} currentSchema={exportScope.schema} onInsertSql={insertSql} onTableExported={()=>setExplorerRefresh(n=>n+1)} initialExportSettings={exportOptions} onExportSettingsChange={export_settings=>{updateConfigurationDefaults({export_settings});workspace.patchSession(session.id,s=>({...s,extras:{...s.extras,export_settings}}));}} disabled={session.busy} onResult={showResult} onVariables={variables => workspace.patchSession(session.id,s=>({...s,variables,resultRevision:s.resultRevision+1}))} onInsert={name=>insertInEditor(session.focusedBlockId,name)}/></Suspense>
+        <Suspense fallback={<p className="explorer-empty">{translateUi("Carregando variáveis…")}</p>}><VariableInspector sessionId={session.id} variables={session.variables} connectionType={exportScope.connectionType} availableConnections={exportConnections} currentConnectionId={exportScope.connectionId} currentDatabase={exportScope.database} currentSchema={exportScope.schema} transactionScope={{block_id:focusedBlock?.id,automatic_transactions:preferences.automaticTransactions && focusedBlock?.disable_automatic_transactions !== true,disable_automatic_transactions:focusedBlock?.disable_automatic_transactions === true,scope_inherited:focusedBlock ? inheritsSessionScope(focusedBlock) : true}} onInsertSql={insertSql} onTableExported={()=>setExplorerRefresh(n=>n+1)} initialExportSettings={exportOptions} onExportSettingsChange={export_settings=>{updateConfigurationDefaults({export_settings});workspace.patchSession(session.id,s=>({...s,extras:{...s.extras,export_settings}}));}} disabled={session.busy} onResult={showResult} onVariables={variables => workspace.patchSession(session.id,s=>({...s,variables,resultRevision:s.resultRevision+1}))} onInsert={name=>insertInEditor(session.focusedBlockId,name)}/></Suspense>
         <Suspense fallback={null}><VariableArchive sessionId={session.id} disabled={session.busy || dataImportPending(session.dataImport) || state.runtimeStatus !== "ready"} onMessage={reportMessage} onImported={(results,variables)=>{
           workspace.patchSession(session.id,s=>({...s,results:[...s.results.filter(prior=>!results.some(next=>next.variable_name===prior.variable_name)),...results],variables,resultRevision:s.resultRevision+1}));
           if(results.length){setActiveResult(previous=>({...previous,[session.id]:results[0].result_id}));setActiveChart(undefined);activateBottom("results");}
@@ -775,7 +786,7 @@ export function App() {
       }));
     }}/></Suspense>}
     {layoutDialog && dockControls && !editingLocked && <Suspense fallback={null}><LayoutDialog controls={dockControls} visiblePanels={dockPanels} restoreShortcut={shortcuts.restoreView} resetShortcut={shortcuts.resetLayout} onRestore={()=>restoreDockLayout()} onReset={()=>restoreDockLayout(true)} canSave={Boolean(profile) && !editingLocked} onSave={async()=>{await flushWorkspace.current();reportMessage(translateUi("Layout salvo."));}} onMessage={reportMessage} onClose={()=>setLayoutDialog(false)}/></Suspense>}
-    {entityInfo && <Suspense fallback={null}><EntityInfoDialog identifier={entityInfo.identifier} scope={{session_id:session.id,block_id:entityInfo.blockId,scope_inherited:entityScope.scopeInherited,connection_id:entityScope.connectionId,database:entityScope.database,schema:entityScope.schema}} onClose={()=>setEntityInfo(undefined)}/></Suspense>}
+    {entityInfo && <Suspense fallback={null}><EntityInfoDialog identifier={entityInfo.identifier} scope={{session_id:session.id,block_id:entityInfo.blockId,scope_inherited:entityScope.scopeInherited,automatic_transactions:entityScope.automaticTransactions,connection_id:entityScope.connectionId,database:entityScope.database,schema:entityScope.schema}} onClose={()=>setEntityInfo(undefined)}/></Suspense>}
     {tabContext && <><div className="context-dismiss" onClick={()=>setTabContext(undefined)}/><div className="tab-context" style={{left:Math.min(tabContext.x,innerWidth-190),top:Math.min(tabContext.y,innerHeight-190)}}><button onClick={()=>{workspace.duplicateSession(tabContext.id);setTabContext(undefined);}}>{translateUi("Duplicar análise")}</button><button onClick={()=>{const target=workspace.session(tabContext.id);if(target){setEditingTitle(target.id);setTitleDraft(target.title);}setTabContext(undefined);}}>{translateUi("Renomear")}</button><button onClick={()=>{run(closeSession(tabContext.id));setTabContext(undefined);}}>{translateUi("Fechar")}</button><button onClick={()=>{setClosingMany(state.sessions.filter(s=>s.id !== tabContext.id).map(s=>s.id));setTabContext(undefined);}}>{translateUi("Fechar outras")}</button><button onClick={()=>{setClosingMany(state.sessions.map(s=>s.id));setTabContext(undefined);}}>{translateUi("Fechar todas")}</button></div></>}
     {closingMany && <Modal title={translateUi("Fechar análises")} onClose={()=>setClosingMany(undefined)}><div className="confirm-copy"><p>{closingMany.length} {translateUi("análises. Alterações permanecem no workspace até serem salvas ou descartadas.")}</p><ul>{closingMany.map(id=><li key={id}>{workspace.session(id)?.title}{workspace.session(id)?.modified?" •":""}</li>)}</ul></div><footer className="modal-footer"><button onClick={()=>setClosingMany(undefined)}>{translateUi("Voltar")}</button><button disabled={closingMany.some(id=>workspace.session(id)?.busy)} onClick={()=>run((async()=>{for(const id of closingMany){const target=workspace.session(id);if(target){await workspace.closeSession(id);target.blocks.forEach(b=>disposeModel(b.id));}}setClosingMany(undefined);})())}>{translateUi("Descartar e fechar")}</button><button className="primary-button" disabled={closingMany.some(id=>workspace.session(id)?.busy)} onClick={()=>run((async()=>{for(const id of closingMany){const target=workspace.session(id);if(!target)continue;if(target.modified){await saveDocument(false,id);if(workspace.session(id)?.modified)return;}await workspace.closeSession(id);target.blocks.forEach(b=>disposeModel(b.id));}setClosingMany(undefined);})())}>{translateUi("Salvar e fechar")}</button></footer></Modal>}
     {editingChart && <Modal title={translateUi("Nome do gráfico")} onClose={()=>setEditingChart(undefined)}><div className="confirm-copy"><input autoFocus aria-label={translateUi("Nome do gráfico")} value={editingChart.title} onChange={e=>setEditingChart({...editingChart,title:e.target.value})}/></div><footer className="modal-footer"><button className="primary-button" onClick={()=>{workspace.patchSession(session.id,s=>({...s,modified:true,extras:{...s.extras,charts:charts.map(c=>c.id === editingChart.id?{...c,title:editingChart.title.trim() || c.title,config:{...c.config,title:editingChart.title.trim() || c.title}}:c)}}));setEditingChart(undefined);}}>{translateUi("Salvar")}</button></footer></Modal>}
@@ -788,7 +799,7 @@ export function App() {
     {notificationHistory && <NotificationHistory center={notificationCenter} entries={notificationState.entries} onActivate={openNotification} onSettings={()=>{setNotificationHistory(false);setNotificationDialog(true);}} onClose={()=>setNotificationHistory(false)}/>}
     {connectionDialog && <ConnectionDialog tunnels={catalogState.catalog.ssh_tunnels} onManageTunnels={manageSshTunnels} initial={session.connection ? {...session.connection, ssh_tunnel_id: session.connection.ssh_tunnel_id !== undefined ? session.connection.ssh_tunnel_id : activeSavedConnection?.config.ssh_tunnel_id} : undefined} connectionId={session.savedConnectionId} hasPassword={activeSavedConnection?.has_password} hasSshPassword={activeSavedConnection?.has_ssh_password} hasSshPassphrase={activeSavedConnection?.has_ssh_passphrase} onClose={() => setConnectionDialog(false)} onConnect={async (config, metadata) => { await workspace.connect(session.id, config, session.savedConnectionId, metadata?.use_saved_database_password !== false); setExplorerRefresh(n=>n+1); }} />}
     <SshHostTrustDialog />
-    {settingsDialog && <SettingsDialog initialTab={settingsInitialTab} preferences={preferences} shortcuts={shortcuts} transfer={configurationActions} onClose={() => { setSettingsDialog(false); setSettingsInitialTab("appearance"); }} onSave={async(p,next) => { await saveNotificationFlags(runtime,p);setPreferences(p);if(p.notifications && !preferences.notifications && isDesktop())run(requestPermission());setShortcuts(next); workspace.patchSession(session.id,s=>({...s,extras:{...s.extras,shared_delimiter:p.sharedDelimiter}})); try { localStorage.setItem("datapyn.desktop.shortcuts.v1", JSON.stringify(next)); } catch { reportMessage("Atalhos aplicados. Não foi possível persistir nesta máquina."); } setSettingsDialog(false); }} />}
+    {settingsDialog && <SettingsDialog initialTab={settingsInitialTab} preferences={preferences} shortcuts={shortcuts} transfer={configurationActions} onClose={() => { setSettingsDialog(false); setSettingsInitialTab("appearance"); }} onSave={async(p,next,changed) => { ++transactionPreferencesRevision.current;await saveNotificationFlags(runtime,p);const applied=await applyTransactionPreferences(runtime,p,changed?.has("automaticTransactions") === true);workspace.setAutomaticTransactions(applied.automaticTransactions);setPreferences(applied);if(p.notifications && !preferences.notifications && isDesktop())run(requestPermission());setShortcuts(next); workspace.patchSession(session.id,s=>({...s,extras:{...s.extras,shared_delimiter:p.sharedDelimiter}})); try { localStorage.setItem("datapyn.desktop.shortcuts.v1", JSON.stringify(next)); } catch { reportMessage("Atalhos aplicados. Não foi possível persistir nesta máquina."); } setSettingsDialog(false); }} />}
     {connectionPicker && <ConnectionPicker currentId={session.blocks.find(b=>b.id === connectionPicker)?.connection_id ?? session.savedConnectionId} onSelect={c => { if (connectionPicker === session.blocks[0].id) run(connectSaved(c).then(()=>workspace.updateBlock(session.id,session.blocks[0].id,{connection_id:undefined,database_name:undefined,schema:undefined}))); else workspace.updateBlock(session.id,connectionPicker,{connection_id:c.id,database_name:undefined,schema:undefined}); setConnectionPicker(undefined); requestAnimationFrame(()=>focusEditor(session.focusedBlockId)); }} onDefault={()=>{workspace.updateBlock(session.id,connectionPicker,{connection_id:undefined,database_name:undefined,schema:undefined});setConnectionPicker(undefined);}} onClose={()=>setConnectionPicker(undefined)}/>}
     {connectionsManager && <div className="modal-overlay"><section className="modal connection-manager" role="dialog" aria-modal="true" aria-label={translateUi("Gerenciar conexões")}><header className="modal-header"><h2>{translateUi("Gerenciar conexões")}</h2><button onClick={()=>setConnectionsManager(false)}>{translateUi("×")}</button></header><ConnectionsSidebar onManageTunnels={manageSshTunnels} activeConnectionId={session.savedConnectionId} onConnect={connectSaved} onError={reportMessage}/></section></div>}
     {closingId && <div className="modal-overlay"><section className="modal confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="close-title"><header className="modal-header"><Save size={18} /><div><h2 id="close-title">{translateUi("Salvar alterações?")}</h2><p>{workspace.session(closingId)?.title}</p></div></header><p className="confirm-copy">{translateUi("Salve a análise em um arquivo .dpw antes de fechar a aba.")}</p><footer className="modal-footer"><button className="secondary-button" onClick={() => setClosingId(undefined)}>{translateUi("Voltar")}</button><button className="secondary-button" onClick={() => run(closeConfirmed(false))}>{translateUi("Descartar")}</button><button className="primary-button" onClick={() => run(closeConfirmed(true))}>{translateUi("Salvar e fechar")}</button></footer></section></div>}
@@ -813,8 +824,8 @@ const BlockCard = memo(function BlockCard({ block, index, count, session, disabl
   },[session.id,block.id,index,locked,session.busy]);
   const customConnection = catalog.catalog.connections.find(c => c.id === (block.connection_id ?? session.savedConnectionId));
   const dialect = blockConnectionConfig(session,block)?.db_type;
-  const scope = blockScope(session, block),metadata=scopeMetadata(session,block);
-  const diagnosticKey = JSON.stringify([session.id, scope.connectionId, scope.database, scope.schema, scope.scopeInherited, dialect, preferences.sharedDelimiter, preferences.locale, diagnosticRevision]);
+  const scope = blockScope(session, block,preferences.automaticTransactions),metadata=scopeMetadata(session,block);
+  const diagnosticKey = JSON.stringify([session.id, scope.connectionId, scope.database, scope.schema, scope.scopeInherited, scope.automaticTransactions, dialect, preferences.sharedDelimiter, preferences.locale, diagnosticRevision]);
   useParameterScan(block.language === "sql" ? [block.code] : [], (block.sql_parameters ?? []) as ParameterDefinition[], false, preferences.sharedDelimiter,
     parameters => workspace.updateBlock(session.id,block.id,{sql_parameters:parameters}));
   return <article ref={article} style={{pointerEvents:locked ? "none" : undefined,...(session.maximizedBlockId && session.maximizedBlockId !== block.id ? {display:"none"} : {}),borderLeftColor:effectiveConnectionColor(block.connection_id ?? session.savedConnectionId ?? "",catalog.catalog)}} className={`code-block ${block.language} ${session.focusedBlockId === block.id ? "focused" : ""} ${session.maximizedBlockId === block.id ? "maximized" : ""}`} data-block-id={block.id}
@@ -830,7 +841,7 @@ const BlockCard = memo(function BlockCard({ block, index, count, session, disabl
       <div className="block-header-details">
       <input className="block-name" value={block.block_name} placeholder={translateUi(block.language === "sql" ? "Nome do resultado (df)" : "Nome do bloco")} aria-label={`Nome do bloco ${index + 1}`} onChange={(event) => workspace.updateBlock(session.id, block.id, { block_name: event.target.value })} />
       {block.language === "sql" && <><button className="block-scope" disabled={session.busy} title={customConnection?.name ?? session.connection?.name ?? translateUi("Conexão da aba")} onClick={onPickConnection}><Database size={12}/><span>{customConnection?.name ?? session.connection?.name ?? translateUi("Conexão da aba")}</span></button>
-        <BlockScopePicker sessionId={session.id} blockId={block.id} scopeInherited={scope.scopeInherited} connectionId={scope.connectionId} dbType={dialect} database={metadata?.schemaSnapshot?.database ?? scope.database} schema={metadata?.schemaSnapshot?.current_schema ?? scope.schema}
+        <BlockScopePicker sessionId={session.id} blockId={block.id} scopeInherited={scope.scopeInherited} automaticTransactions={scope.automaticTransactions} connectionId={scope.connectionId} dbType={dialect} database={metadata?.schemaSnapshot?.database ?? scope.database} schema={metadata?.schemaSnapshot?.current_schema ?? scope.schema}
           connected={scopeReady && Boolean(scope.connectionId || session.connection)} disabled={session.busy || locked} refresh={scopeRefresh} onError={reportMessage}
           onChange={context=>onScopeChange(session.id,block.id,context)} /></>}
       {!block.is_active && <span className="block-inactive">{translateUi("Desativado")}</span>}
@@ -841,6 +852,8 @@ const BlockCard = memo(function BlockCard({ block, index, count, session, disabl
         {label:translateUi("Mover bloco para cima"),disabled:index===0 || session.busy,onSelect:()=>workspace.moveBlock(session.id,block.id,-1)},
         {label:translateUi("Mover bloco para baixo"),disabled:index===count-1 || session.busy,onSelect:()=>workspace.moveBlock(session.id,block.id,1)},
         {label:translateUi("Duplicar bloco"),disabled:session.busy,onSelect:()=>workspace.duplicateBlock(session.id,block.id)},
+        {label:translateUi("Desativar transações automáticas neste bloco"),checked:block.disable_automatic_transactions === true,disabled:session.busy,onSelect:()=>workspace.updateBlock(session.id,block.id,{disable_automatic_transactions:block.disable_automatic_transactions !== true})},
+        ...(!preferences.automaticTransactions ? [{label:translateUi("Transações automáticas desativadas globalmente"),disabled:true,onSelect:()=>{}}] : []),
         ...(block.language === "sql" ? [{label:translateUi("Baixar consulta"),disabled,onSelect:onDownload}] : []),
         {label:translateUi("Maximizar ou restaurar bloco"),onSelect:()=>workspace.maximizeBlock(session.id,block.id)},
         {label:translateUi("Excluir bloco"),separator:true,danger:true,disabled:session.busy,onSelect:()=>{workspace.removeBlock(session.id,block.id);disposeModel(block.id);}},
@@ -856,7 +869,7 @@ const BlockCard = memo(function BlockCard({ block, index, count, session, disabl
       owner.addEventListener("pointermove", move); owner.addEventListener("pointerup", up, { once: true }); }} />
     </div>
     <BlockSyntaxDiagnostics id={block.id} code={block.code} language={block.language} enabled={!block.cell_type || block.cell_type === "code"} ready={diagnosticsReady} focused={session.focusedBlockId === block.id} contextKey={diagnosticKey}
-      params={() => { const context = block.language === "python" ? diagnosticContext(session.id) : undefined; return { session_id: session.id, block_id:block.id, scope_inherited:scope.scopeInherited,connection_id: scope.connectionId, database: scope.database, schema: scope.schema, db_type: dialect, shared_delimiter: preferences.sharedDelimiter, locale: preferences.locale, global_imports: context?.globalImports, preamble: context?.preamble }; }}
+      params={() => { const context = block.language === "python" ? diagnosticContext(session.id) : undefined; return { session_id: session.id, block_id:block.id, scope_inherited:scope.scopeInherited,automatic_transactions:scope.automaticTransactions,connection_id: scope.connectionId, database: scope.database, schema: scope.schema, db_type: dialect, shared_delimiter: preferences.sharedDelimiter, locale: preferences.locale, global_imports: context?.globalImports, preamble: context?.preamble }; }}
       onReveal={marker => { workspace.updateBlock(session.id, block.id, { collapsed: false }); workspace.focusBlock(session.id, block.id); revealEditorRange(block.id, { startLineNumber: marker.start_line, startColumn: marker.start_column, endLineNumber: marker.end_line, endColumn: marker.end_column }); }} />
     <BlockExecutionLine active={block.status === "running" || block.status === "cancelling"}/>
   </article>;

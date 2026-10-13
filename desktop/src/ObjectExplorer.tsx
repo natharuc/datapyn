@@ -9,7 +9,7 @@ import type { MenuPoint } from "./contextMenuModel";
 import "./explorer.css";
 
 export interface ObjectExplorerProps {
-  sessionId: string; blockId?: string; scopeInherited?: boolean; connectionId?: string; database?: string; schema?: string; dbType?: string; connected?: boolean; refresh?: number;
+  sessionId: string; blockId?: string; scopeInherited?: boolean; automaticTransactions?: boolean; connectionId?: string; database?: string; schema?: string; dbType?: string; connected?: boolean; refresh?: number;
   onInsert: (code: string, language?: "sql" | "python", newBlock?: boolean) => void;
   onContextChange?: (context: ExplorerContext) => Promise<void> | void;
   onError?: (message: string) => void; disabled?: boolean;
@@ -24,7 +24,7 @@ function NodeIcon({ node }: { node: ExplorerNode }) {
   return <Folder size={14} />;
 }
 
-export function ObjectExplorer({ sessionId, blockId, scopeInherited, connectionId, database, schema, dbType = "sqlserver", connected = true, refresh = 0, onInsert, onContextChange, onError, disabled = false }: ObjectExplorerProps) {
+export function ObjectExplorer({ sessionId, blockId, scopeInherited, automaticTransactions, connectionId, database, schema, dbType = "sqlserver", connected = true, refresh = 0, onInsert, onContextChange, onError, disabled = false }: ObjectExplorerProps) {
   useLocale();
   const controller = useRef(new ExplorerController());
   const [roots, setRoots] = useState<ExplorerNode[]>([]), [children, setChildren] = useState<Record<string, ExplorerNode[]>>({}), [expanded, setExpanded] = useState(new Set<string>()), [loading, setLoading] = useState(new Set<string>());
@@ -43,11 +43,11 @@ export function ObjectExplorer({ sessionId, blockId, scopeInherited, connectionI
   }, []);
   useEffect(() => {
     previousRefresh.current=refresh;
-    ++generation.current; controller.current.setScope({ session_id: sessionId, block_id: blockId, ...(blockId || scopeInherited!==undefined?{scope_inherited:Boolean(scopeInherited)}:{}), connection_id: connectionId, database, schema }); controller.current.clear();
+    ++generation.current; controller.current.setScope({ session_id: sessionId, block_id: blockId, ...(blockId || scopeInherited!==undefined?{scope_inherited:Boolean(scopeInherited)}:{}), ...(automaticTransactions!==undefined?{automatic_transactions:automaticTransactions}:{}), connection_id: connectionId, database, schema }); controller.current.clear();
     setRoots([]); setChildren({}); setExpanded(new Set()); setSelected(undefined); setMenu(undefined); setDetails(undefined); setLoading(new Set()); setError("");
     if (connected) void load();
     return () => { ++generation.current; };
-  }, [sessionId, blockId, scopeInherited, connectionId, database, schema, connected, load]);
+  }, [sessionId, blockId, scopeInherited, automaticTransactions, connectionId, database, schema, connected, load]);
   async function refreshTree(){const revision=++generation.current;setLoading(new Set(["$root"]));setError("");setMenu(undefined);setDetails(undefined);
     try{const fresh=await reloadExpanded(controller.current,expanded,()=>revision===generation.current);if(fresh){setRoots(fresh.roots);setChildren(fresh.children);setExpanded(fresh.expanded);}}
     catch(failure){if(revision===generation.current)setError(errorText(failure));}
@@ -73,7 +73,7 @@ export function ObjectExplorer({ sessionId, blockId, scopeInherited, connectionI
     try { await task(); }
     catch (failure) { if (revision === generation.current) { const message = errorText(failure); setError(message); onError?.(message); } }
   }
-  const nodeParams = (node: ExplorerNode) => ({ session_id: sessionId, block_id: blockId, ...(blockId || scopeInherited!==undefined?{scope_inherited:Boolean(scopeInherited)}:{}),connection_id: connectionId, database: node.database || database, schema: node.schema || schema, name: node.name, kind: node.kind });
+  const nodeParams = (node: ExplorerNode) => ({ session_id: sessionId, block_id: blockId, ...(blockId || scopeInherited!==undefined?{scope_inherited:Boolean(scopeInherited)}:{}), ...(automaticTransactions!==undefined?{automatic_transactions:automaticTransactions}:{}),connection_id: connectionId, database: node.database || database, schema: node.schema || schema, name: node.name, kind: node.kind });
   async function showDetails(node: ExplorerNode) {
     const revision = generation.current; setDetails({ node });
     try { const data = await runtime.request<ExplorerDetails>("explorer.details", nodeParams(node)); if (revision === generation.current) setDetails((prior) => prior?.node.id === node.id ? { node, data } : prior); }
@@ -106,7 +106,7 @@ export function ObjectExplorer({ sessionId, blockId, scopeInherited, connectionI
   async function useContext(node: ExplorerNode) {
     const context = { database: ["database", "catalog"].includes(node.kind) ? node.name : node.database || database, schema: node.kind === "schema" ? node.name : ["database", "catalog"].includes(node.kind) ? undefined : schema };
     if (onContextChange) await onContextChange(context);
-    else await runtime.request("explorer.use_database", { session_id: sessionId, block_id: blockId, ...(blockId || scopeInherited!==undefined?{scope_inherited:Boolean(scopeInherited)}:{}),connection_id: connectionId, ...context });
+    else await runtime.request("explorer.use_database", { session_id: sessionId, block_id: blockId, ...(blockId || scopeInherited!==undefined?{scope_inherited:Boolean(scopeInherited)}:{}), ...(automaticTransactions!==undefined?{automatic_transactions:automaticTransactions}:{}),connection_id: connectionId, ...context });
   }
   function openMenu(node: ExplorerNode, ownerDocument: Document, anchor: MenuPoint) {
     setSelected(node.id);

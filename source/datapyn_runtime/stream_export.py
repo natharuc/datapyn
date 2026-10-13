@@ -219,12 +219,14 @@ def _sqlite_stream(connector, query, base, export_format, parameters, csv_option
                 result.columns_per_file.append(columns)
             finally:
                 cursor.close()
-        if result.cancelled:
-            connector.connection.rollback()
-        else:
-            connector.connection.commit()
+        if getattr(connector, "automatic_transactions", True):
+            if result.cancelled:
+                connector.connection.rollback()
+            else:
+                connector.connection.commit()
     except BaseException:
-        connector.connection.rollback()
+        if getattr(connector, "automatic_transactions", True):
+            connector.connection.rollback()
         raise
     return result
 

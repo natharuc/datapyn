@@ -12,6 +12,42 @@ function contextEvent(payload: Record<string, unknown>): RuntimeEvent {
 }
 
 describe("focused SQL scope preparation", () => {
+  it("separates physical transaction modes while preserving legacy automatic deduplication",async()=>{
+    const requests:Record<string,unknown>[]=[];
+    const client=new ScopePreparation(transport(async(_,params)=>{requests.push(params);return ready;}));
+    const legacy=client.request({...scope,blockId:"block"},"SELECT * FROM same_table");
+    const automatic=client.request({...scope,blockId:"block",automaticTransactions:true},"SELECT * FROM same_table");
+    const manual=client.request({...scope,blockId:"block",automaticTransactions:false},"SELECT * FROM same_table");
+    expect(automatic).toBe(legacy);expect(manual).not.toBe(legacy);
+    await Promise.all([legacy,automatic,manual]);
+    expect(requests).toHaveLength(2);expect(requests[0]).not.toHaveProperty("automatic_transactions");
+    expect(requests[1]).toMatchObject({automatic_transactions:false,block_id:"block"});
+    expect(client.request({...scope,blockId:"block",automaticTransactions:false},"SELECT 1 FROM same_table")).toBe(manual);
+  });
+  it("retries only the failed mode while allowing a late opposite-mode acknowledgement",async()=>{
+    let finishManual!:(value:PreparationResult)=>void;
+    const requests:Record<string,unknown>[]=[];
+    const client=new ScopePreparation(transport(async(_,params)=>{requests.push(params);return params.automatic_transactions===false?new Promise(resolve=>{finishManual=resolve;}):ready;}));
+    const manualScope={...scope,blockId:"block",automaticTransactions:false},automaticScope={...scope,blockId:"block",automaticTransactions:true};
+    const manual=client.request(manualScope),automatic=client.request(automaticScope);
+    await automatic;
+    client.accept(contextEvent({block_id:"block",automatic_transactions:false,metadata_state:"error"}));
+    expect(client.request(automaticScope)).toBe(automatic);
+    const retried=client.request(manualScope);expect(retried).not.toBe(manual);
+    finishManual(ready);await manual;
+    expect(client.request(automaticScope)).toBe(automatic);
+    await Promise.resolve();finishManual(ready);await retried;
+    expect(requests.map(request=>request.automatic_transactions)).toEqual([false,true,false]);
+  });
+  it("physical block invalidation clears both modes without releasing peer blocks",async()=>{
+    const client=new ScopePreparation(transport(async()=>ready)),first={...scope,blockId:"first"},peer={...scope,blockId:"peer",automaticTransactions:false};
+    const automatic=client.request(first),manual=client.request({...first,automaticTransactions:false}),other=client.request(peer);
+    await Promise.all([automatic,manual,other]);
+    client.accept(contextEvent({block_id:"first",automatic_transactions:false,metadata_invalidated:true,metadata_invalidation_scope:"block"}));
+    expect(client.request(first)).not.toBe(automatic);
+    expect(client.request({...first,automaticTransactions:false})).not.toBe(manual);
+    expect(client.request(peer)).toBe(other);
+  });
   it("routes inherited and pinned metadata independently even when their logical scope is equal",async()=>{
     const requests:Record<string,unknown>[]=[];const client=new ScopePreparation(transport(async(_,params)=>{requests.push(params);return ready;}));
     const pinned=client.request({...scope,blockId:"block"}),inherited=client.request({...scope,blockId:"block",scopeInherited:true});await Promise.all([pinned,inherited]);

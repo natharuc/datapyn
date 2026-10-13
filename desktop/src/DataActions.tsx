@@ -26,6 +26,7 @@ export interface DataActionsProps {
   initialExportSettings?: Partial<ExportSettings>; onExportSettingsChange?: (settings: ExportSettings) => void;
   defaultOpenFolder?:boolean;onOpenFolderChange?:(openFolder:boolean)=>void;
   availableConnections?: ExportConnection[]; currentConnectionId?: string; currentDatabase?: string; currentSchema?: string;
+  transactionScope?: {block_id?:string; automatic_transactions:boolean; disable_automatic_transactions:boolean; scope_inherited:boolean};
   onInsertSql?: (code: string) => void;
   hideImport?: boolean; hideChart?: boolean; hideResultActions?: boolean; onTableExported?: () => void;
 }
@@ -56,7 +57,7 @@ export function DataModal({ title, children, onClose }: {title: string; children
   </div>, host.owner.body);
 }
 export function DataActions({sessionId, result, connectionType, disabled, view, onImported, onChart, onMessage, initialExportSettings, onExportSettingsChange,
-  defaultOpenFolder=true, onOpenFolderChange, availableConnections=[], currentConnectionId, currentDatabase, currentSchema, onInsertSql, hideImport=false, hideChart=false, hideResultActions=false, onTableExported, onImportData, importState, onCancelImport}: DataActionsProps) {
+  defaultOpenFolder=true, onOpenFolderChange, availableConnections=[], currentConnectionId, currentDatabase, currentSchema, transactionScope, onInsertSql, hideImport=false, hideChart=false, hideResultActions=false, onTableExported, onImportData, importState, onCancelImport}: DataActionsProps) {
   useLocale();
   const formId = useId();
   const [dialog, setDialog] = useState<"import" | "export" | "table" | "sql" | "summary">();
@@ -188,7 +189,7 @@ export function DataActions({sessionId, result, connectionType, disabled, view, 
   }
   async function exportTable(operationId: string) {
     startProgress();
-    const exported = await runtime.request<{row_count: number}>("result.export_table", {...source(),operation_id:operationId,connection_id:destinationConnection || undefined,connection_schema:destinationConnection===(currentConnectionId||"")?currentSchema:undefined,database:database || undefined,table:targetName,schema:effectiveTemporary ? undefined : schema || undefined,temporary:effectiveTemporary,if_exists:ifExists,chunksize});
+    const exported = await runtime.request<{row_count: number}>("result.export_table", {...source(),...transactionScope,operation_id:operationId,connection_id:destinationConnection || undefined,connection_schema:destinationConnection===(currentConnectionId||"")?currentSchema:undefined,database:database || undefined,table:targetName,schema:effectiveTemporary ? undefined : schema || undefined,temporary:effectiveTemporary,if_exists:ifExists,chunksize});
     onTableExported?.(); onMessage(t("{rows} linhas exportadas para {path}", {rows: exported.row_count.toLocaleString(), path: `${effectiveTemporary || !schema ? "" : `${schema}.`}${targetName}`})); setDialog(undefined);
   }
   const sqlForm = dialog === "sql" || dialog === "export" && format === "sql";

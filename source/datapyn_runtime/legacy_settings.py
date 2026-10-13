@@ -37,6 +37,7 @@ PREFERENCE_KEYS = {
     "editor/code_font_size": ("editorFontSize", int), "results/grid_font_size": ("gridFontSize", int),
     "notifications/enabled": ("notifications", bool), "notifications/sound": ("notificationSound", bool),
     "parameters/shared_delimiter": ("sharedDelimiter", str),
+    "transactions/automatic_transactions": ("automaticTransactions", bool),
 }
 SECRET_INI_KEYS = {"password", "token", "access_token", "client_secret", "telegram_bot_token", "email_password",
                    "notifications/telegram/bot_token", "notifications/email/password", "sources_v2"}

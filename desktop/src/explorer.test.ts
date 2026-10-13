@@ -2,6 +2,19 @@ import { describe, expect, it } from "vitest";
 import { ExplorerController, explorerRows, quoteIdentifier, quoteIdentifierPart, identifierParts,reloadExpanded, type ExplorerNode } from "./explorer";
 import type { RuntimeTransport } from "./runtime";
 describe("Object Explorer", () => {
+  it("rejects late private temporary tables when the same block switches physical transaction mode",async()=>{
+    const resolvers:Array<(value:{nodes:ExplorerNode[]})=>void>=[],requests:Record<string,unknown>[]=[];
+    const transport={request:(_method:string,params:Record<string,unknown>)=>{requests.push(params);return new Promise(resolve=>resolvers.push(resolve as typeof resolvers[number]));}} as unknown as RuntimeTransport;
+    const controller=new ExplorerController(transport),scope={session_id:"s",block_id:"block",connection_id:"main",database:"db",schema:"dbo"};
+    controller.setScope({...scope,automatic_transactions:false});const manual=controller.list();
+    controller.setScope({...scope,automatic_transactions:true});const automatic=controller.list();
+    const nodes=[{id:"regular",name:"regular",kind:"table",has_children:false}];
+    resolvers[1]({nodes});expect(await automatic).toEqual(nodes);
+    resolvers[0]({nodes:[{id:"private",name:"#private",kind:"table",has_children:false}]});expect(await manual).toEqual([]);
+    expect(await controller.list()).toEqual(nodes);
+    controller.setScope(scope);expect(await controller.list()).toEqual(nodes); // Legacy mode is automatic.
+    expect(requests.map(request=>request.automatic_transactions)).toEqual([false,true]);
+  });
   it("rejects old block metadata when focus moves to another physical connector in the same scope",async()=>{
     const resolvers:Array<(value:{nodes:ExplorerNode[]})=>void>=[],requests:Record<string,unknown>[]=[];
     const transport={request:(_method:string,params:Record<string,unknown>)=>{requests.push(params);return new Promise(resolve=>resolvers.push(resolve as typeof resolvers[number]));}} as unknown as RuntimeTransport;
