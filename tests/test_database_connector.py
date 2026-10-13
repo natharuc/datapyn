@@ -51,8 +51,9 @@ class TestDatabaseConnectorConnectionString:
     """Testes de construção de string de conexão"""
 
     @patch("database.database_connector.pyodbc.drivers", return_value=_MOCK_ODBC_DRIVERS)
-    def test_sqlserver_windows_auth_string(self, _mock_drivers):
+    def test_sqlserver_windows_auth_string(self, _mock_drivers, monkeypatch):
         """Deve construir string SQL Server com Windows Auth"""
+        monkeypatch.setattr(sys, "platform", "win32")
         from database.database_connector import DatabaseConnector
 
         connector = DatabaseConnector()
@@ -303,8 +304,9 @@ class TestDatabaseConnectorConnectionString:
         assert "Unsupported database type" in str(exc_info.value)
 
     @patch("database.database_connector.pyodbc.drivers", return_value=_MOCK_ODBC_DRIVERS)
-    def test_sqlserver_localdb_connection_string(self, _mock_drivers):
+    def test_sqlserver_localdb_connection_string(self, _mock_drivers, monkeypatch):
         """Deve construir string LocalDB sem porta e com Windows Auth automatico"""
+        monkeypatch.setattr(sys, "platform", "win32")
         from database.database_connector import DatabaseConnector
         from urllib.parse import unquote
 
@@ -579,8 +581,9 @@ class TestDatabaseConnectorConnectionString:
         assert result.iloc[0, 0] == 1
 
     @patch("database.database_connector.pyodbc.drivers", return_value=_MOCK_ODBC_DRIVERS)
-    def test_sqlserver_legacy_windows_flag_keeps_backward_compatibility(self, _mock_drivers):
+    def test_sqlserver_legacy_windows_flag_keeps_backward_compatibility(self, _mock_drivers, monkeypatch):
         """Flag antiga de Windows Auth deve continuar funcionando sem auth_mode salvo."""
+        monkeypatch.setattr(sys, "platform", "win32")
         from database.database_connector import DatabaseConnector
 
         connector = DatabaseConnector()
@@ -891,8 +894,9 @@ class TestUseDatabasePersistence:
         mock_cursor.execute.assert_called_once_with("SELECT 1")
 
     @patch("database.database_connector.pyodbc.drivers", return_value=_MOCK_ODBC_DRIVERS)
-    def test_checkout_event_registered_for_sqlserver(self, _mock_drivers):
+    def test_checkout_event_registered_for_sqlserver(self, _mock_drivers, monkeypatch):
         """Engine SQL Server deve registrar evento checkout no pool"""
+        monkeypatch.setattr(sys, "platform", "win32")
         from database.database_connector import DatabaseConnector
         from sqlalchemy import event
 
