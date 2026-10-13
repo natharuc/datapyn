@@ -12,6 +12,13 @@ dependencies = [
     "sqlalchemy>=2.0.50",
     "pymssql>=2.3.13",
     "pyodbc>=5.0.0",
+    # Per-connection network authentication, including TLS through SSH.
+    "python-tds==1.17.1",
+    "sqlalchemy-pytds>=1.0.2,<2",
+    "pyspnego>=0.12.4,<1",
+    "pyOpenSSL>=26.4,<27",
+    "gssapi>=1.12; sys_platform != 'win32'",
+    "krb5>=0.10; sys_platform != 'win32'",
     "mysql-connector-python>=9.7.0",
     "PyMySQL>=1.2.0",
     "psycopg2-binary>=2.9.12",

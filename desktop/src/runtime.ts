@@ -141,7 +141,7 @@ export function createRuntimeRequester(call: <T>(method: string, params: Record<
     try {
       try {
         const result=await call<T>(method, params);
-        if(method==="connection.connect" || method==="connection.test")current();
+        if(method==="connection.connect" || method==="connection.test" || method==="ssh.tunnels.test")current();
         return result;
       }
       catch (failure) {

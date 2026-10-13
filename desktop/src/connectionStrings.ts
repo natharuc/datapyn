@@ -10,6 +10,7 @@ const odbcValue = (value: string) => `{${value.replace(/}/g, "}}")}}`;
 const pairs = (values: Array<[string, string]>, quote = adoValue) => values.map(([key, value]) => `${key}=${quote(value)}`).join(";") + ";";
 function password(config: ConnectionConfig, include: boolean) { return include ? config.password ?? "" : PASSWORD_PLACEHOLDER; }
 function auth(config: ConnectionConfig) { return config.use_windows_auth ? "windows" : config.sqlserver_auth_mode ?? "sql_password"; }
+function networkAuth(config: ConnectionConfig) { return config.db_type === "sqlserver" && ["ntlm", "kerberos"].includes(auth(config)); }
 const pgSchema = (value: string) => /^[a-z_][a-z0-9_$]*$/.test(value) ? value : `"${value.replace(/"/g, '""')}"`;
 const pgOptions = (value: string) => `-csearch_path=${pgSchema(value).replace(/[\\\s]/g, character => `\\${character}`)}`;
 function parsePgSchema(value: string) { return /^"(?:[^"]|"")*"$/.test(value) ? value.slice(1, -1).replace(/""/g, '"') : value; }
@@ -25,6 +26,7 @@ function pgQuery(config: ConnectionConfig): Array<[string, string]> {
 }
 
 export function connectionStringFormats(config: ConnectionConfig): Array<{ id: ConnectionStringFormat; label: string }> {
+  if (networkAuth(config)) return [{ id: "python", label: "Python · TDS / SPNEGO" }];
   return [...(config.db_type === "databricks" || config.database.includes("?") ? [] : [{ id: "uri" as const, label: "URI · SQLAlchemy" }]),
     { id: "native" as const, label: config.db_type === "databricks" ? "ODBC" : ".NET" },
     { id: "python" as const, label: "Python" }, { id: "csharp" as const, label: "C#" }];
@@ -65,6 +67,10 @@ function nativeString(config: ConnectionConfig, include: boolean, odbc = false):
 /** Credentials are only formatted from caller-provided transient data; no storage, logging or requests. */
 export function formatConnectionString(config: ConnectionConfig, format: ConnectionStringFormat, includePassword = false): string {
   const kind = config.db_type;
+  if (networkAuth(config)) {
+    if (format !== "python") throw new Error("NTLM/Kerberos com credenciais explícitas requerem o formato Python TDS/SPNEGO.");
+    return `import certifi\nimport pytds\nfrom pytds.login import SpnegoAuth\n\nauth = SpnegoAuth(\n    username=${literal(config.username)},\n    password=${literal(password(config, includePassword))},\n    hostname=${literal(`${config.host}:${config.port || 1433}`)},\n    service="MSSQLSvc",\n    protocol=${literal(auth(config))},\n)\nconnection = pytds.connect(\n    server=${literal(config.host)},\n    port=${config.port || 1433},\n    database=${literal(config.database)},\n    auth=auth,\n    cafile=${config.ssl_ca ? literal(config.ssl_ca) : "certifi.where()"},\n    validate_host=True,\n    enc_login_only=False,\n    disable_connect_retry=True,\n)`;
+  }
   if (format === "native") return nativeString(config, includePassword);
   if (format === "uri") {
     if (kind === "databricks") throw new Error("Use ODBC ou Python para Databricks.");

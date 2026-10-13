@@ -748,13 +748,16 @@ class Supervisor:
                 saved = self.catalog._find("connections", reference)
                 draft = routed.get("config")
                 has_draft = isinstance(draft, dict)
-                same_database = not has_draft or database_credential_identity(saved["config"]) == database_credential_identity(draft)
-                same_ssh = not has_draft or bool((draft.get("ssh") or {}).get("enabled")) and ssh_identity(saved["config"]) == ssh_identity(draft)
+                public_saved = self.catalog.resolve_ssh(saved["config"], resolve_credentials=False)
+                public_draft = self.catalog.resolve_ssh(draft, resolve_credentials=False) if has_draft else None
+                same_database = not has_draft or database_credential_identity(public_saved) == database_credential_identity(public_draft)
+                same_ssh = not has_draft or bool((public_draft.get("ssh") or {}).get("enabled")) and ssh_identity(public_saved) == ssh_identity(public_draft)
                 routed["_connection_config"] = self.catalog.config(reference,
                     resolve_database_password=resolve_database_password and same_database,
                     resolve_ssh_credentials=same_ssh)
                 routed["_connection_name"] = saved["name"]
                 if credential_identifier:
+                    routed["config"] = public_draft
                     routed["_connection_config"] = connection_test_config(routed, match_database_identity=True)
         # A client may configure a database, but may not redirect host trust to
         # an arbitrary file. Every profile owns an independent pin registry.
@@ -762,10 +765,13 @@ class Supervisor:
                         for key in ("config", "_connection_config"))
         for key in ("config", "_connection_config"):
             if isinstance(routed.get(key), dict):
-                routed[key] = dict(routed[key])
+                routed[key] = self.catalog.resolve_ssh(routed[key])
                 routed[key].pop("_ssh_trust_path", None)
-                if needs_ssh:
+                routed[key].pop("_ssh_catalog_path", None)
+                if needs_ssh or (routed[key].get("ssh") or {}).get("enabled"):
                     routed[key]["_ssh_trust_path"] = str(self.profile_path / "ssh_known_hosts.json")
+                if routed[key].get("ssh_tunnel_id"):
+                    routed[key]["_ssh_catalog_path"] = str(self.catalog.path)
         return routed
 
     def _session(self, params):
@@ -802,6 +808,7 @@ class Supervisor:
 
     def dispatch(self, method: str, params: dict, request_id: int):
         if method == "system.info":
+            from src.database.sqlserver_network_auth import sqlserver_authentication_capabilities
             return {
                 "protocol_version": PROTOCOL_VERSION,
                 "python_version": platform.python_version(),
@@ -816,6 +823,7 @@ class Supervisor:
                     "max_output_bytes": 256 * 1024,
                     "qt_required": False,
                     "connection_catalog": True,
+                    "sqlserver_authentication": sqlserver_authentication_capabilities(),
                     "lazy_explorer": True,
                     "editor_intelligence": True,
                 },
@@ -849,6 +857,31 @@ class Supervisor:
                     "executions": executions, "packages": packages, "pynia": pynia, "background": background}
         if method.startswith("connections.") or method.startswith("groups."):
             return self.catalog.dispatch(method, params)
+        if method in {"ssh.tunnels.list", "ssh.tunnels.save", "ssh.tunnels.delete"}:
+            return self.catalog.dispatch(method, params)
+        if method == "ssh.tunnels.test":
+            from .connection_catalog import normalized_ssh, ssh_identity, SSH_SECRET_KEYS
+            from copy import deepcopy
+            if params.get("test_id") is not None:
+                self._identifier(params["test_id"], "test_id")
+            draft = params.get("config")
+            if draft is not None and not isinstance(draft, dict):
+                raise ValueError("SSH config must be an object")
+            identifier = params.get("tunnel_id")
+            public = normalized_ssh({**draft, "enabled": True}) if draft is not None else None
+            config = self.catalog.tunnel_config(identifier, resolve_credentials=False) if identifier else {}
+            same_identity = public is None or ssh_identity({"ssh": config}) == ssh_identity({"ssh": public})
+            if identifier and same_identity:
+                config = self.catalog.tunnel_config(identifier)
+            if draft is not None:
+                secrets = {key: config[key] for key in SSH_SECRET_KEYS if config.get(key)} if same_identity else {}
+                secrets.update({key: str(draft[key]) for key in SSH_SECRET_KEYS if draft.get(key)})
+                config = {**public, **secrets}
+            auth = config.get("auth_method") or "password"
+            config.pop("passphrase" if auth == "password" else "password", None)
+            self.background.submit(request_id, method, {**deepcopy(params), "config": config,
+                "_ssh_trust_path": str(self.profile_path / "ssh_known_hosts.json")}, {})
+            return None
         if method == "ssh.host_key.trust":
             from .ssh_tunnel import SshTrustStore
             return SshTrustStore(self.profile_path / "ssh_known_hosts.json").confirm(params.get("details"))

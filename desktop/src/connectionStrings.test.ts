@@ -7,6 +7,21 @@ const profile = (db_type: ConnectionConfig["db_type"]): ConnectionConfig => ({ d
 const kinds: ConnectionConfig["db_type"][] = ["sqlserver", "postgresql", "mysql", "mariadb", "sqlite", "databricks"];
 
 describe("connection string export", () => {
+  it.each(["ntlm", "kerberos"])("exports %s as explicit SPNEGO, never as a SQL login", mode => {
+    const config = {...profile("sqlserver"),sqlserver_auth_mode:mode,username:mode==="ntlm"?"DOMAIN\\reader":"reader@REALM",ssl_ca:"/certs/sql.pem",ssh_tunnel_id:"saved-tunnel"};
+    expect(connectionStringFormats(config)).toEqual([{id:"python",label:"Python · TDS / SPNEGO"}]);
+    const python = formatConnectionString(config,"python");
+    expect(python).toContain(`protocol="${mode}"`);
+    expect(python).toContain('hostname="analytics.example:1433"');
+    expect(python).toContain('cafile="/certs/sql.pem"');
+    expect(python).toContain('password="<password>"');
+    expect(python).not.toContain(config.password);
+    expect(python).not.toContain("saved-tunnel");
+    expect(formatConnectionString(config,"python",true)).toContain(JSON.stringify(config.password));
+    expect(()=>formatConnectionString(config,"native")).toThrow("TDS/SPNEGO");
+    expect(()=>formatConnectionString(config,"csharp")).toThrow("TDS/SPNEGO");
+    expect(()=>formatConnectionString(config,"uri")).toThrow("TDS/SPNEGO");
+  });
   it.each(kinds)("formats %s in its real provider formats without exposing secrets by default", kind => {
     const config = profile(kind);
     for (const format of connectionStringFormats(config)) {

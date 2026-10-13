@@ -30,7 +30,7 @@ de produção do PyQt6. Não há um driver alternativo específico para a interf
 
 | Plataforma de dados | Driver distribuído | Autenticação/recursos preservados | Requisito externo |
 | --- | --- | --- | --- |
-| SQL Server, Azure SQL, Synapse/Fabric com endpoint SQL | SQLAlchemy + `pyodbc` | SQL, autenticação integrada, Microsoft Entra com MFA no navegador, parâmetros, múltiplos resultados | Microsoft ODBC Driver compatível com o sistema/arquitetura; permissões, rede e certificados do servidor |
+| SQL Server, Azure SQL, Synapse/Fabric com endpoint SQL | SQLAlchemy + `pyodbc`; TDS/SPNEGO para modos de rede | SQL, Windows integrada (Windows), NTLM, Kerberos, Microsoft Entra com MFA, parâmetros, múltiplos resultados | ODBC para SQL/Windows/Entra; configuração de domínio/Kerberos nos modos de rede; permissões, rede e certificados |
 | SQL Server LocalDB | SQLAlchemy + `pyodbc` | Instância local/named pipe, autenticação integrada | Windows, instância LocalDB já instalada e ODBC |
 | MySQL | SQLAlchemy + PyMySQL | Usuário/senha, Unicode, parâmetros | Rede e permissões do servidor |
 | MariaDB | SQLAlchemy + PyMySQL | Mesmo fluxo MySQL, sem dependência do conector C MariaDB | Rede e permissões do servidor |
@@ -39,18 +39,22 @@ de produção do PyQt6. Não há um driver alternativo específico para a interf
 | SQLite | SQLite nativo + SQLAlchemy | Arquivo local ou memória | Permissão no arquivo |
 
 `pymssql` e `mysql.connector` também são distribuídos para compatibilidade com
-blocos Python que importavam esses módulos. A conexão principal SQL Server usa
-`pyodbc`; `pymssql` não substitui silenciosamente ODBC ou o fluxo MFA.
+blocos Python que importavam esses módulos. Login SQL, Windows integrada e Entra usam `pyodbc`; `pymssql` não substitui
+silenciosamente ODBC ou o fluxo MFA. NTLM/Kerberos usam `python-tds`,
+`sqlalchemy-pytds`, `pyspnego` e `pyOpenSSL`, com credenciais explícitas por
+conexão. Consulte [Autenticação SQL Server](SQL_SERVER_AUTHENTICATION.md).
 
 PostgreSQL, MySQL, MariaDB e SQL Server TCP também podem usar um túnel SSH
 interno. Paramiko, bcrypt e PyNaCl acompanham o runtime; não é necessário
-instalar um cliente SSH. O cadastro mantém os endpoints SSH e do banco
+instalar um cliente SSH. Túneis são cadastrados em Configurações e selecionados
+por referência nas conexões. O cadastro mantém os endpoints SSH e do banco
 separados, confirma a fingerprint antes de autenticar e preserva a validação
 TLS do banco. Consulte [Conexões por túnel SSH](SSH_TUNNELS.md) para configurar,
 testar e usar ambientes em containers na mesma VPS.
 
 Autenticação integrada exige a identidade e a configuração de domínio do SO.
-Em Linux/macOS, uma configuração Kerberos apropriada pode ser necessária.
+NTLM/Kerberos exigem os parâmetros e as políticas de rede descritos no guia de
+autenticação. Não há troca silenciosa para login SQL.
 O instalador não provisiona servidores, instâncias LocalDB, contas de domínio,
 certificados privados ou permissões nos bancos.
 
@@ -85,7 +89,9 @@ oficial da arquitetura correta.
 O gerenciador unixODBC (`libodbc2`/`unixodbc`) permite carregar `pyodbc` e deve
 estar incluído nos requisitos do pacote. Para SQL Server, instale também
 `msodbcsql18` pelo repositório Microsoft correspondente à distribuição; unixODBC
-sozinho não é o driver de SQL Server. Os requisitos de WebKitGTK/GTK do Tauri
+sozinho não é o driver de SQL Server. Para Kerberos, o DEB também requer
+`libgssapi-krb5-2` e `libkrb5-3`; no AppImage portátil, disponibilize essas
+bibliotecas e a configuração de realm/KDC no sistema. Os requisitos de WebKitGTK/GTK do Tauri
 são independentes dos antigos requisitos de Qt.
 [Instalação oficial no Linux](https://learn.microsoft.com/en-us/sql/connect/odbc/linux-mac/installing-the-microsoft-odbc-driver-for-sql-server).
 

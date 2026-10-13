@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import sqlite3
 from collections import OrderedDict
+from copy import deepcopy
 import hashlib
 import json
 import time
@@ -110,7 +111,23 @@ class SQLiteConnector:
         self.connection.close()
 
 
+def current_tunnel_config(config):
+    """Resolve persisted references again in kernels; cached drafts are never authoritative."""
+    if not config.get("ssh_tunnel_id"):
+        if "ssh_tunnel_id" in config:
+            config = dict(config)
+            config.pop("ssh", None)
+        return config
+    from .connection_catalog import ConnectionCatalog
+    from .ssh_tunnel import SshTunnelError
+    path = config.get("_ssh_catalog_path")
+    if not path:
+        raise SshTunnelError("O cadastro do túnel SSH não foi resolvido. Reconecte esta aba.", code="ssh_tunnel_missing")
+    return ConnectionCatalog(path).resolve_ssh(config)
+
+
 def connect(config: dict):
+    config = current_tunnel_config(config)
     os.environ.setdefault("DATAPYN_SHARED_PARAMETER_DELIMITER", "{{name}}")
     db_type = str(config.get("db_type", "")).lower()
     if db_type == "databricks" and config.get("databricks_auth_mode") == "oauth":
@@ -196,6 +213,31 @@ class ConnectorPool:
         self.configs = {}
         self.block_affinity = {}
         self.namespace_settings = OrderedDict()
+        self._ssh_catalog_signature = None
+        self._ssh_configs = OrderedDict()
+
+    def _current_tunnel_config(self, config):
+        """An atomic catalog revision invalidates the small, kernel-local secret cache."""
+        identifier = config.get("ssh_tunnel_id")
+        path = config.get("_ssh_catalog_path")
+        if not identifier or not path:
+            return current_tunnel_config(config)
+        try:
+            stat = Path(path).stat()
+            signature = (str(path), stat.st_ino, stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            signature = None
+        if signature is None or signature != self._ssh_catalog_signature:
+            self._ssh_configs.clear()
+            self._ssh_catalog_signature = signature
+        if identifier not in self._ssh_configs:
+            resolved = current_tunnel_config(config)
+            self._ssh_configs[identifier] = deepcopy(resolved["ssh"])
+            while len(self._ssh_configs) > 8:
+                self._ssh_configs.popitem(last=False)
+            return resolved
+        self._ssh_configs.move_to_end(identifier)
+        return {**config, "ssh": deepcopy(self._ssh_configs[identifier])}
 
     @staticmethod
     def _normalized_config(config):
@@ -305,7 +347,8 @@ class ConnectorPool:
         if config is None:
             if self.active_key is not None and not params.get("database") and not params.get("schema"):
                 current = self.items[self.active_key]
-                if not self._ssh_connection_expired(current, self.configs.get(self.active_key, {})):
+                active_config = self.configs.get(self.active_key, {})
+                if not active_config.get("ssh_tunnel_id") and not self._ssh_connection_expired(current, active_config):
                     return current
                 # A block-only connection may have no default configuration.
                 # Recreate its physical transport instead of returning a dead cache.
@@ -315,7 +358,41 @@ class ConnectorPool:
                     identifier = None
             else:
                 raise ConnectionError("Connect this session to a database first")
-        config = dict(config)
+        try:
+            config = dict(self._current_tunnel_config(config))
+        except Exception:
+            # Deleted/missing reusable tunnels cannot leave old authenticated
+            # transports available for a later operation to accidentally reuse.
+            for old_key, old_config in list(self.configs.items()):
+                if not config.get("ssh_tunnel_id") or old_config.get("ssh_tunnel_id") != config.get("ssh_tunnel_id"):
+                    continue
+                old = self.items.pop(old_key)
+                self._forget(old_key)
+                if self.active_key == old_key:
+                    self.active_key = None
+                try:
+                    old.disconnect()
+                except Exception:
+                    pass
+            raise
+        was_default = False
+        retired_default = None
+        tunnel_id = config.get("ssh_tunnel_id")
+        if tunnel_id:
+            revision = (config.get("ssh") or {}).get("_tunnel_revision")
+            for old_key, old_config in list(self.configs.items()):
+                if old_config.get("ssh_tunnel_id") != tunnel_id or (old_config.get("ssh") or {}).get("_tunnel_revision") == revision:
+                    continue
+                if self.default_active_key == old_key:
+                    retired_default = (old_key[0], old_config)
+                old = self.items.pop(old_key)
+                self._forget(old_key)
+                if self.active_key == old_key:
+                    self.active_key = None
+                try:
+                    old.disconnect()
+                except Exception:
+                    pass
         database_override = params.get("database")
         schema_override = params.get("schema")
         if database_override and config.get("db_type") != "sqlite":
@@ -327,6 +404,10 @@ class ConnectorPool:
             config["database"] = str(database_override)
         if schema_override is not None and config.get("db_type") != "sqlite":
             config["schema"] = str(schema_override)
+        if retired_default and retired_default[0] == (identifier or "transient"):
+            previous_scope = self._normalized_config(retired_default[1])
+            next_scope = self._normalized_config(config)
+            was_default = all(previous_scope.get(field) == next_scope.get(field) for field in ("database", "schema"))
         key = self._key(identifier, config)
         affinity = self.block_affinity.get(str(params.get("block_id") or ""))
         if params.get("scope_inherited") and self.default_active_key in self.items and self.default_active_key[:2] == key:
@@ -346,11 +427,10 @@ class ConnectorPool:
                 if self._key(identifier, stored) == key:
                     key = candidate
                     break
-        was_default = False
         if key in self.items:
             existing = self.items[key]
             if self._ssh_connection_expired(existing, self.configs.get(key, config)):
-                was_default = self.default_active_key == key
+                was_default = was_default or self.default_active_key == key
                 self.items.pop(key)
                 self._forget(key)
                 if self.active_key == key:
@@ -416,6 +496,8 @@ class ConnectorPool:
         if identifier is None or identifier == self.default_id:
             self.default_config = None
             self.default_id = None
+        self._ssh_configs.clear()
+        self._ssh_catalog_signature = None
         if failure is not None:
             raise failure
 
@@ -453,10 +535,14 @@ def database_credential_identity(config):
     from .connection_catalog import ssh_identity
 
     ssh = config.get("ssh") or {}
-    tunnel = (True, *ssh_identity(config)) if ssh.get("enabled") else (False,)
+    tunnel = (True, *ssh_identity(config)) if ssh.get("enabled") else (False, config.get("ssh_tunnel_id") or None)
+    auth_mode = config.get("sqlserver_auth_mode") or ""
+    if config.get("db_type") == "sqlserver":
+        from src.database.database_connector import normalize_sqlserver_auth_mode
+        auth_mode = normalize_sqlserver_auth_mode(auth_mode, bool(config.get("use_windows_auth")))
     return (str(config.get("db_type") or "").lower(), str(config.get("host") or "").strip().casefold(),
             int(config.get("port") or 0), str(config.get("username") or ""),
-            config.get("sqlserver_auth_mode") or "sql_password", bool(config.get("use_windows_auth")),
+            auth_mode or "sql_password",
             config.get("databricks_auth_mode") or "token", tunnel)
 
 

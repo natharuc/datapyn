@@ -17,6 +17,7 @@ export interface ConnectionsSidebarProps {
   activeConnectionId?: string; onConnect: (connection: SavedConnection, newTab?: boolean) => Promise<void> | void;
   onDisconnect?: () => Promise<void> | void; onError?: (message: string) => void; disabled?: boolean; newTabDisabled?: boolean;
   controller?: ConnectionsController; compact?: boolean;
+  onManageTunnels?: () => void;
 }
 
 interface ConnectionMenuState {
@@ -31,7 +32,7 @@ function readExpanded(): Set<string> {
   try { return new Set(JSON.parse(localStorage.getItem("datapyn.desktop.connection-groups.v1") ?? "[]")); } catch { return new Set(); }
 }
 
-export function ConnectionsSidebar({ activeConnectionId, onConnect, onDisconnect, onError, disabled = false, newTabDisabled = false, controller = connections, compact = false }: ConnectionsSidebarProps) {
+export function ConnectionsSidebar({ activeConnectionId, onConnect, onDisconnect, onError, disabled = false, newTabDisabled = false, controller = connections, compact = false, onManageTunnels }: ConnectionsSidebarProps) {
   useLocale();
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
   const [query, setQuery] = useState(""), [favorites, setFavorites] = useState(false), [expanded, setExpanded] = useState(readExpanded);
@@ -140,7 +141,7 @@ export function ConnectionsSidebar({ activeConnectionId, onConnect, onDisconnect
     </div>
     {pointerDrag.drag && <div className={`connection-drag-label ${pointerDrag.drag.valid ? "valid" : "invalid"}`} style={{ left: pointerDrag.drag.x + 12, top: pointerDrag.drag.y + 12 }} aria-hidden="true">{pointerDrag.drag.source.connection?.name ?? pointerDrag.drag.source.group?.name}</div>}
     {stringExport && <ConnectionStringDialog connection={stringExport} controller={controller} onClose={() => setStringExport(undefined)} />}
-    {edit && <ConnectionDialog mode="save" connectionId={edit === "new" ? undefined : edit.id} initial={edit === "new" ? undefined : { ...edit.config, name: edit.name }} initialGroupId={edit === "new" ? selection?.group?.id ?? null : edit.group_id} initialColor={edit === "new" ? undefined : edit.color} hasPassword={edit !== "new" && edit.has_password} hasSshPassword={edit !== "new" && edit.has_ssh_password} hasSshPassphrase={edit !== "new" && edit.has_ssh_passphrase} groups={state.catalog.groups} onClose={() => setEdit(undefined)} onConnect={async (config, metadata) => { await controller.save({ id: edit === "new" ? undefined : edit.id, name: config.name!.trim(), config, group_id: metadata?.group_id ?? null, color: metadata?.color, favorite: edit !== "new" && edit.favorite }, config.password || undefined, metadata?.save_password, metadata?.save_ssh_credentials); }} />}
+    {edit && <ConnectionDialog mode="save" connectionId={edit === "new" ? undefined : edit.id} initial={edit === "new" ? undefined : { ...edit.config, name: edit.name }} initialGroupId={edit === "new" ? selection?.group?.id ?? null : edit.group_id} initialColor={edit === "new" ? undefined : edit.color} hasPassword={edit !== "new" && edit.has_password} hasSshPassword={edit !== "new" && edit.has_ssh_password} hasSshPassphrase={edit !== "new" && edit.has_ssh_passphrase} groups={state.catalog.groups} tunnels={state.catalog.ssh_tunnels} onManageTunnels={onManageTunnels} onClose={() => setEdit(undefined)} onConnect={async (config, metadata) => { await controller.save({ id: edit === "new" ? undefined : edit.id, name: config.name!.trim(), config, group_id: metadata?.group_id ?? null, color: metadata?.color, favorite: edit !== "new" && edit.favorite }, config.password || undefined, metadata?.save_password, metadata?.save_ssh_credentials); }} />}
     {groupEdit && <GroupDialog initial={groupEdit === "new" ? undefined : groupEdit} groups={state.catalog.groups} defaultParent={selection?.group?.id ?? null} onClose={() => setGroupEdit(undefined)} onSave={async (group) => { await controller.mutate("groups.save", { group }); setExpanded((prior) => new Set([...prior, ...(group.parent_id ? [group.parent_id] : [])])); }} />}
     {menu && <ContextMenu key={menu.opening} ownerDocument={menu.ownerDocument} anchor={{ x: menu.x, y: menu.y }} returnFocus={tree.current} label={menu.row.connection?.name ?? menu.row.group!.name} items={menuItems} onClose={() => setMenu(undefined)} />}
     {deleting && <Modal title={t("Excluir {kind}",{kind:deleting.connection?t("conexão"):t("grupo")})} onClose={() => setDeleting(undefined)}><p className="catalog-modal-copy">{deleting.connection ? t("Excluir “{name}” do catálogo?",{name:deleting.connection.name}) : t("Excluir “{name}”? As conexões e subgrupos serão movidos para o grupo pai.",{name:deleting.group!.name})}</p><footer className="modal-footer"><button className="secondary-button" onClick={() => setDeleting(undefined)}>{t("Cancelar")}</button><button className="primary-button" disabled={busy} onClick={() => void perform(async () => { await controller.mutate(deleting.connection ? "connections.delete" : "groups.delete", deleting.connection ? { connection_id: deleting.connection.id } : { group_id: deleting.group!.id }); setDeleting(undefined); })}>{t("Excluir")}</button></footer></Modal>}

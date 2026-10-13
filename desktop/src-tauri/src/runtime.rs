@@ -180,6 +180,10 @@ fn allowed_method(method: &str) -> bool {
             | "connection.test"
             | "connection.test_cancel"
             | "ssh.host_key.trust"
+            | "ssh.tunnels.list"
+            | "ssh.tunnels.save"
+            | "ssh.tunnels.delete"
+            | "ssh.tunnels.test"
             | "connection.idle_timeout"
             | "data.import"
             | "data.import_cancel"
@@ -963,6 +967,11 @@ mod tests {
         assert_eq!(plain.code, "runtime_error");
         assert!(plain.details.is_none());
         assert!(allowed_method("ssh.host_key.trust"));
+        assert!(allowed_method("ssh.tunnels.list"));
+        assert!(allowed_method("ssh.tunnels.save"));
+        assert!(allowed_method("ssh.tunnels.delete"));
+        assert!(allowed_method("ssh.tunnels.test"));
+        assert!(!allowed_method("ssh.tunnels.exec"));
         assert!(!allowed_method("ssh.exec"));
     }
     #[test]

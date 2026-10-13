@@ -1,0 +1,14 @@
+.ssh-tunnels-settings{min-width:0}
+.ssh-tunnels-toolbar{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+.ssh-tunnels-toolbar>strong{flex:1;font-size:12px;font-weight:500}
+.ssh-tunnel-status{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px}
+.ssh-tunnel-list{padding:0;margin:0;list-style:none;border-top:1px solid var(--border)}
+.ssh-tunnel-list>li{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);min-width:0}
+.ssh-tunnel-list>li>div{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+.ssh-tunnel-list strong,.ssh-tunnel-list small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+.ssh-tunnel-list strong{font-weight:500}
+.ssh-tunnel-list small,.ssh-tunnel-auth{color:var(--muted);font-size:11px}
+.ssh-tunnel-list .icon-button{flex:none}
+.ssh-tunnel-dialog{max-height:calc(100dvh - 40px)}
+.ssh-tunnel-delete-error{margin:0 18px 14px;overflow-wrap:anywhere}
+@media(max-width:480px){.ssh-tunnel-auth{display:none}}

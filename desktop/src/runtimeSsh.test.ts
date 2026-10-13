@@ -7,6 +7,13 @@ const unknown = (host = details.host) => ({ code: "ssh_host_key_unknown", messag
 afterEach(() => sshHostTrust.cancel());
 
 describe("SSH trust through the runtime bridge", () => {
+  it("rejects a late tunnel-only test success after the settings dialog closes", async () => {
+    let finish!: (value:unknown)=>void;
+    const requester = createRuntimeRequester(<T>(method:string)=>method==="ssh.tunnels.test" ? new Promise<T>(resolve=>{finish=resolve as (value:unknown)=>void;}) : Promise.resolve({} as T));
+    const task=requester.request("ssh.tunnels.test",{test_id:"standalone"});
+    const rejected=expect(task).rejects.toMatchObject({code:"cancelled"});
+    await requester.request("connection.test_cancel",{test_id:"standalone"});finish({success:true});await rejected;
+  });
   it("preserves structured errors and treats JSON-like messages as ordinary errors", () => {
     const error = runtimeRequestError(unknown());
     expect(error).toBeInstanceOf(RuntimeRequestError);

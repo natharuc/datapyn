@@ -158,7 +158,7 @@ class SshTunnel:
         self._streams = set()
         self.error: SshTunnelError | None = None
 
-    def start(self) -> SshTunnel:
+    def start(self, *, authentication_only: bool = False) -> SshTunnel:
         import paramiko
 
         try:
@@ -193,6 +193,10 @@ class SshTunnel:
             if not self._transport.is_authenticated():
                 raise SshTunnelError("O servidor SSH exige outra etapa de autenticação.", code="ssh_auth_failed")
             self._transport.set_keepalive(30)
+            if authentication_only:
+                # Settings tests verify only this reusable SSH endpoint/account.
+                # No database destination, listener or SQL command is involved.
+                return self
             # The server resolves the database name. Reject a denied/unreachable
             # destination now, before opening a database socket on the client.
             try:
@@ -320,3 +324,16 @@ class SshTunnel:
 
     def __exit__(self, *args):
         self.close()
+
+
+def test_tunnel(params):
+    config = params.get("config")
+    if not isinstance(config, dict):
+        raise ValueError("SSH config must be an object")
+    tunnel = SshTunnel(config, "127.0.0.1", 1,
+                       trust_store=SshTrustStore(params.get("_ssh_trust_path")))
+    try:
+        tunnel.start(authentication_only=True)
+        return {"success": True, "message": "Conexão SSH autenticada. O destino do banco é validado no teste da conexão."}
+    finally:
+        tunnel.close()

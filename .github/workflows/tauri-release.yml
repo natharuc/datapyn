@@ -118,10 +118,12 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf unixodbc-dev libmariadb-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf unixodbc-dev libmariadb-dev libkrb5-dev pkg-config
       - name: macOS database prerequisites
         if: runner.os == 'macOS'
-        run: brew install unixodbc
+        run: |
+          brew install unixodbc krb5
+          echo "$(brew --prefix krb5)/bin" >> "$GITHUB_PATH"
       - name: Install dependencies
         run: |
           uv sync --dev --frozen

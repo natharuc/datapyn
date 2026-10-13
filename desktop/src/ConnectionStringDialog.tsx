@@ -30,7 +30,8 @@ export function ConnectionStringDialog({ connection, controller, onClose }: { co
       <label className="field">{t("Prévia sem senha")}<textarea ref={textarea} value={preview} readOnly spellCheck={false} rows={8} /></label>
       {connection.has_password && passwordAuth && <label className="checkbox-field"><input type="checkbox" disabled={busy} checked={include} onChange={event => { setInclude(event.target.checked); setMessage(""); }} />{t("Incluir senha salva ao copiar")}</label>}
       {!connection.has_password && passwordAuth && <p className="connection-string-hint">{t("Substitua <password> pela senha no destino.")}</p>}
-      {connection.config.ssh?.enabled && <p className="connection-string-hint">{t("O túnel SSH é gerenciado pelo DataPyn e não está incluído nesta string.")}</p>}
+      {(connection.config.ssh?.enabled || connection.config.ssh_tunnel_id) && <p className="connection-string-hint">{t("O túnel SSH é gerenciado pelo DataPyn e não está incluído nesta string.")}</p>}
+      {connection.config.db_type === "sqlserver" && ["ntlm", "kerberos"].includes(connection.config.sqlserver_auth_mode ?? "") && <p className="connection-string-hint">{t("Credenciais de rede explícitas usam Python TDS/SPNEGO. O exemplo exige uma CA válida e as dependências NTLM/Kerberos no destino.")}</p>}
       {connection.config.db_type === "databricks" && connection.config.databricks_auth_mode === "oauth" && ["native", "csharp"].includes(format) && <p className="connection-string-hint">{t("Defina <refresh-token-encryption-password> para proteger o cache OAuth do driver ODBC.")}</p>}
       {message && <p className="connection-test-success" role="status">{message}</p>}
       {error && <p className="form-error" role="alert">{t(error)}</p>}

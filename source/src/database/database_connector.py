@@ -188,6 +188,8 @@ def _postgresql_identifier_case_hint(query: str) -> str:
 
 SQLSERVER_AUTH_SQL_PASSWORD = "sql_password"
 SQLSERVER_AUTH_WINDOWS = "windows"
+SQLSERVER_AUTH_NTLM = "ntlm"
+SQLSERVER_AUTH_KERBEROS = "kerberos"
 SQLSERVER_AUTH_ENTRA_MFA = "entra_mfa"
 SQL_COPT_SS_ACCESS_TOKEN = 1256
 SQLSERVER_ENTRA_SCOPE = "https://database.windows.net/.default"
@@ -210,6 +212,8 @@ def normalize_sqlserver_auth_mode(auth_mode: str = "", use_windows_auth: bool = 
         "windows": SQLSERVER_AUTH_WINDOWS,
         "windows_auth": SQLSERVER_AUTH_WINDOWS,
         "trusted_connection": SQLSERVER_AUTH_WINDOWS,
+        "ntlm": SQLSERVER_AUTH_NTLM,
+        "kerberos": SQLSERVER_AUTH_KERBEROS,
         "mfa": SQLSERVER_AUTH_ENTRA_MFA,
         "entra_mfa": SQLSERVER_AUTH_ENTRA_MFA,
         "aad_interactive": SQLSERVER_AUTH_ENTRA_MFA,
@@ -576,6 +580,7 @@ class DatabaseConnector:
                 self._ssh_tunnel = SshTunnel(ssh, host, port, trust_store=SshTrustStore(kwargs.get("_ssh_trust_path")))
                 self._ssh_tunnel.start()
                 driver_kwargs["_ssh_original_host"] = host
+                driver_kwargs["_ssh_original_port"] = port
                 if db_type == "postgresql":
                     # libpq uses hostaddr for routing and host for certificate
                     # identity; replacing host would break verify-full/SNI.
@@ -883,21 +888,36 @@ class DatabaseConnector:
         from urllib.parse import quote_plus
 
         if db_type == "sqlserver":
+            auth_mode = normalize_sqlserver_auth_mode(
+                kwargs.get("sqlserver_auth_mode", ""),
+                kwargs.get("use_windows_auth", False),
+            )
+            if auth_mode in {SQLSERVER_AUTH_NTLM, SQLSERVER_AUTH_KERBEROS}:
+                from src.database.sqlserver_network_auth import network_connect_options, register_network_dialect
+                from sqlalchemy.engine import URL
+
+                options = network_connect_options(auth_mode, host, port, username, password, **kwargs)
+                register_network_dialect()
+                # Explicit network secrets belong to the per-connection auth
+                # provider; never embed them in SQLAlchemy URLs/SQL UID/PWD.
+                return URL.create("mssql+datapyn_tds", host=host, port=port, database=database), options
+            if auth_mode == SQLSERVER_AUTH_WINDOWS and sys.platform != "win32":
+                from src.database.sqlserver_network_auth import SqlServerNetworkAuthError
+                raise SqlServerNetworkAuthError("A autenticação integrada do Windows está disponível apenas no Windows. Selecione NTLM ou Kerberos e informe as credenciais de rede.")
             # Auto-detect driver or use specified one
             driver = kwargs.get("driver")
             if not driver:
                 driver = self._get_available_odbc_driver()
 
-            auth_mode = normalize_sqlserver_auth_mode(
-                kwargs.get("sqlserver_auth_mode", ""),
-                kwargs.get("use_windows_auth", False),
-            )
             trust_cert = kwargs.get("trust_server_certificate", False)
 
             # Detect LocalDB - uses named pipes, not TCP/IP
             is_localdb = "(localdb)" in host.lower()
 
             if is_localdb:
+                if sys.platform != "win32":
+                    from src.database.sqlserver_network_auth import SqlServerNetworkAuthError
+                    raise SqlServerNetworkAuthError("SQL Server LocalDB está disponível apenas no Windows.")
                 # LocalDB format: SERVER=(localdb)\InstanceName (no port)
                 # LocalDB always uses Windows Authentication
                 server_part = f"SERVER={host}"
@@ -1561,10 +1581,10 @@ class DatabaseConnector:
                 try:
                     prepared = prepare_sqlserver_batch(batch, parameters) if parameters else None
                     if prepared:
-                        cursor.execute(prepared.query, *prepared.params)
+                        self._execute_sqlserver_cursor(cursor, prepared.query, prepared.params)
                     else:
                         cursor.execute(batch)
-                except pyodbc.Error as e:
+                except self._sqlserver_driver_errors() as e:
                     batch_error = f"Batch {batch_idx}/{len(batches)}: {str(e)}"
                     errors.append(batch_error)
                     try:
@@ -1619,6 +1639,9 @@ class DatabaseConnector:
             return result
 
         except Exception as e:
+            if self._sqlserver_network_cancelled():
+                result.cancelled = True
+                return result
             logger.error(f"Error streaming SQL Server batches: {str(e)}")
             raise
         finally:
@@ -1630,11 +1653,7 @@ class DatabaseConnector:
                 except Exception:
                     pass
             if raw_conn:
-                self._reconcile_execution_context(raw_conn)
-                try:
-                    raw_conn.close()
-                except Exception:
-                    pass
+                self._close_sqlserver_raw_connection(raw_conn)
 
     def _stream_databricks_query(
         self,
@@ -1867,7 +1886,8 @@ class DatabaseConnector:
         config = dict(getattr(self, "_connection_config", None) or {})
         if not config:
             raise ConnectionError("No connection configuration for admin connection")
-        if isinstance(config.get("ssh"), dict) and config["ssh"].get("enabled"):
+        if ((isinstance(config.get("ssh"), dict) and config["ssh"].get("enabled"))
+                or (config.get("db_type") == "sqlserver" and normalize_sqlserver_auth_mode(config.get("sqlserver_auth_mode")) in {SQLSERVER_AUTH_NTLM, SQLSERVER_AUTH_KERBEROS})):
             # The historical block connector helper whitelists driver options
             # and does not forward SSH. An admin/cancel connection must preserve
             # the same trust, TLS and remote routing as its parent connection.
@@ -2044,7 +2064,14 @@ class DatabaseConnector:
                 # pyodbc: cancel() is a Cursor method, not Connection
                 cursor = self._active_cursor
                 if cursor is not None:
-                    cursor.cancel()
+                    if getattr(getattr(self.engine, "dialect", None), "driver", None) == "datapyn_tds":
+                        # python-tds.cancel() also reads the cancellation
+                        # response. Keep the query worker as the sole reader;
+                        # it consumes Attention ACK and our cancelled flag.
+                        from src.database.sqlserver_network_auth import interrupt_network_cursor
+                        interrupt_network_cursor(cursor)
+                    else:
+                        cursor.cancel()
                     logger.info("SQL Server query cancelled via cursor.cancel()")
                 else:
                     logger.warning("Cancel requested but cursor not available")
@@ -2084,6 +2111,53 @@ class DatabaseConnector:
         """
         self.request_cancel()
         self.interrupt_query()
+
+    def _sqlserver_driver_errors(self):
+        if getattr(getattr(self.engine, "dialect", None), "driver", None) == "datapyn_tds":
+            import pytds
+            return (pyodbc.Error, pytds.Error)
+        return (pyodbc.Error,)
+
+    def _sqlserver_network_cancelled(self):
+        return self._cancelled and getattr(getattr(self.engine, "dialect", None), "driver", None) == "datapyn_tds"
+
+    def _close_sqlserver_raw_connection(self, raw_conn):
+        physical = getattr(raw_conn, "driver_connection", None)
+        aborted = getattr(getattr(physical, "_tds_socket", None), "_datapyn_aborted", False)
+        if aborted is True:
+            try:
+                raw_conn.invalidate()
+            except Exception:
+                pass
+        else:
+            self._reconcile_execution_context(raw_conn)
+        try:
+            raw_conn.close()
+        except Exception:
+            pass
+
+    def _execute_sqlserver_cursor(self, cursor, query, parameters):
+        if getattr(getattr(self.engine, "dialect", None), "driver", None) == "datapyn_tds":
+            from src.database.sqlserver_network_auth import qmark_to_pyformat
+            statement, values = qmark_to_pyformat(query, parameters)
+            return cursor.execute(statement, values)
+        return cursor.execute(query, *parameters)
+
+    def _sqlserver_deferred_error(self, cursor):
+        network_driver = getattr(getattr(self.engine, "dialect", None), "driver", None) == "datapyn_tds"
+        for message in getattr(cursor, "messages", None) or []:
+            if len(message) < 2:
+                continue
+            category, value = message[0], message[1]
+            if network_driver:
+                # python-tds uses (exception class, exception instance),
+                # rather than ODBC's (SQLSTATE, message). PRINT/info and
+                # RAISERROR severity <=10 must not turn into failed batches.
+                if int(getattr(value, "severity", 0) or 0) > 10:
+                    return str(getattr(value, "text", None) or value)
+            elif category and category != "01000":
+                return str(value)
+        return None
 
     def _execute_mssql_batches(self, batches: list, parameters: Optional[List[Dict[str, Any]]] = None) -> Union[pd.DataFrame, List[pd.DataFrame]]:
         """Execute multiple SQL Server batches on the same connection.
@@ -2173,10 +2247,10 @@ class DatabaseConnector:
                 try:
                     prepared = prepare_sqlserver_batch(batch, parameters) if parameters else None
                     if prepared:
-                        cursor.execute(prepared.query, *prepared.params)
+                        self._execute_sqlserver_cursor(cursor, prepared.query, prepared.params)
                     else:
                         cursor.execute(batch)
-                except pyodbc.Error as e:
+                except self._sqlserver_driver_errors() as e:
                     batch_error = f"Batch {batch_idx}/{len(batches)}: {str(e)}"
                     logger.warning(batch_error)
                     errors.append(batch_error)
@@ -2257,7 +2331,7 @@ class DatabaseConnector:
                     except OperationCancelled:
                         dataframes.clear()
                         raise
-                    except pyodbc.Error as e:
+                    except self._sqlserver_driver_errors() as e:
                         batch_error = f"Batch {batch_idx}/{len(batches)}: {str(e)}"
                         break
                     except Exception as e:
@@ -2268,13 +2342,9 @@ class DatabaseConnector:
                         has_next = cursor.nextset()
 
                         # Check cursor.messages for deferred errors
-                        if hasattr(cursor, "messages") and cursor.messages:
-                            for msg in cursor.messages:
-                                if len(msg) >= 2:
-                                    sql_state, error_msg = msg[0], msg[1]
-                                    if sql_state and sql_state != "01000":
-                                        batch_error = f"Batch {batch_idx}/{len(batches)}: {error_msg}"
-                                        break
+                        deferred_error = self._sqlserver_deferred_error(cursor)
+                        if deferred_error:
+                            batch_error = f"Batch {batch_idx}/{len(batches)}: {deferred_error}"
 
                         if batch_error:
                             break
@@ -2282,7 +2352,7 @@ class DatabaseConnector:
                             self._record_command_result(*completed_result)
                         if not has_next:
                             break
-                    except pyodbc.Error as e:
+                    except self._sqlserver_driver_errors() as e:
                         batch_error = f"Batch {batch_idx}/{len(batches)}: {str(e)}"
                         break
                     except Exception as e:
@@ -2334,6 +2404,9 @@ class DatabaseConnector:
         except OperationCancelled:
             raise
         except Exception as e:
+            if self._sqlserver_network_cancelled():
+                dataframes.clear()
+                raise OperationCancelled() from None
             logger.error(f"Error executing SQL Server batches: {str(e)}")
             raise
 
@@ -2346,11 +2419,7 @@ class DatabaseConnector:
                 except Exception:
                     pass
             if raw_conn:
-                self._reconcile_execution_context(raw_conn)
-                try:
-                    raw_conn.close()
-                except Exception:
-                    pass
+                self._close_sqlserver_raw_connection(raw_conn)
 
     def _execute_databricks_query(self, query: str, parameters: Optional[List[Dict[str, Any]]] = None) -> pd.DataFrame:
         """Execute Databricks query with cursor access for cancellation.

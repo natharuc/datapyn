@@ -66,6 +66,7 @@ test("Debian filesystem metadata, launcher, icon and application are isolated fr
   const layout = join(directory, "package");
   debianLayout({ directory: layout, appImage: image, version: "1.0.0" });
   assert.match(readFileSync(join(layout, "DEBIAN/control"), "utf8"), /Package: datapyn-tauri\nVersion: 1.0.0\nArchitecture: amd64/);
+  assert.match(readFileSync(join(layout, "DEBIAN/control"), "utf8"), /Depends: .*libgssapi-krb5-2, libkrb5-3/);
   assert.match(readFileSync(join(layout, "usr/bin/datapyn-tauri"), "utf8"), /\/usr\/lib\/datapyn-tauri/);
   assert.match(readFileSync(join(layout, "usr/share/applications/datapyn-tauri.desktop"), "utf8"), /Exec=datapyn-tauri %F/);
   assert.ok(existsSync(join(layout, "usr/share/icons/hicolor/256x256/apps/datapyn-tauri.png")));
