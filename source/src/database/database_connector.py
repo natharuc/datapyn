@@ -1158,7 +1158,12 @@ class DatabaseConnector:
         args = dict(self._execution_connect_args)
         self._manual_engine = create_engine(self._execution_connection_string, connect_args=args,
                                             poolclass=NullPool, pool_reset_on_return=None)
-        self._manual_engine.dialect.dispatch._update(self.engine.dialect.dispatch, only_propagate=False)
+        # Public registration activates the new dialect's event handling. A
+        # dispatch-only copy stores callbacks but leaves its creator bypassing
+        # them, losing MFA tokens, SSH routing and pre-SQL driver configuration.
+        for listener in self.engine.dialect.dispatch.do_connect:
+            if listener not in self._manual_engine.dialect.dispatch.do_connect:
+                event.listen(self._manual_engine, "do_connect", listener)
         # The configured creator includes token/SSH/authentication events but
         # bypasses on-connect initialization, checkout USE and return rollback.
         raw = self._manual_engine.pool._creator(None)

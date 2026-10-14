@@ -21,6 +21,13 @@ TLS, com vínculo ao certificado TLS para servidores que exigem Extended
 Protection. O cache de conexões não compartilha identidades entre abas. Senhas
 salvas continuam no cofre do sistema, sem aparecer no arquivo de conexões.
 
+Microsoft Entra MFA usa o navegador e fornece um token de acesso ao ODBC antes
+de abrir cada conexão física. Isso vale para o teste, os metadados e a conexão
+isolada do bloco quando as transações automáticas estão desativadas. A troca de
+banco no Azure SQL obtém um token para a nova conexão; o token não é fixado na
+connection string nem convertido em login SQL. Consultas sucessivas do mesmo
+bloco reutilizam a conexão aberta e preservam suas transações explícitas.
+
 ## Rede, domínio e certificados
 
 Informe o endereço TCP e a porta do SQL Server. Para instâncias nomeadas,
@@ -65,12 +72,18 @@ parametrizada em lotes. Conexões temporárias mantêm a mesma sessão física.
 
 ```powershell
 uv run pytest -c runtime_tests/pytest.ini runtime_tests/test_sqlserver_network_auth.py runtime_tests/test_sqlserver_network_wire.py -q
+uv run pytest -c runtime_tests/pytest.ini runtime_tests/test_manual_connection_hooks.py runtime_tests/test_mfa_connection_flow.py -q
 ```
 
 Os testes usam endpoints locais sem SQL Server ou domínio reais. Kerberos foi
 validado no adaptador/provedor; a autenticação com um domínio corporativo exige
 validação no ambiente do usuário. Não há fallback para NTLM ou login SQL.
 
+Os testes MFA simulam o provedor de tokens e o ODBC, passando pelo cadastro,
+teste e abertura da aba nos dois modos de transação. Não acessam o navegador,
+o cache de credenciais ou bancos reais.
+
 Referências: [autenticação integrada Microsoft ODBC](https://learn.microsoft.com/en-us/sql/connect/odbc/linux-mac/using-integrated-authentication),
+[token de acesso Microsoft Entra no ODBC](https://learn.microsoft.com/en-us/sql/connect/odbc/using-azure-active-directory#authenticating-with-an-access-token),
 [python-tds](https://python-tds.readthedocs.io/en/stable/),
 [pyspnego: plataformas e Kerberos](https://github.com/jborean93/pyspnego#kerberos-authentication).
