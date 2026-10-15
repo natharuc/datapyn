@@ -1,13 +1,73 @@
 """Bounded clipboard text and streaming file writers with cancellation."""
 
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
+from decimal import Decimal
 import io
 import json
+import math
+import sys
 
 from .sql_export import missing, script_parts
 from .values import scalar
 
 MAX_TEXT_BYTES = 16 * 1024 * 1024
+EXCEL_INTEGER_LIMIT = 10**15 - 1
+DECIMAL_FORMATS = tuple("0." + "0" * scale for scale in range(1, 31))
+
+
+def _excel_value(value):
+    """Keep native cell types independently of the grid's JSON transport encoding.
+
+    Excel numbers support 15 significant decimal digits and no subnormal
+    floats; native dates span 1900..9999, have millisecond precision and no
+    timezone. Use literal text only when that format cannot retain the original
+    value. Never infer a number or date from a string returned by SQL.
+    """
+    if type(value).__module__.startswith("numpy"):
+        if type(value).__name__ in {"datetime64", "timedelta64"}:
+            import pandas as pd
+            value = pd.Timestamp(value) if type(value).__name__ == "datetime64" else pd.Timedelta(value)
+        elif hasattr(value, "item"):
+            try:
+                value = value.item()
+            except (ValueError, TypeError):
+                return scalar(value), None
+    if missing(value):
+        return None, None
+    if isinstance(value, (str, bool)):
+        return value, None
+    if isinstance(value, int):
+        return (str(value) if abs(value) > EXCEL_INTEGER_LIMIT else value), None
+    if isinstance(value, Decimal):
+        _, digits, exponent = value.as_tuple()
+        significant = len(digits)
+        while significant > 1 and digits[significant - 1] == 0:
+            significant -= 1
+        numeric = float(value)
+        if significant > 15 or not math.isfinite(numeric) or value and abs(numeric) < sys.float_info.min:
+            return str(value), None
+        number_format = DECIMAL_FORMATS[-exponent - 1] if -30 <= exponent < 0 else None
+        return value, number_format
+    if isinstance(value, float):
+        return (str(value) if value and abs(value) < sys.float_info.min else value), None
+    if isinstance(value, datetime):
+        if (value.utcoffset() is not None or not 1900 <= value.year <= 9999
+                or value.microsecond % 1000 or getattr(value, "nanosecond", 0)):
+            return value.isoformat(), None
+        return value, "yyyy-mm-dd hh:mm:ss.000" if value.microsecond else "yyyy-mm-dd hh:mm:ss"
+    if isinstance(value, date):
+        if not 1900 <= value.year <= 9999:
+            return value.isoformat(), None
+        return value, "yyyy-mm-dd"
+    if isinstance(value, time):
+        if value.utcoffset() is not None or value.microsecond % 1000:
+            return value.isoformat(), None
+        return value, "hh:mm:ss.000" if value.microsecond else "hh:mm:ss"
+    if isinstance(value, timedelta):
+        if value < timedelta(0) or value.microseconds % 1000 or getattr(value, "nanoseconds", 0):
+            return str(value), None
+        return value, "[h]:mm:ss.000" if value.microseconds else "[h]:mm:ss"
+    return scalar(value), None
 
 
 class BoundedText(io.StringIO):
@@ -151,12 +211,12 @@ def write_file(frame, path, export_format, options, control):
         book = Workbook(write_only=True)
         sheet = book.create_sheet(name)
         def cell(value):
-            value = None if missing(value) else value
-            temporal = isinstance(value, (datetime, date)) and not (isinstance(value, datetime) and value.tzinfo)
-            item = WriteOnlyCell(sheet, value=value if temporal else scalar(value))
-            if temporal:
-                item.number_format = "yyyy-mm-dd hh:mm:ss"
-            elif isinstance(item.value, str):
+            value, number_format = _excel_value(value)
+            item = WriteOnlyCell(sheet, value=value)
+            if number_format:
+                item.number_format = number_format
+            if isinstance(value, str):
+                # A query result beginning with '=' is data, never a formula.
                 item.data_type = "s"
             return item
         try:
