@@ -76,7 +76,9 @@ def _preferences(value):
             low, high = limits[key]
             if isinstance(item, bool) or not isinstance(item, (int, float)) or not low <= item <= high:
                 raise ValueError(f"Preference {key} is outside the supported range")
-            result[key] = int(item)
+            # Font sizes support tenths in Tauri; counts and layout dimensions
+            # retain their integer representation. Match the editor's rounding.
+            result[key] = int(item * 10 + 0.5) / 10 if key in {"uiFontSize", "editorFontSize", "gridFontSize"} else int(item)
         elif key in strings:
             if not isinstance(item, str) or len(item) > 1000:
                 raise ValueError(f"Invalid font preference: {key}")
@@ -359,7 +361,10 @@ class ConfigurationTransfer:
         preferences = _preferences(params.get("preferences", {}))
         defaults = merge_defaults(load_defaults(self.workspace), normalize_defaults(params.get("defaults", {})))
         main_name = name_for("datapyn.ini") or "DataPyn.ini"
-        updates = {key: preferences[field] for key, (field, _) in PREFERENCE_KEYS.items() if field in preferences}
+        # Qt's font readers require whole pixels. Keep the exact fractional
+        # preference in tauri-settings.json and project only the legacy fields.
+        updates = {key: (int(preferences[field] + 0.5) if field in {"editorFontSize", "gridFontSize"}
+                         else preferences[field]) for key, (field, _) in PREFERENCE_KEYS.items() if field in preferences}
         for filename, mapper in (("notifications.json", _notification_keys), ("snapshot_settings.json", lambda value: {
             "session_results/enabled": value.get("enabled", False), "session_results/max_size_mb": value.get("max_size_mb", 50)})):
             path = self.workspace / filename

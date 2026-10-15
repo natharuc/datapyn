@@ -28,6 +28,8 @@ export type { EditorPreferences } from "./editorRegistry";
 import { InlineRequestGate, LanguageRequestGate, languageParams, mergeCompletions, type LanguageCompletion } from "./editorLanguage";
 import { completionSite, completionInsertion, contextualCompletions, escapePythonString, filterCompletions, localCompletions, pythonSymbols } from "./editorCompletions";
 import { useOwnerDocumentRevision } from "./useOwnerDocument";
+import { normalizeEditorFontSize } from "./preferences";
+import { bindEditorFontZoom, editorFontOptions } from "./editorFont";
 
 (globalThis as typeof globalThis & { MonacoEnvironment: monaco.Environment }).MonacoEnvironment = { getWorker: () => new EditorWorker() };
 monaco.editor.defineTheme("datapyn", {
@@ -126,6 +128,7 @@ export const MonacoBlock = memo(function MonacoBlock({ id, code, language, heigh
   useLocale();
   const container = useRef<HTMLDivElement>(null);
   const documentRevision = useOwnerDocumentRevision(container);
+  const fontSize = useRef(normalizeEditorFontSize(preferences?.fontSize));
   const callbacks = useRef({ onChange, onFocus, onCursor,onFontSizeChange,onReady }); callbacks.current = { onChange, onFocus, onCursor,onFontSizeChange,onReady };
   useEffect(() => {
     if (!container.current) return;
@@ -143,14 +146,14 @@ export const MonacoBlock = memo(function MonacoBlock({ id, code, language, heigh
     host.ownerDocument.body.appendChild(overflowHost);
     let editor: monaco.editor.IStandaloneCodeEditor;
     try { editor = monaco.editor.create(host, {
-      model: record.model, theme: activeTheme, fontFamily: "'JetBrains Mono', 'Cascadia Code', 'Fira Code', Consolas, 'Courier New', monospace", fontSize: 13,
-      lineHeight: 22, minimap: { enabled: false }, automaticLayout: true,
+      model: record.model, theme: activeTheme, fontFamily: "'JetBrains Mono', 'Cascadia Code', 'Fira Code', Consolas, 'Courier New', monospace", ...editorFontOptions(preferences?.fontSize),
+      minimap: { enabled: false }, automaticLayout: true,
       scrollBeyondLastLine: false, overviewRulerLanes: 0, hideCursorInOverviewRuler: true,
       lineNumbersMinChars: 3, folding: true, renderLineHighlight: "line", wordWrap: "off",
       padding: { top: 12, bottom: 12 }, smoothScrolling: false,
       scrollbar: { verticalScrollbarSize: 9, horizontalScrollbarSize: 9 },
       bracketPairColorization: { enabled: true }, tabSize: 4,
-      mouseWheelZoom:true, wordBasedSuggestions:"off", quickSuggestions:{other:true,comments:false,strings:false},quickSuggestionsDelay:35,
+      mouseWheelZoom:false, wordBasedSuggestions:"off", quickSuggestions:{other:true,comments:false,strings:false},quickSuggestionsDelay:35,
       suggestOnTriggerCharacters:true,suggest: { insertMode: "replace",matchOnWordStartOnly:false,showIcons:true },
       fixedOverflowWidgets: true, overflowWidgetsDomNode: overflowHost,
     }); } catch (error) { overflowHost.remove(); throw error; }
@@ -180,7 +183,20 @@ export const MonacoBlock = memo(function MonacoBlock({ id, code, language, heigh
     let viewTimer:ReturnType<typeof setTimeout>|undefined;
     const scheduleView=()=>{clearTimeout(viewTimer);viewTimer=setTimeout(()=>captureEditorViewState(id),300);};
     const selectionView=editor.onDidChangeCursorSelection(scheduleView),scrollView=editor.onDidScrollChange(scheduleView);
-    const configuration=editor.onDidChangeConfiguration(event=>{if(!event.hasChanged(monaco.editor.EditorOption.fontSize))return;const current=editor.getOption(monaco.editor.EditorOption.fontSize),size=Math.max(8,Math.min(32,current));if(current!==size){editor.updateOptions({fontSize:size});return;}if(size!==(editorPreferences.get(id)?.fontSize??13))callbacks.current.onFontSizeChange?.(size);});
+    const changeFontSize = (value: number) => {
+      const next = normalizeEditorFontSize(value);
+      if (next === fontSize.current) return;
+      // Synchronous state is essential for several wheel events before React renders.
+      fontSize.current = next;
+      editor.updateOptions(editorFontOptions(next));
+      callbacks.current.onFontSizeChange?.(next);
+    };
+    const removeFontZoom = bindEditorFontZoom(host, direction => changeFontSize(fontSize.current + direction));
+    const fontActions = [
+      editor.addAction({ id: "editor.action.fontZoomIn", label: "Increase Editor Font Size", run: () => changeFontSize(fontSize.current + 1) }),
+      editor.addAction({ id: "editor.action.fontZoomOut", label: "Decrease Editor Font Size", run: () => changeFontSize(fontSize.current - 1) }),
+      editor.addAction({ id: "editor.action.fontZoomReset", label: "Reset Editor Font Size", run: () => changeFontSize(13) }),
+    ];
     if (pendingInsertions.has(id)) queueMicrotask(() => {
       if (record.editor !== editor) return;
       const texts = pendingInsertions.get(id) ?? []; pendingInsertions.delete(id);
@@ -189,7 +205,7 @@ export const MonacoBlock = memo(function MonacoBlock({ id, code, language, heigh
     // Hidden desktop webviews may suspend animation frames. The microtask
     // follows creation, restored cursor state and the preference effects.
     queueMicrotask(()=>{if(record.editor === editor)callbacks.current.onReady?.(id);});
-    return () => { overflowTheme.disconnect();clearTimeout(viewTimer);selectionView.dispose();scrollView.dispose();captureEditorViewState(id);changed.dispose(); focused.dispose(); blurred.dispose();completionKeys.dispose();manualSuggestAction.dispose();cursor.dispose();configuration.dispose(); completionGates.get(id)?.cancel();inlineGates.get(id)?.cancel(); record.viewState = editor.saveViewState(); record.editor = undefined; record.container = undefined; try { editor.dispose(); } finally { overflowHost.remove(); } };
+    return () => { overflowTheme.disconnect();clearTimeout(viewTimer);selectionView.dispose();scrollView.dispose();captureEditorViewState(id);changed.dispose(); focused.dispose(); blurred.dispose();completionKeys.dispose();manualSuggestAction.dispose();cursor.dispose();removeFontZoom();fontActions.forEach(action => action.dispose()); completionGates.get(id)?.cancel();inlineGates.get(id)?.cancel(); record.viewState = editor.saveViewState(); record.editor = undefined; record.container = undefined; try { editor.dispose(); } finally { overflowHost.remove(); } };
     // Creating a new widget for a changed code prop discards undo history.
     // The separate effect below synchronizes external edits into the stable model.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -203,7 +219,11 @@ export const MonacoBlock = memo(function MonacoBlock({ id, code, language, heigh
       record.model.pushStackElement();
     }
   }, [id, code, language]);
-  useEffect(() => { editorPreferences.set(id, preferences); applyTheme(preferences,container.current?.ownerDocument.defaultView??window); models.get(id)?.editor?.updateOptions({ fontFamily: preferences?.fontFamily ?? "'JetBrains Mono', 'Cascadia Code', 'Fira Code', Consolas, 'Courier New', monospace", fontSize: Math.max(8, Math.min(32, preferences?.fontSize ?? 13)), wordWrap: preferences?.wordWrap ? "on" : "off", minimap: { enabled: !!preferences?.minimap }, lineNumbers: preferences?.lineNumbers === false ? "off" : "on", tabSize: preferences?.tabSize ?? 4, readOnly: preferences?.readOnly ?? false, quickSuggestions: preferences?.autocomplete !== false, suggestOnTriggerCharacters: preferences?.autocomplete !== false, inlineSuggest: { enabled: !!preferences?.aiAutocomplete } }); }, [id, preferences,documentRevision]);
+  useEffect(() => {
+    fontSize.current = normalizeEditorFontSize(preferences?.fontSize);
+    models.get(id)?.editor?.updateOptions(editorFontOptions(fontSize.current));
+  }, [id, preferences?.fontSize, documentRevision]);
+  useEffect(() => { editorPreferences.set(id, preferences); applyTheme(preferences,container.current?.ownerDocument.defaultView??window); models.get(id)?.editor?.updateOptions({ fontFamily: preferences?.fontFamily ?? "'JetBrains Mono', 'Cascadia Code', 'Fira Code', Consolas, 'Courier New', monospace", wordWrap: preferences?.wordWrap ? "on" : "off", minimap: { enabled: !!preferences?.minimap }, lineNumbers: preferences?.lineNumbers === false ? "off" : "on", tabSize: preferences?.tabSize ?? 4, readOnly: preferences?.readOnly ?? false, quickSuggestions: preferences?.autocomplete !== false, suggestOnTriggerCharacters: preferences?.autocomplete !== false, inlineSuggest: { enabled: !!preferences?.aiAutocomplete } }); }, [id, preferences,documentRevision]);
   useEffect(() => {
     const record = models.get(id); if (!record) return;
     const renderMarkers = () => {

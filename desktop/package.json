@@ -1,6 +1,6 @@
 {
   "name": "datapyn-desktop",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "private": true,
   "type": "module",
   "overrides": {
@@ -20,7 +20,9 @@
     "desktop:build": "node ../scripts/tauri/build.mjs",
     "postinstall": "node scripts/postinstall.mjs",
     "test:explorer": "node scripts/test-explorer.mjs",
-    "test:transactions": "node scripts/test-transactions.mjs"
+    "test:transactions": "node scripts/test-transactions.mjs",
+    "test:editor-font": "node scripts/test-editor-font.mjs",
+    "test:font-settings": "node scripts/test-font-settings.mjs"
   },
   "dependencies": {
     "@glideapps/glide-data-grid": "6.0.3",
