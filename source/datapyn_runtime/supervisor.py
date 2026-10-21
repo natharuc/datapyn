@@ -73,6 +73,11 @@ class SessionRuntime:
         self._reader_error = None
         self._incoming = queue.Queue(maxsize=64)
         self._restart_times = deque(maxlen=4)
+        self._sql_safety_epoch = uuid.uuid4().hex
+        self._sql_safety_revision = 0
+        self._sql_safety_default = {}
+        self._sql_safety_default_name = None
+        self._sql_safety_active = {}
         self.language_contexts = OrderedDict()
         self.language_variables = {}
         self.language_version = 0
@@ -102,6 +107,9 @@ class SessionRuntime:
                     raise RuntimeErrorResponse("duplicate_execution", "execution_id must be unique within the session")
                 self._states[execution_id] = "queued"
                 self._trim_states()
+            from .sql_safety_guard import CONTEXT_MUTATIONS
+            if method in CONTEXT_MUTATIONS:
+                self._sql_safety_revision = getattr(self, "_sql_safety_revision", 0) + 1
             self._queue.append(Job(method, dict(params), request_id))
         self._wake.set()
 
@@ -309,6 +317,10 @@ class SessionRuntime:
                 }})
 
     def _reset_kernel(self, reason: str, active: Job | None, stale: list[Job]):
+        self._sql_safety_revision = getattr(self, "_sql_safety_revision", 0) + 1
+        self._sql_safety_default = {}
+        self._sql_safety_default_name = None
+        self._sql_safety_active = {}
         self._stop_process()
         with self._lock:
             self._active = None
@@ -343,6 +355,9 @@ class SessionRuntime:
             if message.get("ready"):
                 self._ready = True
                 self.emit({"event": "session.ready", "payload": {"session_id": self.session_id}})
+                return
+            if "sql_safety_context" in message:
+                self._sql_safety_active = message["sql_safety_context"]
                 return
             if "language_context" in message:
                 context = message["language_context"]
@@ -395,6 +410,9 @@ class SessionRuntime:
                     if not self._active or message.get("job_id") != self._active.job_id:
                         return
                     self._states[payload["execution_id"]] = payload["status"]
+                    self._sql_safety_revision = getattr(self, "_sql_safety_revision", 0) + 1
+                    if payload.get("scope_inherited") is True and isinstance(payload.get("context_change"), dict):
+                        self._sql_safety_default.update(payload["context_change"].get("current") or {})
                     self._active = None
                     self._emit_finished(payload, message.get("notification_delivery"))
                     return
@@ -406,6 +424,16 @@ class SessionRuntime:
             if job is None or message.get("job_id") != job.job_id:
                 return
             self._active = None
+            if "result" in message:
+                from .connection_catalog import without_secrets
+                if job.method == "connection.connect":
+                    self._sql_safety_default = without_secrets(message["result"].get("config") or {})
+                    self._sql_safety_default_name = job.params.get("_connection_name") or job.params.get("connection_name")
+                elif job.method == "connection.disconnect":
+                    self._sql_safety_default = {}
+                    self._sql_safety_default_name = None
+                elif job.method == "explorer.use_database":
+                    self._sql_safety_default.update(message["result"])
             if job.request_id is not None:
                 if "notification_delivery" in message:
                     try:
@@ -623,11 +651,16 @@ class Supervisor:
 
     def internal_rpc(self, session_id, method, params, *, timeout=120):
         identifier, done, box = "pynia:" + uuid.uuid4().hex, threading.Event(), {}
-        routed = self._route({**params, "session_id": session_id})
+        submitted = {**params, "session_id": session_id}
+        session = self._session(submitted)
         with self._internal_lock:
             self._internal[identifier] = (done, box)
         try:
-            self._session(routed).enqueue(method, routed, identifier)
+            with session._lock:
+                routed = self._route(submitted)
+                if method in {"execution.run", "result.export_table"}:
+                    routed.update(self.sql_safety_guard.authorize(method, submitted, self._sql_safety_binding(submitted), allow_ticket=False))
+                session.enqueue(method, routed, identifier)
             if not done.wait(timeout=timeout):
                 raise TimeoutError(f"The DataPyn runtime operation exceeded {timeout} seconds")
             if "error" in box:
@@ -642,11 +675,15 @@ class Supervisor:
         if language not in {"sql", "python"} or not isinstance(code, str) or len(code.encode("utf-8")) > MAX_CODE_BYTES:
             raise ValueError("language must be sql/python and code at most 1 MiB")
         identifier, done, box = "pynia:" + uuid.uuid4().hex, threading.Event(), {}
-        routed = self._route({**params, "session_id": session_id, "execution_id": identifier})
+        submitted = {**params, "session_id": session_id, "execution_id": identifier}
+        session = self._session(submitted)
         with self._internal_lock:
             self._internal[identifier] = (done, box)
         try:
-            self._session(routed).enqueue("execution.run", routed)
+            with session._lock:
+                routed = self._route(submitted)
+                routed.update(self.sql_safety_guard.authorize("execution.run", submitted, self._sql_safety_binding(submitted), allow_ticket=False))
+                session.enqueue("execution.run", routed)
             if not done.wait(timeout=120):
                 self._session(routed).cancel(identifier)
                 raise TimeoutError("The Pynia execution exceeded 120 seconds and was cancelled")
@@ -667,6 +704,50 @@ class Supervisor:
         if self._catalog is None:
             self._catalog = ConnectionCatalog(path=self.profile_path / "connections.json")
         return self._catalog
+
+    @property
+    def sql_safety_guard(self):
+        guard = getattr(self, "_sql_safety_guard", None)
+        if guard is None:
+            from .sql_safety_guard import SqlSafetyGuard
+            guard = self._sql_safety_guard = SqlSafetyGuard()
+        return guard
+
+    def _sql_safety_binding(self, params):
+        """Public target identity only; reviewing never resolves OS credentials."""
+        from .connection_catalog import without_secrets
+        from copy import deepcopy
+        session = self._session(params)
+        default = getattr(session, "_sql_safety_default", {})
+        active = getattr(session, "_sql_safety_active", {})
+        config = params.get("config") or params.get("_connection_config") or default or active.get("config") or {}
+        identifier = params.get("connection_id")
+        saved = None
+        if identifier or params.get("connection_name"):
+            with self.catalog._lock:
+                if not identifier:
+                    identifier = self.catalog.resolve_ref(params.get("connection_group"), params["connection_name"])
+                saved = deepcopy(self.catalog._find("connections", identifier))
+                config = self.catalog.resolve_ssh(saved["config"], resolve_credentials=False)
+        uses_active_fallback = not (identifier or params.get("connection_name") or params.get("config") or params.get("_connection_config") or default)
+        connection_name = saved.get("name") if saved else params.get("connection_name") or config.get("name") or getattr(session, "_sql_safety_default_name", None) or active.get("connection_name")
+        return {"profile": str(self.profile_path), "session_epoch": getattr(session, "_sql_safety_epoch", session.session_id),
+                "session_revision": getattr(session, "_sql_safety_revision", 0), "connection_id": identifier,
+                "connection_name": connection_name,
+                "uses_active_fallback": uses_active_fallback,
+                "active_fallback": active if uses_active_fallback else None,
+                "saved_connection": without_secrets(saved), "config": without_secrets(deepcopy(config)),
+                "db_type": config.get("db_type", "")}
+
+    def _authorize_sql(self, method, params, session):
+        from .sql_safety_guard import CONTEXT_ACTIVATIONS, ConfirmationRequiredError
+        binding = self._sql_safety_binding(params)
+        authorization = self.sql_safety_guard.authorize(method, params, binding)
+        if authorization["_sql_safety_authorized"] and binding["uses_active_fallback"]:
+            pending = ([session._active] if session._active else []) + list(session._queue)
+            if any(job.method in CONTEXT_ACTIVATIONS for job in pending):
+                raise ConfirmationRequiredError()
+        return authorization
 
     def _flush_snapshot(self, session, *, timeout=15):
         from .variable_snapshot import settings_get
@@ -725,6 +806,10 @@ class Supervisor:
 
     def _route(self, params, *, capture_transaction_policy=True):
         routed = dict(params)
+        routed.pop("confirmation_token", None)
+        for key in list(routed):
+            if key.startswith("_sql_safety_"):
+                routed.pop(key)
         if capture_transaction_policy:
             routed.pop("_execution_scope_id", None)
             routed.pop("_metadata_scope", None)
@@ -866,6 +951,9 @@ class Supervisor:
             return self.catalog.dispatch(method, params)
         if method in {"transactions.settings.get", "transactions.settings.set"}:
             from .transaction_settings import settings_get, settings_set
+            return settings_get() if method.endswith(".get") else settings_set(params)
+        if method in {"sql.safety.settings.get", "sql.safety.settings.set"}:
+            from .sql_safety_settings import settings_get, settings_set
             return settings_get() if method.endswith(".get") else settings_set(params)
         if method in {"ssh.tunnels.list", "ssh.tunnels.save", "ssh.tunnels.delete"}:
             return self.catalog.dispatch(method, params)
@@ -1032,6 +1120,22 @@ class Supervisor:
             del self.sessions[session.session_id]
             session.close()
             return {"session_id": session.session_id, "status": "closed"}
+        if method == "execution.review":
+            from .sql_safety_guard import CONTEXT_MUTATIONS, CONTEXT_ACTIVATIONS
+            reviewed_method = params.get("method", "execution.run")
+            session = self._session(params)
+            with session._lock:
+                pending = ([session._active] if session._active else []) + list(session._queue)
+                binding = self._sql_safety_binding(params)
+                review = self.sql_safety_guard.review(reviewed_method, params, binding)
+                guarded_pending = CONTEXT_MUTATIONS | (CONTEXT_ACTIVATIONS if binding["uses_active_fallback"] else set())
+                if review["confirmation_required"] and any(job.method in guarded_pending for job in pending):
+                    with self.sql_safety_guard.lock:
+                        self.sql_safety_guard.tickets.pop(review["confirmation_token"], None)
+                    raise RuntimeErrorResponse("session_busy", "Aguarde a execução atual antes de revisar os comandos SQL.")
+                if binding.get("connection_name"):
+                    review["connection_name"] = binding["connection_name"]
+                return review
         if method == "execution.run":
             session = self._session(params)
             execution_id = self._identifier(params.get("execution_id"), "execution_id")
@@ -1056,6 +1160,7 @@ class Supervisor:
                 if not isinstance(notification.get("emit_notification", True), bool):
                     raise RuntimeErrorResponse("invalid_params", "emit_notification must be a boolean")
             download = params.get("export")
+            normalized_download = None
             if download is not None:
                 if params["language"] != "sql" or not isinstance(download, dict):
                     raise RuntimeErrorResponse("invalid_params", "Only SQL executions can download directly to a file")
@@ -1064,8 +1169,14 @@ class Supervisor:
                 destination = _destination(download.get("path"), export_format)
                 options, _, _ = _options(download.get("options"))
                 options["stage_id"] = uuid.uuid4().hex
-                params = {**params, "export": {"path": str(destination), "format": export_format, "options": options}}
-            session.enqueue(method, self._route(params))
+                normalized_download = {"path": str(destination), "format": export_format, "options": options}
+            with session._lock:
+                authorization = self._authorize_sql(method, params, session)
+                routed = self._route(params)
+                routed.update(authorization)
+                if normalized_download is not None:
+                    routed["export"] = normalized_download
+                session.enqueue(method, routed)
             return {"execution_id": execution_id, "status": "queued"}
         if method == "execution.cancel":
             return self._session(params).cancel(self._identifier(params.get("execution_id"), "execution_id"))
@@ -1084,7 +1195,12 @@ class Supervisor:
         if method in {"data.import", "variable.inspect", "variable.delete", "result.export", "result.export_text", "result.summary", "result.chart", "result.chart_export", "result.artifact_write", "result.export_table", "document.read", "document.script_export", "variable.archive.list", "variable.archive.export", "variable.archive.import"}:
             if params.get("operation_id") is not None:
                 self._identifier(params["operation_id"], "operation_id")
-            self._session(params).enqueue(method, self._route(params), request_id)
+            session = self._session(params)
+            with session._lock:
+                routed = self._route(params)
+                if method == "result.export_table":
+                    routed.update(self._authorize_sql(method, params, session))
+                session.enqueue(method, routed, request_id)
             return None
         if method in {"workspace.read", "workspace.write"}:
             path = params.get("path")

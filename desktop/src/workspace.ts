@@ -6,6 +6,7 @@ import type { NotificationContext } from "./NotificationsDialog";
 import { completionConnectionScope, inheritsSessionScope } from "./sessionCompletion";
 import { dataImportPending, type DataImportOptions, type DataImportState } from "./dataImport";
 import { importedDataCode } from "./importCode";
+import { confirmSqlExecution, sqlSafetyReview, waitForSqlReview, type SqlExecutionReview } from "./sqlSafety";
 
 export type BlockStatus = "idle" | "queued" | "running" | "cancelling" | "succeeded" | "failed" | "cancelled";
 export interface Block {
@@ -305,6 +306,7 @@ export class WorkspaceController {
   private persistTimer?: ReturnType<typeof setTimeout>;
   private readonly cancelRequests = new Set<string>();
   private readonly periodicTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly pendingSqlReviews = new Map<string, AbortController>();
   private sharedDelimiter = "{{name}}";
   private automaticTransactions = true;
   private maximizeFirstBlock = false;
@@ -317,7 +319,7 @@ export class WorkspaceController {
   private browserMigrationRead=false;
   private editingLocked=false;
   private workspaceIdentity?:string;
-  setWorkspaceIdentity(id:string|undefined){this.workspaceIdentity=id;}
+  setWorkspaceIdentity(id:string|undefined){if(this.workspaceIdentity!==id)for(const review of this.pendingSqlReviews.values())review.abort();this.workspaceIdentity=id;}
   setEditingLocked(locked:boolean){this.editingLocked=locked;}
   isEditingLocked(){return this.editingLocked;}
   private unsubscribeEditorViews?:()=>void;
@@ -325,6 +327,7 @@ export class WorkspaceController {
   setAutomaticTransactions(enabled: boolean) { this.automaticTransactions = enabled !== false; }
   setNewSessionPreferences(preferences:{maximizeFirstBlock:boolean}) {this.maximizeFirstBlock=preferences.maximizeFirstBlock;}
   onQueueFinished?: (session: SessionDocument, success: boolean, completion: QueueCompletion) => void;
+  onConfirmSqlExecution?: (review: SqlExecutionReview, signal: AbortSignal) => Promise<boolean>;
   nativeSnapshot():NativeWorkspaceState {
     flushEditorViewStates();
     return {documents:this.state.sessions.map(session=>{
@@ -393,7 +396,7 @@ export class WorkspaceController {
     const saved=this.readBrowserSnapshot();if(!saved?.documents?.length)return false;
     this.restoreSnapshot({documents:saved.documents,activeIndex:saved.activeIndex});return true;
   }
-  dispose(){this.connectingSessions.clear();this.transientConnections.clear();this.transientCredentialIds.clear();this.directConnectionTargets.clear();this.unsubscribeEditorViews?.();this.unsubscribeEditorViews=undefined;if(this.persistTimer)clearTimeout(this.persistTimer);for(const timer of this.periodicTimers.values())clearTimeout(timer);this.periodicTimers.clear();}
+  dispose(){for(const review of this.pendingSqlReviews.values())review.abort();this.pendingSqlReviews.clear();this.connectingSessions.clear();this.transientConnections.clear();this.transientCredentialIds.clear();this.directConnectionTargets.clear();this.unsubscribeEditorViews?.();this.unsubscribeEditorViews=undefined;if(this.persistTimer)clearTimeout(this.persistTimer);for(const timer of this.periodicTimers.values())clearTimeout(timer);this.periodicTimers.clear();}
 
   getSnapshot = () => this.state;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
@@ -773,8 +776,8 @@ export class WorkspaceController {
     if (!session || !block) return;
     // Capture before awaiting: blur and advancing focus must not change what runs.
     const code = selection ?? selectedCode(blockId, block.code) ?? block.code;
-    await this.runQueue(sessionId, [{ ...block, code }]);
-    if (advance) {
+    const completed = await this.runQueue(sessionId, [{ ...block, code }]);
+    if (advance && completed && completed.status !== "cancelled") {
       const latest = this.session(sessionId); if (!latest) return;
       const index = latest.blocks.findIndex((item) => item.id === blockId);
       const next = latest.blocks[index + 1] ?? this.addBlock(sessionId, block.language);
@@ -802,9 +805,9 @@ export class WorkspaceController {
     const runnable = queue.filter((block) => block.code.trim() && (!block.cell_type || block.cell_type === "code"));
     if (!runnable.length) { this.message("Escreva código no bloco antes de executar."); return; }
     this.cancelRequests.delete(sessionId);
-    this.patchSession(sessionId, (session) => ({ ...session, busy: true, executionStartedAt: Date.now(), notice: undefined, commandExecutions: [], executionOutput: undefined,
+    this.patchSession(sessionId, (session) => ({ ...session, busy: true, executionStartedAt: undefined, notice: undefined,
       blocks: session.blocks.map((block) => runnable.some((item) => item.id === block.id) ? { ...block, status: "queued", error: undefined, duration_ms:undefined, executionStartedAt:undefined } : block) }));
-    let succeeded = true, failedError: string | undefined, cancelled = false;
+    let succeeded = true, failedError: string | undefined, cancelled = false, confirmationCancelled = false;
     let lastBlock = runnable[0], lastExecutionId = newId();
     let lastContext: NotificationContext = { tab_name: session?.title, block_name: lastBlock.block_name, blocks: 0,
       type: lastBlock.language === "sql" ? "SQL" : "Python", rows: 0 };
@@ -821,6 +824,12 @@ export class WorkspaceController {
         const result = await this.runOne(sessionId, block, lastExecutionId, {
           config: session?.extras.notification_config, context: { ...lastContext, block_id: block.id, workspace_id: workspaceId }, queue_result:queueResult, emit_notification: index === runnable.length - 1,
         });
+        if (!result) {
+          succeeded = false; cancelled = true; confirmationCancelled = true;
+          this.stopPeriodic(sessionId);
+          this.patchSession(sessionId, s => ({ ...s, notice: "Execução cancelada." }));
+          break;
+        }
         completed = result;
         const frame = result.results.at(-1);
         if(frame)queueResult={result_id:frame.result_id,rows:frame.row_count};
@@ -836,7 +845,7 @@ export class WorkspaceController {
       this.schedulePeriodic(sessionId);
       const current = this.session(sessionId);
       const status = cancelled ? "cancelled" : succeeded ? "succeeded" : "failed";
-      if(current) try { this.onQueueFinished?.(current,succeeded,{ blockId: lastBlock.id, executionId: lastExecutionId, workspaceId,
+      if(current && !confirmationCancelled) try { this.onQueueFinished?.(current,succeeded,{ blockId: lastBlock.id, executionId: lastExecutionId, workspaceId,
         status,
         context: { ...lastContext, success: succeeded, error: failedError ?? (cancelled ? "Execução cancelada." : lastContext.error) },
         notification: !failedError && completed?.execution_id === lastExecutionId && completed.status === status ? completed.notification : undefined }); }
@@ -844,17 +853,14 @@ export class WorkspaceController {
     }
     return completed;
   }
-  private async runOne(sessionId: string, block: Block, executionId: string, notification: Record<string, unknown>): Promise<ExecutionFinished> {
-    const completion = new Promise<ExecutionFinished>((resolve, reject) => this.completions.set(executionId, { resolve, reject, sessionId, blockId: block.id }));
-    // The event channel may report failure before execution.run's request acknowledgement.
-    void completion.catch(() => {});
-    this.patchSession(sessionId, (session) => ({ ...session, currentExecutionId: executionId, currentBlockId: block.id,
-      blocks: session.blocks.map((item) => item.id === block.id ? { ...item, status: "running", error: undefined, executionStartedAt:undefined } : item) }));
+  private async runOne(sessionId: string, block: Block, executionId: string, notification: Record<string, unknown>): Promise<ExecutionFinished | undefined> {
     const current = this.session(sessionId)!;
     // Queue source code is captured at Run All, but context follows earlier
     // commands in that queue and must be resolved from the current document.
     const liveBlock=current.blocks.find(item => item.id === block.id) ?? block,scope = completionConnectionScope(current, liveBlock);
-    const acknowledged = this.transport.request("execution.run", { session_id: sessionId, block_id: block.id, execution_id: executionId,
+    // One immutable request is reviewed and executed. Edits, focus, parameter
+    // changes and another tab's context cannot change what the user approves.
+    const request = structuredClone({ session_id: sessionId, block_id: block.id, execution_id: executionId,
       scope_inherited:inheritsSessionScope(liveBlock),
       language: block.language, code: block.code,
       automatic_transactions: this.automaticTransactions && liveBlock.disable_automatic_transactions !== true,
@@ -869,7 +875,34 @@ export class WorkspaceController {
       shared_delimiter: this.sharedDelimiter,
       export: block.export,
       notification,
-    }).then(() => completion).catch((error) => {
+    });
+    const generation = this.runtimeGeneration, pending = new AbortController();
+    this.pendingSqlReviews.set(sessionId, pending);
+    try {
+      const response = await waitForSqlReview(this.transport.request("execution.review", request), pending.signal);
+      if (pending.signal.aborted || generation !== this.runtimeGeneration || !this.session(sessionId)) return;
+      const review = sqlSafetyReview(response);
+      if (review.confirmation_required) {
+        const sameConnection = !liveBlock.connection_id || liveBlock.connection_id === current.savedConnectionId;
+        const connectionName = review.connection_name || String(liveBlock.connection_name
+          ?? (sameConnection ? request.connection_name ?? current.extras.connection_name ?? current.connection?.name : undefined)
+          ?? scope.connectionId ?? "") || undefined;
+        const approved = await confirmSqlExecution({ ...review, session_id: sessionId, block_id: block.id, execution_id: executionId,
+          code: block.code, language: block.language, tab_name: current.title, block_name: block.block_name,
+          connection_name: connectionName, database: scope.database, schema: scope.schema }, pending.signal, this.onConfirmSqlExecution);
+        if (!approved || this.cancelRequests.has(sessionId) || generation !== this.runtimeGeneration || !this.session(sessionId)) return;
+        Object.assign(request, { confirmation_token: review.confirmation_token });
+      }
+    } finally { if (this.pendingSqlReviews.get(sessionId) === pending) this.pendingSqlReviews.delete(sessionId); }
+    if (this.cancelRequests.has(sessionId)) return;
+    const completion = new Promise<ExecutionFinished>((resolve, reject) => this.completions.set(executionId, { resolve, reject, sessionId, blockId: block.id }));
+    // The event channel may report failure before execution.run's request acknowledgement.
+    void completion.catch(() => {});
+    this.patchSession(sessionId, (session) => ({ ...session, currentExecutionId: executionId, currentBlockId: block.id,
+      ...(session.executionStartedAt === undefined ? { commandExecutions: [], executionOutput: undefined } : {}),
+      executionStartedAt: session.executionStartedAt ?? Date.now(),
+      blocks: session.blocks.map((item) => item.id === block.id ? { ...item, status: "running", error: undefined, executionStartedAt:undefined } : item) }));
+    const acknowledged = this.transport.request("execution.run", request).then(() => completion).catch((error) => {
         // A terminal event is authoritative even if its request acknowledgement arrives later.
         if (this.completions.delete(executionId)) {
           this.patchSession(sessionId, (session) => ({ ...session, blocks: session.blocks.map((item) => item.id === block.id ? { ...item, status: "failed", executionStartedAt:undefined, error: errorText(error) } : item) }));
@@ -881,6 +914,7 @@ export class WorkspaceController {
   async cancel(sessionId: string) {
     const session = this.session(sessionId); if (!session?.busy) return;
     this.stopPeriodic(sessionId); this.cancelRequests.add(sessionId);
+    if (this.pendingSqlReviews.has(sessionId)) { this.pendingSqlReviews.get(sessionId)?.abort(); return; }
     this.patchSession(sessionId, (item) => ({ ...item, notice: "Cancelamento reinicia somente esta sessão e descarta suas variáveis e conexão.",
       blocks: item.blocks.map((block) => block.status === "running" ? { ...block, status: "cancelling" } : block) }));
     if (session.currentExecutionId) await this.transport.request("execution.cancel", { session_id: sessionId, execution_id: session.currentExecutionId });
@@ -894,6 +928,7 @@ export class WorkspaceController {
     }
     if (event?.event === "backend.exited") {
       const message = event.payload.message || "O runtime Python foi encerrado.";
+      for (const review of this.pendingSqlReviews.values()) review.abort(); this.pendingSqlReviews.clear();
       for (const timer of this.periodicTimers.values()) clearTimeout(timer); this.periodicTimers.clear();
       this.runtimeGeneration++; this.initialization = undefined; this.runtimeSessions.clear(); this.creatingSessions.clear(); this.connectingSessions.clear();
       for (const completion of this.completions.values()) completion.reject(new Error(message));
@@ -908,6 +943,7 @@ export class WorkspaceController {
     if (!event || !event.payload?.session_id) return;
     this.patchSession(event.payload.session_id, (session) => applyRuntimeEvent(session, event));
     if (event.event === "session.error") {
+      this.pendingSqlReviews.get(event.payload.session_id)?.abort();
       this.connectingSessions.delete(event.payload.session_id);
       this.cancelRequests.add(event.payload.session_id);
       for (const [id, completion] of this.completions) {
@@ -918,6 +954,7 @@ export class WorkspaceController {
       return;
     }
     if (event.event === "session.reset") {
+      this.pendingSqlReviews.get(event.payload.session_id)?.abort();
       this.connectingSessions.delete(event.payload.session_id);
       this.cancelRequests.add(event.payload.session_id);
       for (const [id, completion] of this.completions) {

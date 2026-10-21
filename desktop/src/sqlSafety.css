@@ -1,0 +1,19 @@
+.modal.sql-safety-dialog { display: flex; flex-direction: column; width: 680px; max-width: calc(100vw - 32px); overflow: hidden; }
+.sql-safety-dialog > .modal-header, .sql-safety-dialog > .modal-footer { flex: none; }
+.sql-safety-body { padding: 18px 22px; min-height: 0; overflow-y: auto; }
+.sql-safety-summary { display: flex; align-items: center; gap: 9px; margin: 0 0 16px; line-height: 1.5; }
+.sql-safety-summary svg { color: var(--danger); flex: none; }
+.sql-safety-context { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 20px; margin: 0 0 18px; }
+.sql-safety-context div { min-width: 0; }
+.sql-safety-context dt { color: var(--muted); font-size: 11px; margin-bottom: 3px; }
+.sql-safety-context dd { margin: 0; overflow-wrap: anywhere; line-height: 1.5; }
+.sql-safety-commands { margin: 0; padding: 0; list-style: none; display: grid; gap: 12px; }
+.sql-safety-commands li { min-width: 0; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+.sql-safety-command-label { display: flex; flex-wrap: wrap; align-items: center; gap: 7px 10px; padding: 9px 12px; border-bottom: 1px solid var(--border); }
+.sql-safety-command-label code { overflow-wrap: anywhere; min-width: 0; }
+.sql-safety-unfiltered { color: var(--danger); font-size: 11px; font-weight: 600; }
+.sql-safety-commands pre { margin: 0; padding: 12px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--editor-font); font-size: 12px; line-height: 1.6; max-height: 180px; overflow-y: auto; }
+.sql-safety-source { margin-top: 16px; }
+.sql-safety-source summary { cursor: pointer; color: var(--muted); }
+.sql-safety-source pre { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--editor-font); font-size: 12px; line-height: 1.6; max-height: 240px; overflow: auto; }
+@media (max-width: 480px) { .sql-safety-context { grid-template-columns: minmax(0, 1fr); } .sql-safety-body { padding: 14px; } }

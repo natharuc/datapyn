@@ -141,7 +141,7 @@ def test_only_explicit_true_frame_tag_is_removed(tag, monkeypatch, tmp_path):
     marker.attrs["datapyn_command_results"] = [feedback(1, "UPDATE", 0)]
     connector = SimpleNamespace(db_type="mysql", engine=None, connection_params={"database": "before"},
                                 execute_query=lambda *args, **kwargs: marker)
-    messages = run_kernel_jobs(monkeypatch, tmp_path, connector, [{"code": "ignored by fake connector"}])
+    messages = run_kernel_jobs(monkeypatch, tmp_path, connector, [{"code": "SELECT 1"}])
     finished = next(message["payload"] for message in messages if message.get("event") == "execution.finished")
     assert finished["status"] == "succeeded", finished
     assert len(finished["results"]) == 1 and finished["command_results"] == [feedback(1, "UPDATE", 0)]
@@ -153,7 +153,7 @@ def test_tagged_frames_are_skipped_before_naming_real_results(monkeypatch, tmp_p
     values = [marker, pd.DataFrame({"value": [7]}), marker, pd.DataFrame({"value": [8]})]
     connector = SimpleNamespace(db_type="mysql", engine=None, connection_params={"database": "before"},
                                 execute_query=lambda *args, **kwargs: values)
-    messages = run_kernel_jobs(monkeypatch, tmp_path, connector, [{"code": "ignored by fake connector", "variable_name": "data"}])
+    messages = run_kernel_jobs(monkeypatch, tmp_path, connector, [{"code": "SELECT 1", "variable_name": "data"}])
     finished = next(message["payload"] for message in messages if message.get("event") == "execution.finished")
     assert finished["command_results"] == [feedback(1, "UPDATE", 1)]
     assert [result["variable_name"] for result in finished["results"]] == ["data", "data1"]

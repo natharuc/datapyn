@@ -595,5 +595,15 @@
   "Transação aberta": "Open transaction",
   "Use COMMIT ou ROLLBACK neste bloco para finalizar a transação.": "Use COMMIT or ROLLBACK in this block to end the transaction.",
   "Transação: estado desconhecido": "Transaction: unknown state",
-  "A conexão foi interrompida ou não foi possível verificar a transação.": "The connection was interrupted or the transaction could not be checked."
+  "A conexão foi interrompida ou não foi possível verificar a transação.": "The connection was interrupted or the transaction could not be checked.",
+  "Confirmar comandos SQL destrutivos": "Confirm destructive SQL commands",
+  "Exige confirmação mesmo com WHERE. Desativar permite executar sem esse aviso.": "Requires confirmation even with WHERE. Disabling allows execution without this prompt.",
+  "Configuração de confirmação SQL inválida.": "Invalid SQL confirmation settings.",
+  "Confirmar execução SQL": "Confirm SQL execution",
+  "Esta execução altera dados ou estruturas do banco.": "This execution changes database data or structures.",
+  "Sem WHERE · todas as linhas": "No WHERE · all rows",
+  "Objeto inteiro": "Entire object",
+  "Bloco": "Block",
+  "Conexão": "Connection",
+  "Código a executar": "Code to execute"
 }

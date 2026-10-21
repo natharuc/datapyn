@@ -53,6 +53,7 @@ class FakeTransport implements RuntimeTransport {
   async request<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
     this.requests.push({ method, params });
     if (this.unavailable) throw new Error("Runtime indisponível");
+    if (method === "execution.review") return { confirmation_required: false, risks: [] } as T;
     if (method === "system.info") return { protocol_version: 1, python_version: "3.12.0", capabilities: { languages: ["sql", "python"], qt: false } } as T;
     return { session_id: params.session_id, execution_id: params.execution_id, status: "queued" } as T;
   }

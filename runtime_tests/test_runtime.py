@@ -98,10 +98,16 @@ class Client:
         return name
 
     def execute(self, code, execution_id="one", session_id="a", language="python", **options):
-        self.request("execution.run", {
+        params = {
             "session_id": session_id, "execution_id": execution_id,
             "language": language, "code": code, **options,
-        })
+        }
+        # This convenience helper simulates a human reviewing and confirming
+        # the command. Raw request()/response() never approves SQL implicitly.
+        reviewed = self.request("execution.review", params)
+        if reviewed["confirmation_required"]:
+            params["confirmation_token"] = reviewed["confirmation_token"]
+        self.request("execution.run", params)
         return self.event("execution.finished", execution_id=execution_id, session_id=session_id)
 
     def page(self, finished, session_id="a", **options):

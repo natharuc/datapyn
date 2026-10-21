@@ -16,6 +16,8 @@ import {getFocusedDocument} from "./documentWindows";
 import { clipboardFormat, DEFAULT_FORMAT_EXPORT_SETTINGS, EXPORT_FORMATS, exportOptions, exportPath, exportProgressPercent, exportSource, readExportProgress, temporaryTableName,
   type ExportConnection, type ExportDestination, type ExportFormat, type ExportProgress, type ExportTextResult, type FormatExportSettings } from "./dataExport";
 import "./dataActions.css";
+import {sqlSafetyReview,waitForSqlReview} from "./sqlSafety";
+import {sqlConfirmations} from "./sqlConfirmation";
 
 export interface DataActionsProps {
   sessionId: string; result?: ResultRef; connectionType?: string; disabled?: boolean; view?: DataView;
@@ -75,10 +77,11 @@ export function DataActions({sessionId, result, connectionType, disabled, view, 
   const [progress, setProgress] = useState<ExportProgress>(), [cancelling, setCancelling] = useState(false);
   const [localImport,setLocalImport]=useState<DataImportState>();
   const operation = useRef<{id: string; sessionId: string; cancellable: boolean; cancelled?: boolean}>();
+  const sqlReviewAbort = useRef<AbortController>();
   const owner = useRef({sessionId, resultId: result?.result_id}); owner.current = {sessionId, resultId: result?.result_id};
   const mounted = useRef(true), busyRef = useRef(false);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  useEffect(() => { setDialog(undefined); setError(""); setSummary(undefined); setSqlPreview(undefined); setTable(result?.variable_name || "data"); }, [sessionId, result?.result_id]);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; sqlReviewAbort.current?.abort(); }; }, []);
+  useEffect(() => { sqlReviewAbort.current?.abort(); setDialog(undefined); setError(""); setSummary(undefined); setSqlPreview(undefined); setTable(result?.variable_name || "data"); }, [sessionId, result?.result_id]);
   useEffect(() => {
     const options = normalizeExportSettings(initialExportSettings);
     setDelimiter(options.delimiter); setDecimal(options.decimal); setEncoding(options.encoding); setIncludeHeader(options.include_header);
@@ -188,8 +191,21 @@ export function DataActions({sessionId, result, connectionType, disabled, view, 
     setSqlPreview(generated);
   }
   async function exportTable(operationId: string) {
+    const params = structuredClone({...source(),...transactionScope,operation_id:operationId,connection_id:destinationConnection || undefined,connection_schema:destinationConnection===(currentConnectionId||"")?currentSchema:undefined,database:database || undefined,table:targetName,schema:effectiveTemporary ? undefined : schema || undefined,temporary:effectiveTemporary,if_exists:ifExists,chunksize});
+    let confirmation_token: string | undefined;
+    if (ifExists === "replace") {
+      const controller = new AbortController(); sqlReviewAbort.current = controller;
+      try {
+        const response = await waitForSqlReview(runtime.request("execution.review", {...params,method:"result.export_table"}), controller.signal);
+        if (!response || controller.signal.aborted) return;
+        const review = sqlSafetyReview(response);
+        if (review.confirmation_required && !await sqlConfirmations.request({...review,session_id:sessionId,block_name:result?.variable_name,connection_name:review.connection_name ?? activeConnection?.name ?? (destinationConnection || currentConnectionId),database,schema}, controller.signal)) return;
+        if (controller.signal.aborted) return;
+        confirmation_token = review.confirmation_token;
+      } finally { if (sqlReviewAbort.current === controller) sqlReviewAbort.current = undefined; }
+    }
     startProgress();
-    const exported = await runtime.request<{row_count: number}>("result.export_table", {...source(),...transactionScope,operation_id:operationId,connection_id:destinationConnection || undefined,connection_schema:destinationConnection===(currentConnectionId||"")?currentSchema:undefined,database:database || undefined,table:targetName,schema:effectiveTemporary ? undefined : schema || undefined,temporary:effectiveTemporary,if_exists:ifExists,chunksize});
+    const exported = await runtime.request<{row_count: number}>("result.export_table", {...params,confirmation_token});
     onTableExported?.(); onMessage(t("{rows} linhas exportadas para {path}", {rows: exported.row_count.toLocaleString(), path: `${effectiveTemporary || !schema ? "" : `${schema}.`}${targetName}`})); setDialog(undefined);
   }
   const sqlForm = dialog === "sql" || dialog === "export" && format === "sql";

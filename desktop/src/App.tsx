@@ -44,6 +44,9 @@ import {Modal} from "./PanelControls";
 import {useOwnerDocumentRevision} from "./useOwnerDocument";
 import {readNotificationFlags,saveNotificationFlags} from "./notificationPreferences";
 import {applyTransactionPreferences,readTransactionSettings} from "./transactionPreferences";
+import {applySqlSafetyPreferences,readSqlSafetySettings} from "./safetySettings";
+import {SqlSafetyConfirmation} from "./SqlSafetyConfirmation";
+import {sqlConfirmations} from "./sqlConfirmation";
 import {startupEditorId} from "./splashProtocol";
 import {useStartupSplash} from "./useStartupSplash";
 import {PANEL_IDS,isBottomPanel,type BottomPanelId,type DockingControls,type PanelId} from "./dockingLayout";
@@ -168,6 +171,11 @@ export function App() {
     return()=>{disposed=true;cleanup?.();};
   },[]);
   const transactionPreferencesRevision = useRef(0);
+  const sqlSafetyPreferencesRevision = useRef(0);
+  useEffect(() => {
+    workspace.onConfirmSqlExecution = sqlConfirmations.request;
+    return () => { workspace.onConfirmSqlExecution = undefined; sqlConfirmations.cancelAll(); };
+  }, []);
   const [leftVisible, setLeftVisible] = useState(preferences.leftVisible), [rightVisible, setRightVisible] = useState(preferences.rightVisible);
   const [connectionDialog, setConnectionDialog] = useState(false), [settingsDialog, setSettingsDialog] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState("appearance");
@@ -381,8 +389,8 @@ export function App() {
     requestAnimationFrame(() => focusEditor(session.focusedBlockId));
     return()=>{current=false;};
   }, [session.id, session.savedConnectionId,state.runtimeStatus,profile?.active_id,switchingProfile]);
-  const applyProfile=(loaded:ProfileState,defaults:ConfigurationDefaults,automaticTransactions:boolean)=>{
-    const prefs=normalizePreferences({...((loaded.state?.preferences ?? (loaded.state || profile ? DEFAULT_PREFERENCES : preferences)) as Partial<Preferences>),automaticTransactions});
+  const applyProfile=(loaded:ProfileState,defaults:ConfigurationDefaults,automaticTransactions:boolean,confirmDestructiveSql:boolean)=>{
+    const prefs=normalizePreferences({...((loaded.state?.preferences ?? (loaded.state || profile ? DEFAULT_PREFERENCES : preferences)) as Partial<Preferences>),automaticTransactions,confirmDestructiveSql});
     workspace.setNewSessionPreferences({maximizeFirstBlock:prefs.maximizeFirstBlock});
     workspace.setAutomaticTransactions(prefs.automaticTransactions);
     chartSources.current.clear();
@@ -399,11 +407,13 @@ export function App() {
     setActiveResult({});setProfile(loaded);setGridView(undefined);setFormatColumnRequest(undefined);setExplorerRefresh(n=>n+1);
   };
   const applyProfileRef=useRef(applyProfile);applyProfileRef.current=applyProfile;
-  useEffect(()=>{if(state.runtimeStatus !== "ready" || profile)return;let active=true;setProfileLoadError("");void Promise.all([nativeDrafts.current.load(),connections.refresh(),runtime.request<{defaults:ConfigurationDefaults}>("configurations.defaults.get"),readTransactionSettings(runtime)]).then(([loaded,,settings,transactions])=>{if(active)applyProfileRef.current(loaded,settings.defaults,transactions.automatic_transactions);}).catch(failure=>{if(active){setProfileLoadError(errorText(failure));reportMessage(errorText(failure));}});return()=>{active=false;};},[state.runtimeStatus,profile,profileRetry]);
+  useEffect(()=>{if(state.runtimeStatus !== "ready" || profile)return;let active=true;setProfileLoadError("");void Promise.all([nativeDrafts.current.load(),connections.refresh(),runtime.request<{defaults:ConfigurationDefaults}>("configurations.defaults.get"),readTransactionSettings(runtime),readSqlSafetySettings(runtime)]).then(([loaded,,settings,transactions,safety])=>{if(active)applyProfileRef.current(loaded,settings.defaults,transactions.automatic_transactions,safety.confirm_destructive_sql);}).catch(failure=>{if(active){setProfileLoadError(errorText(failure));reportMessage(errorText(failure));}});return()=>{active=false;};},[state.runtimeStatus,profile,profileRetry]);
   flushWorkspace.current=async()=>{workspace.persist();if(profile){await flushNativePopoutLayouts();const mainWindow=await windowLayout.capture().catch(()=>mainWindowLayout);nativeDrafts.current.schedule(profile.active_id,{...workspaceExtras.current,...workspace.nativeSnapshot(),preferences:{...preferences,leftVisible,rightVisible,resultHeight},shortcuts:{...shortcuts},layout:{...layoutExtras.current,panel,rightPanel,mainWindow,docking:captureLayout.current() ?? dockLayout}});}await nativeDrafts.current.flush();if(state.runtimeStatus === "ready"){const flushed=await runtime.request<{sessions:Array<{error?:string;saved?:boolean;session_id:string}>}>("system.flush_workspace");const failures=flushed.sessions.filter(s=>s.error);if(failures.length)throw new Error(failures.map(s=>`${s.session_id}: ${s.error}`).join("; "));}};
   useEffect(()=>{if(!profile || switchingProfile || state.runtimeStatus !== "ready" || startupLayout !== profile.active_id || !windowLayout.ready)return;const snapshot:NativeWorkspaceState={...workspaceExtras.current,...workspace.nativeSnapshot(),preferences:{...preferences,leftVisible,rightVisible,resultHeight},shortcuts:{...shortcuts},layout:{...layoutExtras.current,panel,rightPanel,mainWindow:mainWindowLayout,docking:dockLayout}};nativeDrafts.current.schedule(profile.active_id,snapshot);},[profile?.active_id,state.documentRevision,preferences,shortcuts,leftVisible,rightVisible,resultHeight,panel,rightPanel,dockLayout,mainWindowLayout,startupLayout,windowLayout.ready,switchingProfile,state.runtimeStatus]);
   useEffect(()=>{if(state.runtimeStatus !== "ready" || !profile)return;let active=true;void readNotificationFlags(runtime).then(flags=>{if(active)setPreferences(p=>({...p,...flags}));}).catch(failure=>reportMessage(errorText(failure)));return()=>{active=false;};},[state.runtimeStatus,profile?.active_id]);
   useEffect(()=>{if(state.runtimeStatus !== "ready" || !profile)return;let active=true;const revision=++transactionPreferencesRevision.current;void readTransactionSettings(runtime).then(settings=>{if(active && revision===transactionPreferencesRevision.current){workspace.setAutomaticTransactions(settings.automatic_transactions);setPreferences(p=>({...p,automaticTransactions:settings.automatic_transactions}));}}).catch(failure=>reportMessage(errorText(failure)));return()=>{active=false;};},[state.runtimeStatus,profile?.active_id]);
+  useEffect(()=>{if(state.runtimeStatus !== "ready" || !profile)return;let active=true;const revision=++sqlSafetyPreferencesRevision.current;void readSqlSafetySettings(runtime).then(settings=>{if(active && revision===sqlSafetyPreferencesRevision.current)setPreferences(p=>({...p,confirmDestructiveSql:settings.confirm_destructive_sql}));}).catch(failure=>reportMessage(errorText(failure)));return()=>{active=false;};},[state.runtimeStatus,profile?.active_id]);
+  useEffect(()=>{if(state.runtimeStatus !== "ready" || switchingProfile)sqlConfirmations.cancelAll();},[state.runtimeStatus,switchingProfile]);
   useEffect(()=>{if(state.runtimeStatus === "ready" && profile)void runtime.request("connection.idle_timeout",{seconds:preferences.connectionIdleSeconds}).catch(failure=>reportMessage(errorText(failure)));},[state.runtimeStatus,profile?.active_id,preferences.connectionIdleSeconds]);
   useEffect(()=>{
     if(!isDesktop())return;let disposed=false,unlisten:(()=>void)|undefined,closing=false;
@@ -421,7 +431,7 @@ export function App() {
   },[profile?.active_id,session.id,catalogState,switchingProfile]);
   const selectProfile=async(profileId:string)=>{
     if(state.sessions.some(s=>s.busy||dataImportPending(s.dataImport)))throw new Error("Aguarde ou cancele as execuções e importações antes de trocar de workspace.");
-    setSwitchingProfile(true);workspace.setEditingLocked(true);try{await flushWorkspace.current();const selected=await nativeDrafts.current.select(profileId);const [,settings,transactions]=await Promise.all([connections.refresh(),runtime.request<{defaults:ConfigurationDefaults}>("configurations.defaults.get"),readTransactionSettings(runtime)]);applyProfile(selected,settings.defaults,transactions.automatic_transactions);setWorkspaceManager(false);}finally{workspace.setEditingLocked(false);setSwitchingProfile(false);}
+    setSwitchingProfile(true);workspace.setEditingLocked(true);try{await flushWorkspace.current();const selected=await nativeDrafts.current.select(profileId);const [,settings,transactions,safety]=await Promise.all([connections.refresh(),runtime.request<{defaults:ConfigurationDefaults}>("configurations.defaults.get"),readTransactionSettings(runtime),readSqlSafetySettings(runtime)]);applyProfile(selected,settings.defaults,transactions.automatic_transactions,safety.confirm_destructive_sql);setWorkspaceManager(false);}finally{workspace.setEditingLocked(false);setSwitchingProfile(false);}
   };
   const configurationActions:ConfigurationTransferActions={
     busy:!profile || switchingProfile || state.sessions.some(s=>s.busy||dataImportPending(s.dataImport)),
@@ -438,8 +448,9 @@ export function App() {
         const imported=await runtime.request<ConfigurationPreview>("configurations.import",{path,preview_token:preview.preview_token});
         await connections.refresh();
         ++transactionPreferencesRevision.current;
-        const transactionSettings=await readTransactionSettings(runtime);
-        const nextPreferences=normalizePreferences({...preferences,...imported.preferences,automaticTransactions:transactionSettings.automatic_transactions} as Partial<Preferences>);
+        ++sqlSafetyPreferencesRevision.current;
+        const [transactionSettings,sqlSafetySettings]=await Promise.all([readTransactionSettings(runtime),readSqlSafetySettings(runtime)]);
+        const nextPreferences=normalizePreferences({...preferences,...imported.preferences,automaticTransactions:transactionSettings.automatic_transactions,confirmDestructiveSql:sqlSafetySettings.confirm_destructive_sql} as Partial<Preferences>);
         workspace.setAutomaticTransactions(nextPreferences.automaticTransactions);
         const nextShortcuts={...shortcuts,...imported.shortcuts} as Record<Command,string>;
         updateConfigurationDefaults(imported.defaults ?? {});
@@ -683,6 +694,7 @@ export function App() {
   };
   const runDisabled = editingLocked || session.busy || dataImportPending(session.dataImport) || openingConnection || (session.connectionState?.phase==="error"&&focusedBlock?.language==="sql"&&!focusedBlock.connection_id) || state.runtimeStatus !== "ready" || !profile || switchingProfile || Boolean(session.runtimeError);
   return <div className="app-shell">
+    <SqlSafetyConfirmation/>
     <header className="app-header">
       <div className="brand"><img src={logo} alt="" /><span>{translateUi("DataPyn")}</span></div>
       <nav className="app-menu" aria-label={translateUi("Arquivos e configurações")}>
@@ -799,7 +811,7 @@ export function App() {
     {notificationHistory && <NotificationHistory center={notificationCenter} entries={notificationState.entries} onActivate={openNotification} onSettings={()=>{setNotificationHistory(false);setNotificationDialog(true);}} onClose={()=>setNotificationHistory(false)}/>}
     {connectionDialog && <ConnectionDialog tunnels={catalogState.catalog.ssh_tunnels} onManageTunnels={manageSshTunnels} initial={session.connection ? {...session.connection, ssh_tunnel_id: session.connection.ssh_tunnel_id !== undefined ? session.connection.ssh_tunnel_id : activeSavedConnection?.config.ssh_tunnel_id} : undefined} connectionId={session.savedConnectionId} hasPassword={activeSavedConnection?.has_password} hasSshPassword={activeSavedConnection?.has_ssh_password} hasSshPassphrase={activeSavedConnection?.has_ssh_passphrase} onClose={() => setConnectionDialog(false)} onConnect={async (config, metadata) => { await workspace.connect(session.id, config, session.savedConnectionId, metadata?.use_saved_database_password !== false); setExplorerRefresh(n=>n+1); }} />}
     <SshHostTrustDialog />
-    {settingsDialog && <SettingsDialog initialTab={settingsInitialTab} preferences={preferences} shortcuts={shortcuts} transfer={configurationActions} onClose={() => { setSettingsDialog(false); setSettingsInitialTab("appearance"); }} onSave={async(p,next,changed) => { ++transactionPreferencesRevision.current;await saveNotificationFlags(runtime,p);const applied=await applyTransactionPreferences(runtime,p,changed?.has("automaticTransactions") === true);workspace.setAutomaticTransactions(applied.automaticTransactions);setPreferences(applied);if(p.notifications && !preferences.notifications && isDesktop())run(requestPermission());setShortcuts(next); workspace.patchSession(session.id,s=>({...s,extras:{...s.extras,shared_delimiter:p.sharedDelimiter}})); try { localStorage.setItem("datapyn.desktop.shortcuts.v1", JSON.stringify(next)); } catch { reportMessage("Atalhos aplicados. Não foi possível persistir nesta máquina."); } setSettingsDialog(false); }} />}
+    {settingsDialog && <SettingsDialog initialTab={settingsInitialTab} preferences={preferences} shortcuts={shortcuts} transfer={configurationActions} onClose={() => { setSettingsDialog(false); setSettingsInitialTab("appearance"); }} onSave={async(p,next,changed) => { ++transactionPreferencesRevision.current;++sqlSafetyPreferencesRevision.current;await saveNotificationFlags(runtime,p);const transactionsApplied=await applyTransactionPreferences(runtime,p,changed?.has("automaticTransactions") === true);const applied=await applySqlSafetyPreferences(runtime,transactionsApplied,changed?.has("confirmDestructiveSql") === true);workspace.setAutomaticTransactions(applied.automaticTransactions);setPreferences(applied);if(p.notifications && !preferences.notifications && isDesktop())run(requestPermission());setShortcuts(next); workspace.patchSession(session.id,s=>({...s,extras:{...s.extras,shared_delimiter:p.sharedDelimiter}})); try { localStorage.setItem("datapyn.desktop.shortcuts.v1", JSON.stringify(next)); } catch { reportMessage("Atalhos aplicados. Não foi possível persistir nesta máquina."); } setSettingsDialog(false); }} />}
     {connectionPicker && <ConnectionPicker currentId={session.blocks.find(b=>b.id === connectionPicker)?.connection_id ?? session.savedConnectionId} onSelect={c => { if (connectionPicker === session.blocks[0].id) run(connectSaved(c).then(()=>workspace.updateBlock(session.id,session.blocks[0].id,{connection_id:undefined,database_name:undefined,schema:undefined}))); else workspace.updateBlock(session.id,connectionPicker,{connection_id:c.id,database_name:undefined,schema:undefined}); setConnectionPicker(undefined); requestAnimationFrame(()=>focusEditor(session.focusedBlockId)); }} onDefault={()=>{workspace.updateBlock(session.id,connectionPicker,{connection_id:undefined,database_name:undefined,schema:undefined});setConnectionPicker(undefined);}} onClose={()=>setConnectionPicker(undefined)}/>}
     {connectionsManager && <div className="modal-overlay"><section className="modal connection-manager" role="dialog" aria-modal="true" aria-label={translateUi("Gerenciar conexões")}><header className="modal-header"><h2>{translateUi("Gerenciar conexões")}</h2><button onClick={()=>setConnectionsManager(false)}>{translateUi("×")}</button></header><ConnectionsSidebar onManageTunnels={manageSshTunnels} activeConnectionId={session.savedConnectionId} onConnect={connectSaved} onError={reportMessage}/></section></div>}
     {closingId && <div className="modal-overlay"><section className="modal confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="close-title"><header className="modal-header"><Save size={18} /><div><h2 id="close-title">{translateUi("Salvar alterações?")}</h2><p>{workspace.session(closingId)?.title}</p></div></header><p className="confirm-copy">{translateUi("Salve a análise em um arquivo .dpw antes de fechar a aba.")}</p><footer className="modal-footer"><button className="secondary-button" onClick={() => setClosingId(undefined)}>{translateUi("Voltar")}</button><button className="secondary-button" onClick={() => run(closeConfirmed(false))}>{translateUi("Descartar")}</button><button className="primary-button" onClick={() => run(closeConfirmed(true))}>{translateUi("Salvar e fechar")}</button></footer></section></div>}

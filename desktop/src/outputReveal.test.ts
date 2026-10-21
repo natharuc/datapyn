@@ -65,6 +65,7 @@ describe("Dock output reveals", () => {
     let listener: ((event: RuntimeEvent) => void) | undefined;
     const transport: RuntimeTransport = {
       request: async <T>(method: string, params: Record<string, unknown> = {}): Promise<T> => {
+        if (method === "execution.review") return { confirmation_required: false, risks: [] } as T;
         if (method === "system.info") return { protocol_version: 1, python_version: "3.12.0", capabilities: { languages: ["sql", "python"], qt: false } } as T;
         if (method === "execution.run") requests.push(params);
         return {} as T;

@@ -23,6 +23,7 @@ from .desktop_services import enable_user_packages
 from .rich_outputs import RichOutputs
 from .sql_commands import command_result, command_results as normalized_commands, frame_command_results, is_command_frame
 from .transaction_settings import editor_context_key, context_automatic_transactions
+from .sql_safety_guard import require_kernel_review, require_query_review, guard_python_engines
 
 MAX_OUTPUT_BYTES = 256 * 1024
 from .result_store import ResultStore, MAX_PAGE_ROWS, MAX_RESULT_HANDLES
@@ -204,6 +205,16 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
         except Exception as exc:
             emit("snapshot.warning", {"session_id": session_id, "saved": False, "error": f"{type(exc).__name__}: {exc}"})
 
+    def publish_safety_context():
+        from .connection_catalog import without_secrets
+        config = pool.configs.get(pool.active_key, {}) if pool.active_key else {}
+        config = pool._normalized_config(config) if config else {}
+        safe = without_secrets({field: value for field, value in config.items()
+                                if not field.startswith("_") and field != "automatic_transactions"})
+        send({"sql_safety_context": {"config": safe,
+              "connection_id": pool.active_key[0] if pool.active_key else None,
+              "connection_name": connection_labels.get(pool.active_key)}})
+
     def activate(params, *, default=False):
         nonlocal connector, context_key, context_params
         connector = pool.activate(params, default=default)
@@ -216,6 +227,9 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                 del connection_labels[key]
         context_key = editor_context_key(params)
         context_params = dict(params)
+        # This in-memory snapshot never opens a connection or reads credentials.
+        # It identifies the fallback target even if a later metadata read fails.
+        publish_safety_context()
         resolved = pool.explorer().context()
         namespace.update({
             "db_engine": connector.engine, "db_type": connector.db_type,
@@ -227,6 +241,7 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
         return connector
 
     def publish_context(params=None, *, metadata=False, invalidated=False, invalidation_scope="connection"):
+        publish_safety_context()
         params = context_params if params is None else params
         key = context_key
         context = {"key": key, "variables": namespace_snapshot(namespace), "connection_id": pool.active_key[0] if pool.active_key else None,
@@ -270,6 +285,7 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                     closed = pool.reap_idle()
                     if closed:
                         connector = pool.active
+                        publish_safety_context()
                         if connector is None:
                             namespace.pop("db_engine", None)
                         emit("connection.idle_closed", {"session_id": session_id, "connection_ids": closed})
@@ -314,6 +330,8 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                 sql_scope_changed = False
                 rich_capture.begin()
                 try:
+                    safety_config = params.get("_connection_config") or params.get("config") or pool.default_config or {}
+                    safety_enabled, safety_authorized = require_kernel_review("execution.run", params, safety_config.get("db_type", ""))
                     before = {name: id(value) for name, value in namespace.items() if store.is_frame(value)}
                     if (params.get("connection_id") or params.get("_connection_config") or params.get("config")
                             or pool.default_config is not None or connector is not None):
@@ -387,6 +405,7 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                                     raise ConnectionError("Use sql() from the currently executing block")
                                 if target is None:
                                     raise ConnectionError("Connect this block to a database first")
+                                require_query_review(query, safety_enabled, safety_authorized, target.db_type)
                                 from .sql_commands import command_results as normalize_results, is_command_frame
                                 if isinstance(query, str):
                                     managed_sql_queries.append(query)
@@ -409,7 +428,8 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                         if params.get("shared_parameters"):
                             from src.utils.sql_parameter_service import prepare_python_code_with_shared_parameters
                             code = prepare_python_code_with_shared_parameters(code, params["shared_parameters"])
-                        value = execute_python(code, namespace, f"<datapyn:{execution_id}>")
+                        with guard_python_engines(safety_enabled, safety_authorized):
+                            value = execute_python(code, namespace, f"<datapyn:{execution_id}>")
                         name = params.get("variable_name")
                         if value is None:
                             changed = [(key, val) for key, val in namespace.items() if store.is_frame(val) and before.get(key) != id(val)]
@@ -431,7 +451,7 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                     if code == "transaction_pending":
                         affinity = pool.block_affinity.get(str(params.get("_execution_scope_id") or ""))
                         executing_connector = pool.items.get(affinity)
-                    if isinstance(code, str) and code.startswith(("ssh_", "transaction_")):
+                    if isinstance(code, str) and code.startswith(("ssh_", "transaction_", "destructive_sql_")):
                         from .errors import serialize_runtime_error
                         connection_error = serialize_runtime_error(exc)
                         error = connection_error["message"]
@@ -542,6 +562,7 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                 elif method == "connection.disconnect":
                     pool.disconnect(params.get("connection_id"))
                     connector = pool.active
+                    publish_safety_context()
                     if connector is None:
                         for name in ("db_engine", "db_type", "db_database", "db_host", "db_username", "db_schema"):
                             namespace.pop(name, None)
@@ -618,6 +639,8 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                             event = "data.import_progress" if method == "data.import" else "result.export_progress"
                             emit(event, {"session_id": session_id, "operation_id": operation_id, **update})
                     if method == "result.export_table":
+                        safety_config = params.get("_connection_config") or params.get("config") or pool.default_config or {}
+                        require_kernel_review(method, params, safety_config.get("db_type", ""))
                         previous_connector, previous_key, previous_context = connector, pool.active_key, context_key
                         previous_context_params = context_params
                         connection_names = ("db_engine", "db_type", "db_database", "db_host", "db_username", "db_schema")
@@ -654,6 +677,7 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                                 namespace.update(previous_variables)
                                 if connector is not None and "db_engine" in previous_variables:
                                     namespace["db_engine"] = connector.engine
+                                publish_safety_context()
                     elif method == "variable.inspect" and params.get("variable_name") == "__namespace__":
                         result = {"variables": describe_variables(namespace)}
                     else:

@@ -17,6 +17,7 @@ class ConnectionTransport implements RuntimeTransport {
   async subscribe(listener:(event:RuntimeEvent)=>void){this.listener=listener;return ()=>{};}
   async request<T>(method:string,params:Record<string,unknown>={}):Promise<T>{
     this.requests.push({method,params});
+    if(method==="execution.review")return {confirmation_required:false,risks:[]} as T;
     if(method==="system.info"){
       if(this.infoError)throw new Error(this.infoError);
       return {protocol_version:1,python_version:"3.12",capabilities:{}} as T;

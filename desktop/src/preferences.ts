@@ -7,6 +7,7 @@ export interface Preferences {
   aiAutocomplete: boolean;
   connectionIdleSeconds: number;
   automaticTransactions: boolean;
+  confirmDestructiveSql: boolean;
   leftWidth: number; rightWidth: number; resultHeight: number; leftVisible: boolean; rightVisible: boolean;
   displayRowLimit: number; notifications: boolean; notificationSound: boolean; sharedDelimiter: string;
 }
@@ -16,7 +17,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   editorFont: "JetBrains Mono, Cascadia Code, Fira Code, Consolas, Ubuntu Mono, monospace", editorFontSize: 13,
   gridFont:"Consolas, Ubuntu Mono, monospace",gridFontSize:12,
   tabSize: 4, wordWrap: false, lineNumbers: true, minimap: false, autocomplete: true,
-  aiAutocomplete: false, connectionIdleSeconds: 300, automaticTransactions: true, maximizeFirstBlock: false, leftWidth: 260, rightWidth: 260, resultHeight: 310,
+  aiAutocomplete: false, connectionIdleSeconds: 300, automaticTransactions: true, confirmDestructiveSql: true, maximizeFirstBlock: false, leftWidth: 260, rightWidth: 260, resultHeight: 310,
   leftVisible: true, rightVisible: true, displayRowLimit: 100, notifications: true, notificationSound: true,
   sharedDelimiter: "{{name}}",
 };
@@ -46,6 +47,7 @@ export function normalizePreferences(raw: Partial<Preferences>): Preferences {
     displayRowLimit: Math.round(bound(p.displayRowLimit, 10, 1_000_000, 100)),
     connectionIdleSeconds: Math.round(bound(p.connectionIdleSeconds, 0, 86400, 300)),
     automaticTransactions: p.automaticTransactions !== false,
+    confirmDestructiveSql: p.confirmDestructiveSql !== false,
     sharedDelimiter: typeof p.sharedDelimiter === "string" && p.sharedDelimiter.split("name").length === 2 && p.sharedDelimiter.split("name").every(Boolean) ? p.sharedDelimiter : "{{name}}",
   };
 }

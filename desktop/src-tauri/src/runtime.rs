@@ -150,6 +150,7 @@ fn allowed_method(method: &str) -> bool {
             | "connection.connect"
             | "schema.get"
             | "execution.run"
+            | "execution.review"
             | "execution.cancel"
             | "result.page"
             | "result.column_values"
@@ -230,6 +231,8 @@ fn allowed_method(method: &str) -> bool {
             | "snapshot.settings.set"
             | "transactions.settings.get"
             | "transactions.settings.set"
+            | "sql.safety.settings.get"
+            | "sql.safety.settings.set"
             | "snapshot.list"
             | "snapshot.save"
             | "snapshot.restore"
@@ -798,6 +801,61 @@ mod tests {
     }
 
     #[test]
+    fn native_boundary_requires_review_before_destructive_sql() {
+        let backend = Backend::default();
+        let (sender, events) = std::sync::mpsc::channel();
+        let request = |method: &str, params: Value| {
+            let sender = sender.clone();
+            tauri::async_runtime::block_on(backend.request_with(method.into(), params, move || {
+                RuntimeClient::start_with_events(move |message| {
+                    let _ = sender.send(message);
+                })
+            }))
+        };
+        let session = request("session.create", json!({})).unwrap()["session_id"].clone();
+        assert_eq!(
+            request("sql.safety.settings.get", json!({})).unwrap()["confirm_destructive_sql"],
+            true
+        );
+        request(
+            "sql.safety.settings.set",
+            json!({"confirm_destructive_sql":true}),
+        )
+        .unwrap();
+        request(
+            "connection.connect",
+            json!({"session_id":session,"config":{"db_type":"sqlite","database":":memory:"}}),
+        )
+        .unwrap();
+        request("execution.run", json!({"session_id":session,"execution_id":"seed-safety","language":"sql","code":"CREATE TABLE safety_sample(value INTEGER); INSERT INTO safety_sample VALUES (1),(2)"})).unwrap();
+        assert_eq!(
+            event(&events, "execution.finished", Some("seed-safety"))["status"],
+            "succeeded"
+        );
+        let mut params = json!({"session_id":session,"execution_id":"delete-safety","language":"sql","code":"DELETE FROM safety_sample WHERE value=1"});
+        let denied = request("execution.run", params.clone()).unwrap_err();
+        assert_eq!(denied.code, "destructive_sql_confirmation_required");
+        let review = request("execution.review", params.clone()).unwrap();
+        assert_eq!(review["confirmation_required"], true);
+        assert_eq!(review["risks"][0]["has_where"], true);
+        params["confirmation_token"] = review["confirmation_token"].clone();
+        request("execution.run", params.clone()).unwrap();
+        assert_eq!(
+            event(&events, "execution.finished", Some("delete-safety"))["status"],
+            "succeeded"
+        );
+        assert_eq!(
+            request("execution.run", params).unwrap_err().code,
+            "destructive_sql_confirmation_required"
+        );
+        request("execution.run", json!({"session_id":session,"execution_id":"check-safety","language":"sql","code":"SELECT value FROM safety_sample"})).unwrap();
+        let finished = event(&events, "execution.finished", Some("check-safety"));
+        let page = request("result.page", json!({"session_id":session,"result_id":finished["results"][0]["result_id"],"offset":0,"limit":10})).unwrap();
+        assert_eq!(page["rows"], json!([[2]]));
+        backend.shutdown();
+    }
+
+    #[test]
     fn native_boundary_prepares_and_publishes_sql_metadata() {
         let backend = Backend::default();
         let (sender, events) = std::sync::mpsc::channel();
@@ -979,6 +1037,7 @@ mod tests {
     #[test]
     fn native_bridge_only_exposes_runtime_contract() {
         assert!(allowed_method("execution.cancel"));
+        assert!(allowed_method("execution.review"));
         assert!(allowed_method("language.cancel"));
         assert!(allowed_method("language.prepare"));
         assert!(allowed_method("workspace.read"));
@@ -991,6 +1050,9 @@ mod tests {
         assert!(allowed_method("variable.archive.import"));
         assert!(allowed_method("transactions.settings.get"));
         assert!(allowed_method("transactions.settings.set"));
+        assert!(allowed_method("sql.safety.settings.get"));
+        assert!(allowed_method("sql.safety.settings.set"));
+        assert!(!allowed_method("sql.safety.exec"));
         assert!(!allowed_method("transactions.exec"));
         assert!(!allowed_method("transactions.settings.unknown"));
         assert!(!allowed_method("shell.execute"));

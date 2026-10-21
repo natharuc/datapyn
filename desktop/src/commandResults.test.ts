@@ -225,6 +225,7 @@ class FeedbackTransport implements RuntimeTransport {
   executions: Record<string, unknown>[] = [];
   listener?: (event: RuntimeEvent) => void;
   async request<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+    if (method === "execution.review") return { confirmation_required: false, risks: [] } as T;
     if (method === "system.info") return { protocol_version: 1, python_version: "3.12.0", capabilities: { languages: ["sql", "python"], qt: false } } as T;
     if (method === "execution.run") this.executions.push(params);
     return { session_id: params.session_id, execution_id: params.execution_id, status: "queued" } as T;
@@ -240,7 +241,7 @@ class FeedbackTransport implements RuntimeTransport {
 }
 
 describe("SQL command feedback in real execution queues", () => {
-  it("clears the previous batch on run, aggregates queued blocks despite focus changes, ignores stale completion and clears messages with results", async () => {
+  it("clears the previous batch after review, aggregates queued blocks despite focus changes, ignores stale completion and clears messages with results", async () => {
     const transport = new FeedbackTransport(), controller = new WorkspaceController(transport, undefined, { nativePersistence: true });
     const initial = controller.session()!, first = initial.blocks[0];
     controller.updateBlock(initial.id, first.id, { code: "UPDATE items SET value = 1; SELECT * FROM items", block_name: "update_items" });
@@ -254,9 +255,10 @@ describe("SQL command feedback in real execution queues", () => {
       const second = controller.addBlock(initial.id, "sql", "DELETE FROM obsolete");
       controller.updateBlock(initial.id, second.id, { block_name: "delete_obsolete" });
       const queue = controller.runAll(initial.id);
+      expect(controller.session(initial.id)?.commandExecutions).toHaveLength(1);
+      await vi.waitFor(() => expect(transport.executions).toHaveLength(2));
       expect(controller.session(initial.id)?.commandExecutions).toEqual([]);
       expect(controller.session(initial.id)?.executionOutput).toBeUndefined();
-      await vi.waitFor(() => expect(transport.executions).toHaveLength(2));
       transport.finish(0, [command(999)]);
       expect(controller.session(initial.id)?.commandExecutions).toEqual([]);
       controller.focusBlock(initial.id, second.id);

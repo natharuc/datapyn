@@ -10,6 +10,7 @@ function executionTransport() {
   let listener: ((event: RuntimeEvent) => void) | undefined;
   return {
     request: vi.fn(async (method: string, params: Record<string, unknown> = {}) => {
+      if (method === "execution.review") return { confirmation_required: false, risks: [] };
       if (method === "execution.run") queueMicrotask(() => listener?.({ event: "execution.finished", payload: {
         session_id: String(params.session_id), execution_id: String(params.execution_id), status: "succeeded", duration_ms: 1, results: [], variables: [],
       } }));

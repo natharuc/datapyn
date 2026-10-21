@@ -8,6 +8,7 @@ class Transport implements RuntimeTransport {
   async subscribe(listener:(event:RuntimeEvent)=>void){this.listener=listener;return()=>{};}
   async request<T>(method:string,params:Record<string,unknown>={}):Promise<T>{
     this.requests.push({method,params});
+    if(method==="execution.review")return {confirmation_required:false,risks:[]} as T;
     return (method==="system.info"?{protocol_version:1,python_version:"3.12",capabilities:{}}:{status:"queued"}) as T;
   }
   executions(){return this.requests.filter(request=>request.method==="execution.run");}

@@ -20,6 +20,7 @@ class Transport implements RuntimeTransport {
   listener?:(event:RuntimeEvent)=>void;
   async subscribe(listener:(event:RuntimeEvent)=>void){this.listener=listener;return()=>{};}
   async request<T>(method:string,params:Record<string,unknown>={}):Promise<T>{
+    if(method==="execution.review")return {confirmation_required:false,risks:[]} as T;
     if(method==="execution.run")this.executions.push(params);
     return (method==="system.info"?{protocol_version:1,capabilities:{}}:method==="connection.connect"?{config,database:config.database,schema:config.schema}:{}) as T;
   }

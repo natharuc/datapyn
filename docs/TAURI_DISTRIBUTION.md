@@ -59,7 +59,7 @@ do usuário. O pipeline verifica o sidecar novamente depois da assinatura.
 ## Identidade e armazenamento
 
 - Nome: `DataPyn Tauri`; identificador: `app.datapyn.tauri`.
-- Versão independente: `1.0.11`, sem alterar a numeração do PyQt6.
+- Versão independente: `1.0.12`, sem alterar a numeração do PyQt6.
 - Windows: `%LOCALAPPDATA%/app.datapyn.tauri`.
 - macOS: `~/Library/Application Support/app.datapyn.tauri`.
 - Linux: `$XDG_DATA_HOME/app.datapyn.tauri` ou `~/.local/share/app.datapyn.tauri`.
