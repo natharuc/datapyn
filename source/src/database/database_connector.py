@@ -2479,6 +2479,9 @@ class DatabaseConnector:
                     else:
                         cursor.execute(batch)
                 except self._sqlserver_driver_errors() as e:
+                    if self._cancelled:
+                        dataframes.clear()
+                        raise OperationCancelled() from None
                     batch_error = f"Batch {batch_idx}/{len(batches)}: {str(e)}"
                     logger.warning(batch_error)
                     errors.append(batch_error)
@@ -2609,6 +2612,13 @@ class DatabaseConnector:
                             if not self._is_data_command(statement):
                                 self._record_command_result(statement, statement_index)
 
+            # A driver can report cancellation while executing, fetching or
+            # advancing the final batch. Never aggregate partial results or
+            # commit after the user's cancellation request.
+            if self._cancelled:
+                dataframes.clear()
+                raise OperationCancelled()
+
             # Commit after all batches (even if some failed)
             self._commit_automatic(raw_conn)
 
@@ -2632,7 +2642,7 @@ class DatabaseConnector:
         except OperationCancelled:
             raise
         except Exception as e:
-            if self._sqlserver_network_cancelled():
+            if self._cancelled:
                 dataframes.clear()
                 raise OperationCancelled() from None
             logger.error(f"Error executing SQL Server batches: {str(e)}")

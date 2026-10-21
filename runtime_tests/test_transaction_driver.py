@@ -185,6 +185,71 @@ def test_manual_error_cancel_and_mode_mismatch_never_finish_pending_transaction(
         connector.disconnect()
 
 
+@pytest.mark.parametrize("automatic", [False, True], ids=["manual", "automatic"])
+@pytest.mark.parametrize("stage", ["execute", "fetch", "nextset"])
+def test_odbc_last_batch_cancel_discards_partial_results_before_commit(odbc, monkeypatch, automatic, stage):
+    connector = open_connector(automatic)
+    target = "SELECT 7 AS cancellation_fixture"
+    original_execute, original_fetch, original_nextset = OdbcCursor.execute, OdbcCursor.fetchmany, OdbcCursor.nextset
+
+    def driver_cancel():
+        connector.request_cancel()
+        raise pyodbc.Error("HY008", "[HY008] Operation canceled (SQLExecDirectW)")
+
+    def execute(cursor, sql, *parameters):
+        result = original_execute(cursor, sql, *parameters)
+        if sql.strip() == target:
+            if stage == "execute":
+                driver_cancel()
+            cursor.cancel_at = stage
+        return result
+
+    def fetch(cursor, size):
+        if getattr(cursor, "cancel_at", None) == "fetch":
+            driver_cancel()
+        return original_fetch(cursor, size)
+
+    def nextset(cursor):
+        if getattr(cursor, "cancel_at", None) == "nextset":
+            driver_cancel()
+        return original_nextset(cursor)
+
+    monkeypatch.setattr(OdbcCursor, "execute", execute)
+    monkeypatch.setattr(OdbcCursor, "fetchmany", fetch)
+    monkeypatch.setattr(OdbcCursor, "nextset", nextset)
+    try:
+        raw = connector.get_manual_connection() if not automatic else odbc[0]
+        if not automatic:
+            connector.execute_query("BEGIN TRANSACTION")
+        commits = raw.commits
+        # The first batch already produced data; cancellation in the last
+        # must not return those partial frames or commit completed work.
+        with pytest.raises(OperationCancelled):
+            connector.execute_query("SELECT 1\nGO\n" + target)
+        assert raw.commits == commits
+        if not automatic:
+            assert (raw.transaction_count, raw.rollbacks, raw.closed) == (1, 0, 0)
+            connector.execute_query("ROLLBACK TRANSACTION")
+    finally:
+        connector.disconnect()
+
+
+def test_odbc_hy008_without_cancel_request_is_not_silently_reclassified(odbc, monkeypatch):
+    connector = open_connector(False)
+    original_execute = OdbcCursor.execute
+    def execute(cursor, sql, *parameters):
+        if sql.strip() == "SELECT 7 AS cancellation_fixture":
+            raise pyodbc.Error("HY008", "Operation canceled externally")
+        return original_execute(cursor, sql, *parameters)
+    monkeypatch.setattr(OdbcCursor, "execute", execute)
+    try:
+        with pytest.raises(Exception, match="HY008") as error:
+            connector.execute_query("SELECT 7 AS cancellation_fixture")
+        assert not isinstance(error.value, OperationCancelled)
+    finally:
+        connector.disconnect()
+
+
 def test_streaming_and_sqlalchemy_export_share_retained_connection_without_finalizing(odbc, tmp_path):
     connector = open_connector(False)
     try:
