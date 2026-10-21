@@ -135,6 +135,17 @@ test("release workflow fetches version tags and gates package builds on the vers
   assert.match(workflow, /GH_TOKEN: \$\{\{ github\.token \}\}/);
 });
 
+test("release audits locked dependencies before building signed installers", () => {
+  const workflow = readFileSync(new URL("../../.github/workflows/tauri-release.yml", import.meta.url), "utf8");
+  const install = workflow.indexOf("uv sync --dev --frozen");
+  const audit = workflow.indexOf("- name: Audit locked Python dependencies");
+  const build = workflow.indexOf("- name: Build signed installers and frozen runtime");
+  assert(install >= 0 && install < audit && audit < build);
+  const auditStep = workflow.slice(audit, workflow.indexOf("      - name:", audit + 1));
+  assert.match(auditStep, /run: uv run pip-audit\s*$/);
+  assert.doesNotMatch(auditStep, /continue-on-error|ignore-vuln/);
+});
+
 test("tag verification checks only Tauri versions and its isolated application identity", t => {
   const root = temporaryRelease(t);
   mkdirSync(join(root, "desktop/src-tauri"), { recursive: true });

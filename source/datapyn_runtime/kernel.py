@@ -273,8 +273,10 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
         settings = settings_get()
         if settings["enabled"] and settings["restore_on_startup"]:
             restored = restore({"session_id": session_id}, namespace, store)
-            emit("namespace.changed", {"session_id": session_id, **restored})
+            # The UI can request completion as soon as restored data appears.
+            # Publish its immutable columns before announcing availability.
             publish_context()
+            emit("namespace.changed", {"session_id": session_id, **restored})
     except Exception as exc:
         emit("snapshot.error", {"session_id": session_id, "error": str(exc)})
     try:
@@ -702,8 +704,8 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                     if method == "snapshot.restore":
                         snapshot_dirty = False
                         store.invalidate_views()
-                        emit("namespace.changed", {"session_id": session_id, **result})
                         publish_context()
+                        emit("namespace.changed", {"session_id": session_id, **result})
                 else:
                     raise ValueError(f"Unknown kernel method: {method}")
                 send({"job_id": job_id, "result": result})

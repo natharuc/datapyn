@@ -128,6 +128,8 @@ jobs:
         run: |
           uv sync --dev --frozen
           npm --prefix desktop ci
+      - name: Audit locked Python dependencies
+        run: uv run pip-audit
       - name: Validate frontend, runtime and native contracts
         run: |
           node --test scripts/tauri/common.test.mjs scripts/tauri/release.test.mjs scripts/tauri/legacy-release.test.mjs scripts/tauri/linux-package.test.mjs scripts/tauri/publish.test.mjs scripts/tauri/windows-prerequisites.test.mjs scripts/tauri/smoke-installed.test.mjs

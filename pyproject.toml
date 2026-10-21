@@ -46,6 +46,7 @@ dependencies = [
     "sqlglot>=30.0.0",
     # Charts
     "matplotlib>=3.10.0",
+    "Pillow>=13.0.0,<14",
     "plotly>=5.18.0",
     "jedi>=0.20.0",
 ]
@@ -74,11 +75,12 @@ constraint-dependencies = [
     # Fixed JWT and HTTP client releases; retain upstream compatibility bounds.
     "pyjwt>=2.15.1",
     "urllib3>=2.8.0",
+    # Remove distrusted roots from the bundled TLS trust store.
+    "certifi>=2026.10.19",
 ]
 override-dependencies = [
     "msgpack>=1.2.1",
     "click>=8.3.3",
-    "pillow>=12.3.0",
     "setuptools>=83.0.0",
     "gitpython>=3.1.55",
     "pip>=26.2",

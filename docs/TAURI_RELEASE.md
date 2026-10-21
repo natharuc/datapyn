@@ -75,6 +75,8 @@ Um push em `main` publica automaticamente a versão dos manifests quando o tag
 `tauri-vX.Y.Z` ainda não existe. O workflow valida o commit, compila e verifica as
 três plataformas; somente depois publica a release, criando o tag nesse SHA e
 promovendo o feed. Se o tag já existe, os jobs de build e publicação são ignorados.
+Cada plataforma executa `pip-audit` com as dependências do lock antes de compilar
+e assinar os instaladores. Uma falha na auditoria impede a publicação.
 Para a próxima release, primeiro atualize os manifests e lockfiles no commit
 que será integrado em `main`.
 
