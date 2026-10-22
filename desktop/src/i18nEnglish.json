@@ -605,5 +605,7 @@
   "Objeto inteiro": "Entire object",
   "Bloco": "Block",
   "Conexão": "Connection",
-  "Código a executar": "Code to execute"
+  "Código a executar": "Code to execute",
+  "Reabrir aba fechada": "Reopen closed tab",
+  "Aba recuperada. Reconecte ao banco antes de executar SQL.": "Tab restored. Reconnect to the database before running SQL."
 }

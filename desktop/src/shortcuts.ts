@@ -1,6 +1,6 @@
 export const COMMAND_LABELS = {
   run: "Executar bloco ou seleção", runAdvance: "Executar e avançar", runAll: "Executar todos", addBlock: "Novo bloco",
-  newSession: "Nova sessão", newTab: "Nova aba", closeSession: "Fechar aba", save: "Salvar .dpw", saveAs: "Salvar como",
+  newSession: "Nova sessão", newTab: "Nova aba", closeSession: "Fechar aba", reopenClosedTab: "Reabrir aba fechada", save: "Salvar .dpw", saveAs: "Salvar como",
   open: "Abrir arquivo", exportScript: "Exportar script", cancel: "Cancelar execução", settings: "Configurações",
   copyHeaders: "Copiar com cabeçalhos", clearResults: "Limpar resultados", find: "Localizar", replace: "Substituir",
   formatCode: "Formatar código", entityInfo: "Informações da entidade", autocomplete: "Forçar autocomplete",
@@ -13,10 +13,10 @@ export const COMMAND_LABELS = {
 export type Command = keyof typeof COMMAND_LABELS;
 export const DEFAULT_SHORTCUTS: Record<Command, string> = {
   run: "F5", runAdvance: "Shift+Enter", runAll: "Ctrl+F5", addBlock: "Ctrl+Shift+B", newSession: "Ctrl+N", newTab: "Ctrl+T",
-  closeSession: "Ctrl+W", save: "Ctrl+S", saveAs: "Ctrl+Shift+S", open: "Ctrl+O", exportScript: "Ctrl+Shift+E", cancel: "Escape",
+  closeSession: "Ctrl+W", reopenClosedTab: "Ctrl+Shift+T", save: "Ctrl+S", saveAs: "Ctrl+Shift+S", open: "Ctrl+O", exportScript: "Ctrl+Shift+E", cancel: "Escape",
   settings: "Ctrl+,", copyHeaders: "Ctrl+Shift+C", clearResults: "Ctrl+Shift+L", find: "Ctrl+F", replace: "Ctrl+H",
   formatCode: "Ctrl+Shift+F", entityInfo: "Alt+F1", autocomplete: "Ctrl+.", manageConnections: "Ctrl+Shift+M",
-  newConnection: "Ctrl+Shift+D", reloadSchema: "Ctrl+Shift+T", exit: "Ctrl+Q", restoreView: "Ctrl+Shift+R", resetLayout: "Ctrl+Shift+Alt+R",
+  newConnection: "Ctrl+Shift+D", reloadSchema: "Ctrl+Alt+R", exit: "Ctrl+Q", restoreView: "Ctrl+Shift+R", resetLayout: "Ctrl+Shift+Alt+R",
   editorNewline: "", editorDuplicateLine: "Ctrl+D", editorCutLine: "Ctrl+L", editorTransposeLine: "",
   editorLowercase: "Ctrl+U", editorUppercase: "Ctrl+Shift+U", editorDeleteLine: "Ctrl+Shift+K",
 };
@@ -26,6 +26,16 @@ export function normalizeBinding(binding: string): string {
   const key = parts.pop()?.replace(/^RETURN$/, "ENTER") ?? "";
   const modifiers = [parts.includes("CTRL") || parts.includes("CMD") ? "CTRL" : "", parts.includes("ALT") ? "ALT" : "", parts.includes("SHIFT") ? "SHIFT" : ""].filter(Boolean);
   return [...modifiers, key].join("+");
+}
+/** Reserve the browser reopen gesture while retaining explicit user customizations. */
+export function loadShortcuts(input?: unknown, base: Record<Command, string> = DEFAULT_SHORTCUTS): Record<Command, string> {
+  const source = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {};
+  const incoming = Object.fromEntries(Object.entries(source).filter(([command, binding]) => Object.hasOwn(COMMAND_LABELS, command) && typeof binding === "string")) as Partial<Record<Command, string>>;
+  const shortcuts = { ...base, ...incoming };
+  if (!Object.hasOwn(incoming, "reopenClosedTab") && normalizeBinding(incoming.reloadSchema ?? "") === "CTRL+SHIFT+T") {
+    shortcuts.reloadSchema = DEFAULT_SHORTCUTS.reloadSchema;
+  }
+  return shortcuts;
 }
 export function keySequence(event: Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey">): string {
   const modifiers = [event.ctrlKey || event.metaKey ? "Ctrl" : "", event.altKey ? "Alt" : "", event.shiftKey ? "Shift" : ""].filter(Boolean);

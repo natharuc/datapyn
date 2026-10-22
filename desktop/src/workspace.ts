@@ -1,6 +1,6 @@
 import { errorText, isRuntimeEvent, type ExecutionContextChange, type ExecutionFinished, type Language, type ResultRef, type RuntimeEvent, type RuntimeInfo, type RuntimeTransport, type Variable,type RichOutput, type SqlCommandResult, type TransactionState } from "./runtime";
 import type { NativeDocumentRecord, NativeWorkspaceState } from "./nativeDrafts";
-import { flushEditorViewStates,restoreEditorViewState, selectedCode, subscribeEditorViewStates } from "./editorRegistry";
+import { disposeModel, flushEditorViewStates,restoreEditorViewState, selectedCode, subscribeEditorViewStates } from "./editorRegistry";
 import type { QueueCompletion } from "./executionNotifications";
 import type { NotificationContext } from "./NotificationsDialog";
 import { completionConnectionScope, inheritsSessionScope } from "./sessionCompletion";
@@ -78,7 +78,14 @@ export interface WorkspaceState {
   sessions: SessionDocument[]; activeId: string; runtimeStatus: "connecting" | "ready" | "unavailable";
   runtimeInfo?: RuntimeInfo; message: string;
   documentRevision?: number;
+  closedSessionCount: number;
 }
+
+// Text/settings only. Keeping closed kernels or result pages would retain large
+// DataFrames and physical transactions. Never include this history in drafts.
+interface ClosedSession { snapshot: string; index: number; reconnectRequired: boolean }
+const CLOSED_SESSION_LIMIT = 50;
+const CLOSED_SESSION_BYTES = 32 * 1024 * 1024;
 
 export const newId = () => globalThis.crypto.randomUUID();
 export const newBlock = (language: Language = "sql", code = ""): Block => ({
@@ -294,6 +301,11 @@ export class WorkspaceController {
   private readonly runtimeSessions = new Set<string>();
   private readonly creatingSessions = new Map<string, Promise<void>>();
   private readonly connectingSessions = new Map<string, {key:string; task?:Promise<ConnectionResponse>}>();
+  private readonly closingSessions = new Map<string, Promise<void>>();
+  private readonly closedSessions: ClosedSession[] = [];
+  private closedSessionBytes = 0;
+  private closedHistoryGeneration = 0;
+  private closedPlaceholderId?: string;
   /** Credentials for manually configured connections never enter persisted documents. */
   private readonly transientConnections = new Map<string,ConnectionConfig>();
   private readonly transientCredentialIds = new Map<string,{id:string;resolveDatabasePassword:boolean}>();
@@ -319,7 +331,8 @@ export class WorkspaceController {
   private browserMigrationRead=false;
   private editingLocked=false;
   private workspaceIdentity?:string;
-  setWorkspaceIdentity(id:string|undefined){if(this.workspaceIdentity!==id)for(const review of this.pendingSqlReviews.values())review.abort();this.workspaceIdentity=id;}
+  setWorkspaceIdentity(id:string|undefined){if(this.workspaceIdentity!==id){for(const review of this.pendingSqlReviews.values())review.abort();this.clearClosedSessions();}this.workspaceIdentity=id;}
+  private clearClosedSessions(){this.closedHistoryGeneration++;this.closedSessions.length=0;this.closedSessionBytes=0;this.closedPlaceholderId=undefined;if(this.state.closedSessionCount)this.setState({...this.state});}
   setEditingLocked(locked:boolean){this.editingLocked=locked;}
   isEditingLocked(){return this.editingLocked;}
   private unsubscribeEditorViews?:()=>void;
@@ -342,6 +355,7 @@ export class WorkspaceController {
   restoreSnapshot(snapshot: {documents?:NativeDocumentRecord[];activeIndex?:number}) {
     if(this.importingSessions.size)throw new Error("Aguarde ou cancele as importações antes de trocar de workspace.");
     if(this.state.sessions.some(s=>s.busy))throw new Error("Aguarde ou cancele as execuções antes de trocar de workspace.");
+    this.clearClosedSessions();this.closingSessions.clear();
     for(const timer of this.periodicTimers.values())clearTimeout(timer);this.periodicTimers.clear();
     this.runtimeGeneration++;this.runtimeSessions.clear();this.creatingSessions.clear();this.connectingSessions.clear();this.transientConnections.clear();this.transientCredentialIds.clear();this.directConnectionTargets.clear();this.cancelRequests.clear();
     this.nativeRecords.clear();this.nativeSources.clear();this.editorViews.clear();
@@ -367,7 +381,7 @@ export class WorkspaceController {
   constructor(private readonly transport: RuntimeTransport, private readonly storage?: WorkspaceStorage,private readonly options:WorkspaceControllerOptions={}) {
     this.maximizeFirstBlock=options.maximizeFirstBlock===true;
     const sessions=[this.applyNewSessionLayout(newSession())];
-    this.state = { sessions, activeId: sessions[0].id, runtimeStatus: "connecting", message: "Iniciando runtime Python…" };
+    this.state = { sessions, activeId: sessions[0].id, runtimeStatus: "connecting", message: "Iniciando runtime Python…", closedSessionCount: 0 };
     this.state.sessions.forEach(session=>{this.dirtyBrowserDocuments.add(session.id);session.blocks.forEach(block=>this.blockOwners.set(block.id,session.id));});
     if(!options.nativePersistence){const snapshot=this.readBrowserSnapshot();if(snapshot?.documents){try{this.restoreSnapshot(snapshot);}catch{/* Preserve the unreadable source without blocking preview startup. */}}}
     this.unsubscribeEditorViews=subscribeEditorViewStates((blockId,view)=>{
@@ -396,7 +410,7 @@ export class WorkspaceController {
     const saved=this.readBrowserSnapshot();if(!saved?.documents?.length)return false;
     this.restoreSnapshot({documents:saved.documents,activeIndex:saved.activeIndex});return true;
   }
-  dispose(){for(const review of this.pendingSqlReviews.values())review.abort();this.pendingSqlReviews.clear();this.connectingSessions.clear();this.transientConnections.clear();this.transientCredentialIds.clear();this.directConnectionTargets.clear();this.unsubscribeEditorViews?.();this.unsubscribeEditorViews=undefined;if(this.persistTimer)clearTimeout(this.persistTimer);for(const timer of this.periodicTimers.values())clearTimeout(timer);this.periodicTimers.clear();}
+  dispose(){this.runtimeGeneration++;this.clearClosedSessions();this.closingSessions.clear();for(const review of this.pendingSqlReviews.values())review.abort();this.pendingSqlReviews.clear();this.connectingSessions.clear();this.transientConnections.clear();this.transientCredentialIds.clear();this.directConnectionTargets.clear();this.unsubscribeEditorViews?.();this.unsubscribeEditorViews=undefined;if(this.persistTimer)clearTimeout(this.persistTimer);for(const timer of this.periodicTimers.values())clearTimeout(timer);this.periodicTimers.clear();}
 
   getSnapshot = () => this.state;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
@@ -408,7 +422,7 @@ export class WorkspaceController {
       return headerChanged(s,before)||portableChanged(s,before);
     });
     if(this.editingLocked && changed && !restore)return;
-    next={...next,documentRevision:(this.state.documentRevision ?? 0)+(changed?1:0)};
+    next={...next,closedSessionCount:this.closedSessions.length,documentRevision:(this.state.documentRevision ?? 0)+(changed?1:0)};
     this.state = next;
     if(changed){
       for(const session of next.sessions){
@@ -522,6 +536,7 @@ export class WorkspaceController {
       if(previous)await previous.catch(()=>{});
       const session=this.session(sessionId);
       if(!session||generation!==this.runtimeGeneration)throw new Error("A aba foi encerrada durante a importação.");
+      if(this.closingSessions.has(sessionId))throw new Error("A aba está sendo encerrada.");
       if(session.busy)throw new Error("Aguarde a execução antes de importar dados nesta aba.");
       const operationId=newId(), options={delimiter:null,...settings.options};
       const current=()=>generation===this.runtimeGeneration&&this.session(sessionId)?.dataImport?.operationId===operationId;
@@ -592,19 +607,86 @@ export class WorkspaceController {
       return { ...session, blocks, modified: true };
     });
   }
-  async closeSession(id: string) {
+  closeSession(id: string, options: {remember?: boolean} = {}): Promise<void> {
+    const pending=this.closingSessions.get(id);if(pending)return pending;
+    const generation=this.runtimeGeneration,identity=this.workspaceIdentity,historyGeneration=this.closedHistoryGeneration;
+    const task=Promise.resolve().then(()=>{
+      if(generation===this.runtimeGeneration&&identity===this.workspaceIdentity&&historyGeneration===this.closedHistoryGeneration)return this.closeSessionOnce(id,options);
+    }).finally(()=>{if(this.closingSessions.get(id)===task)this.closingSessions.delete(id);});
+    this.closingSessions.set(id,task);return task;
+  }
+  private async closeSessionOnce(id: string, options: {remember?: boolean}) {
+    if(this.editingLocked)throw new Error("Aguarde a troca de workspace antes de fechar esta aba.");
+    if(!this.session(id))return;
     if(this.importingSessions.has(id))throw new Error("Aguarde ou cancele a importação antes de fechar esta aba.");
     if (this.session(id)?.busy) throw new Error("Cancele a execução antes de fechar esta aba.");
+    const generation=this.runtimeGeneration,identity=this.workspaceIdentity,historyGeneration=this.closedHistoryGeneration;
     this.stopPeriodic(id);
+    if (this.runtimeSessions.has(id)) await this.transport.request("session.close", { session_id: id });
+    if(generation!==this.runtimeGeneration||identity!==this.workspaceIdentity||historyGeneration!==this.closedHistoryGeneration||!this.session(id))return;
+    // Edits can still arrive while the kernel is shutting down. Capture the
+    // latest document and cursor just before removing it, not at the click.
+    flushEditorViewStates();
+    const current=this.session(id)!;
+    if(options.remember!==false){
+      const pending=current.connectionState?.phase!=="ready"?current.connectionState:undefined;
+      const directTarget=Boolean(pending&&this.directConnectionTargets.has(id));
+      const intended=directTarget?undefined:pending?.connectionId;
+      const directConfig=directTarget?this.transientConnections.get(id):undefined;
+      const document=encodeDocument(intended||directTarget?{...current,savedConnectionId:intended,
+        database:pending?.scope?.database??directConfig?.database??(intended===current.savedConnectionId?current.database:undefined),
+        schema:pending?.scope?.schema??directConfig?.schema??(intended===current.savedConnectionId?current.schema:undefined),
+        extras:{...current.extras,connection_name:pending?.name??(intended===current.savedConnectionId?current.extras.connection_name:undefined),
+          connection_group:!directTarget&&intended===current.savedConnectionId?current.extras.connection_group:undefined}}:current);
+      const record:NativeDocumentRecord={title:current.title,filePath:current.filePath,modified:current.modified,document,
+        blockIds:current.blocks.map(block=>block.id),focusedBlockId:current.focusedBlockId,
+        maximizedBlockId:current.maximizedBlockId,editorViewState:this.editorViews.get(id)};
+      const snapshot=JSON.stringify(record);
+      this.closedSessions.push({snapshot,index:this.state.sessions.findIndex(session=>session.id===id),reconnectRequired:directTarget||(!intended&&!current.savedConnectionId&&Boolean(current.connection||this.transientConnections.has(id)))});
+      this.closedSessionBytes+=snapshot.length*2;
+      // Always retain the newest tab, including an unusually large script.
+      while(this.closedSessions.length>1&&(this.closedSessions.length>CLOSED_SESSION_LIMIT||this.closedSessionBytes>CLOSED_SESSION_BYTES))this.closedSessionBytes-=this.closedSessions.shift()!.snapshot.length*2;
+    }
     this.connectingSessions.delete(id);
     this.transientConnections.delete(id);
     this.transientCredentialIds.delete(id);
     this.directConnectionTargets.delete(id);
-    if (this.runtimeSessions.has(id)) await this.transport.request("session.close", { session_id: id });
     this.runtimeSessions.delete(id);
     let sessions = this.state.sessions.filter((session) => session.id !== id);
-    if (!sessions.length) sessions = [this.applyNewSessionLayout(newSession())];
+    if (!sessions.length) {sessions = [this.applyNewSessionLayout(newSession())];this.closedPlaceholderId=sessions[0].id;}
     this.setState({ ...this.state, sessions, activeId: this.state.activeId === id ? sessions[0].id : this.state.activeId });
+  }
+  reopenClosedSession(): SessionDocument | undefined {
+    if(this.editingLocked)return;
+    const entry=this.closedSessions.at(-1);if(!entry)return;
+    const record=JSON.parse(entry.snapshot) as NativeDocumentRecord;
+    const session=decodeDocument(record.document,record.title);
+    session.title=record.title;session.filePath=record.filePath;session.modified=record.modified===true;
+    const remap=(id:string|undefined)=>session.blocks[record.blockIds?.indexOf(id??"")??-1]?.id;
+    session.focusedBlockId=remap(record.focusedBlockId)??session.blocks[0].id;
+    session.maximizedBlockId=remap(record.maximizedBlockId);
+    const views:Record<string,unknown>={};
+    for(const [oldId,view] of Object.entries(record.editorViewState??{})){
+      const id=remap(oldId);if(id&&restoreEditorViewState(id,view))views[id]=view;
+    }
+    this.closedSessions.pop();this.closedSessionBytes-=entry.snapshot.length*2;
+    let sessions=[...this.state.sessions];
+    const placeholder=sessions.length===1&&sessions[0].id===this.closedPlaceholderId?sessions[0]:undefined;
+    if(placeholder&&!placeholder.modified&&!placeholder.busy&&!placeholder.filePath&&!placeholder.connection&&!placeholder.savedConnectionId&&!placeholder.connectionState?.connectionId&&!this.connectingSessions.has(placeholder.id)&&!this.transientConnections.has(placeholder.id)&&!placeholder.periodicSeconds&&!placeholder.results.length&&!placeholder.variables.length&&!placeholder.logs.length&&placeholder.blocks.length===1&&!placeholder.blocks[0].code&&!dataImportPending(placeholder.dataImport)){
+      sessions=[];
+      // The automatic empty tab may already have a kernel/editor. Removing its
+      // chrome must release those too; a pending session.create cleans up late.
+      placeholder.blocks.forEach(block=>disposeModel(block.id));
+      this.connectingSessions.delete(placeholder.id);
+      if(this.runtimeSessions.delete(placeholder.id))void this.transport.request("session.close",{session_id:placeholder.id}).catch(error=>this.message(errorText(error)));
+    }
+    this.closedPlaceholderId=undefined;
+    sessions.splice(Math.min(entry.index,sessions.length),0,session);
+    if(Object.keys(views).length)this.editorViews.set(session.id,views);
+    if(entry.reconnectRequired)session.notice="Aba recuperada. Reconecte ao banco antes de executar SQL.";
+    this.setState({...this.state,sessions,activeId:session.id});
+    this.prepareNewSessionConnection(session);
+    return session;
   }
   reorderBlock(sessionId: string, blockId: string, beforeId: string) {
     this.patchSession(sessionId, session => {
@@ -629,6 +711,7 @@ export class WorkspaceController {
   private establishConnection(sessionId:string,target:{key:string;name?:string;connectionId?:string},params:Record<string,unknown>,fallback?:ConnectionConfig):Promise<ConnectionResponse> {
     const session=this.session(sessionId);
     if(!session)return Promise.reject(new Error("Aba encerrada."));
+    if(this.closingSessions.has(sessionId))return Promise.reject(new Error("A aba está sendo encerrada."));
     if(session.busy||this.importingSessions.has(sessionId))return Promise.reject(new Error("Aguarde a execução ou importação para trocar a conexão."));
     const pending=this.connectingSessions.get(sessionId);
     if(pending)return pending.key===target.key ? pending.task! : Promise.reject(new Error("Uma conexão já está em andamento nesta aba."));
@@ -795,6 +878,7 @@ export class WorkspaceController {
     return this.runQueue(sessionId,[{...block,code:selection ?? block.code,export:exportOptions}]);
   }
   private async runQueue(sessionId: string, queue: Block[]) {
+    if(this.closingSessions.has(sessionId))throw new Error("A aba está sendo encerrada.");
     if(this.importingSessions.has(sessionId))throw new Error("Aguarde a importação antes de executar nesta aba.");
     const workspaceId = this.workspaceIdentity;
     const session = this.session(sessionId);

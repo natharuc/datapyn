@@ -13,7 +13,8 @@ import pytest
 from datapyn_runtime.connection_catalog import ConnectionCatalog
 from datapyn_runtime.configurations import ConfigurationTransfer
 from datapyn_runtime.legacy_settings import (SHORTCUT_DEFAULTS, ini_values, patch_ini,
-                                            preferences_from_ini, strip_ini_secrets)
+                                            preferences_from_ini, shortcuts_from_document,
+                                            shortcuts_to_document, strip_ini_secrets)
 from test_connection_catalog import Secrets
 
 
@@ -188,6 +189,20 @@ def test_qt_ini_known_scalars_and_opaque_variants_survive_both_directions(tmp_pa
     for line in raw.splitlines(keepends=True):
         if b"code_font_size=" not in line:
             assert line in patched
+
+
+@pytest.mark.parametrize("binding", ["Ctrl+Shift+T", "Alt+Return", ""])
+def test_tauri_reopen_shortcut_round_trip_preserves_native_defaults_and_extensions(binding):
+    before = dict(SHORTCUT_DEFAULTS)
+    document = {"shortcuts": {"reload_schema": "Ctrl+Alt+R", "vendor_action": "Alt+F9"}, "extension": {"version": 1}}
+    exported = shortcuts_to_document(document, {"reopenClosedTab": binding})
+    imported = shortcuts_from_document(exported)
+    assert imported["reopenClosedTab"] == binding.replace("Return", "Enter")
+    assert imported["reloadSchema"] == "Ctrl+Alt+R"
+    assert exported["shortcuts"]["vendor_action"] == "Alt+F9"
+    assert exported["extension"] == {"version": 1}
+    assert SHORTCUT_DEFAULTS == before
+    assert "reopenClosedTab" not in shortcuts_from_document({"shortcuts": {}})
 
 
 def test_native_shortcut_manager_round_trip_preserves_unknown_action_and_defaults(transfer, tmp_path):

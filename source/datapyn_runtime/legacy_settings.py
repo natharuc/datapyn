@@ -243,7 +243,11 @@ def shortcuts_from_document(document):
     if not isinstance(incoming, dict) or any(not isinstance(value, str) for value in incoming.values()):
         raise ValueError("Shortcut sequences must be strings")
     merged = {**SHORTCUT_DEFAULTS, **incoming}
-    return {SHORTCUT_ACTIONS[action]: sequence.replace("Return", "Enter") for action, sequence in merged.items() if action in SHORTCUT_ACTIONS}
+    result = {SHORTCUT_ACTIONS[action]: sequence.replace("Return", "Enter") for action, sequence in merged.items() if action in SHORTCUT_ACTIONS}
+    # Tauri-only extensions round-trip alongside the unchanged historical Qt actions.
+    if "reopenClosedTab" in incoming:
+        result["reopenClosedTab"] = incoming["reopenClosedTab"].replace("Return", "Enter")
+    return result
 
 
 def shortcuts_to_document(document, shortcuts):

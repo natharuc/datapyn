@@ -21,7 +21,7 @@ import { ResultGrid } from "./ResultGrid";
 import { CommandResults } from "./CommandResults";
 import { ConnectionDialog } from "./ConnectionDialog";
 import { SshHostTrustDialog } from "./SshHostTrustDialog";
-import { DEFAULT_SHORTCUTS, commandForEvent, EDITOR_COMMANDS, type Command } from "./shortcuts";
+import { loadShortcuts, commandForEvent, EDITOR_COMMANDS, type Command } from "./shortcuts";
 import { SettingsDialog } from "./SettingsDialog";
 import { DEFAULT_PREFERENCES, loadPreferences, normalizePreferences, savePreferences, type Preferences } from "./preferences";
 import { NativeDrafts, type ProfileState, type NativeWorkspaceState } from "./nativeDrafts";
@@ -361,7 +361,7 @@ export function App() {
   const [periodicSeconds, setPeriodicSeconds] = useState(30);
   const [activeResult, setActiveResult] = useState<Record<string, string>>({}), [copySignal, setCopySignal] = useState(0);
   const [shortcuts, setShortcuts] = useState<Record<Command, string>>(() => {
-    try { return { ...DEFAULT_SHORTCUTS, ...JSON.parse(localStorage.getItem("datapyn.desktop.shortcuts.v1") ?? "{}") }; } catch { return DEFAULT_SHORTCUTS; }
+    try { return loadShortcuts(JSON.parse(localStorage.getItem("datapyn.desktop.shortcuts.v1") ?? "{}")); } catch { return loadShortcuts(); }
   });
   const codeArea = useRef<HTMLDivElement>(null);
   const activeSessionRef = useRef(session); activeSessionRef.current = session;
@@ -401,7 +401,7 @@ export function App() {
     outputRevealAllowed.current=false;outputReveals.current.clear();setVisibleDockPanels([]);
     state.sessions.forEach(s=>s.blocks.forEach(b=>disposeModel(b.id)));
     if(loaded.state?.documents)workspace.restoreSnapshot(loaded.state);else if(profile)workspace.restoreSnapshot({});else workspace.restoreBrowserDraftMigration();
-    if(loaded.state || profile){setPreferences(prefs);setLeftVisible(prefs.leftVisible);setRightVisible(prefs.rightVisible);setResultHeight(prefs.resultHeight);setShortcuts({...DEFAULT_SHORTCUTS,...loaded.state?.shortcuts} as Record<Command,string>);}
+    if(loaded.state || profile){setPreferences(prefs);setLeftVisible(prefs.leftVisible);setRightVisible(prefs.rightVisible);setResultHeight(prefs.resultHeight);setShortcuts(loadShortcuts(loaded.state?.shortcuts));}
     setDockLayout(loaded.state?.layout?.docking);
     const restoredPanel=loaded.state?.layout?.panel;setPanel(isBottomPanel(restoredPanel) ? restoredPanel : "results");setRightPanel(loaded.state?.layout?.rightPanel === "pynia" ? "pynia" : "variables");
     setActiveResult({});setProfile(loaded);setGridView(undefined);setFormatColumnRequest(undefined);setExplorerRefresh(n=>n+1);
@@ -452,7 +452,7 @@ export function App() {
         const [transactionSettings,sqlSafetySettings]=await Promise.all([readTransactionSettings(runtime),readSqlSafetySettings(runtime)]);
         const nextPreferences=normalizePreferences({...preferences,...imported.preferences,automaticTransactions:transactionSettings.automatic_transactions,confirmDestructiveSql:sqlSafetySettings.confirm_destructive_sql} as Partial<Preferences>);
         workspace.setAutomaticTransactions(nextPreferences.automaticTransactions);
-        const nextShortcuts={...shortcuts,...imported.shortcuts} as Record<Command,string>;
+        const nextShortcuts=loadShortcuts(imported.shortcuts,shortcuts);
         updateConfigurationDefaults(imported.defaults ?? {});
         setPreferences(nextPreferences);setLeftVisible(nextPreferences.leftVisible);setRightVisible(nextPreferences.rightVisible);setResultHeight(nextPreferences.resultHeight);setShortcuts(nextShortcuts);
         nativeDrafts.current.schedule(profile.active_id,{...workspaceExtras.current,...workspace.nativeSnapshot(),preferences:{...nextPreferences},shortcuts:nextShortcuts,layout:{...layoutExtras.current,panel,rightPanel,mainWindow:mainWindowLayout,docking:captureLayout.current() ?? dockLayout}});
@@ -512,7 +512,7 @@ export function App() {
           const target=workspace.createSession({inheritConnection:false});await workspace.ensureSession(target.id);
           const document=await runtime.request<Record<string,unknown>>("document.read",{session_id:target.id,path});
           const imported=workspace.importDocument({...document,original_file_type:extension},path.split(/[\\/]/).at(-1) ?? "Análise",path,{inheritConnection:true,sourceSessionId:dataTargetId});
-          await workspace.closeSession(target.id);
+          await workspace.closeSession(target.id,{remember:false});
           workspace.activate(imported.id);
         } else {
           const target=workspace.session(dataTargetId);if(!target) return;
@@ -573,11 +573,16 @@ export function App() {
     if (shouldSave) { await saveDocument(false, closingId); if (workspace.session(closingId)?.modified) return; }
     await workspace.closeSession(closingId); current.blocks.forEach((block) => disposeModel(block.id)); setClosingId(undefined);
   }, [closingId, saveDocument]);
+  const reopenClosedTab = useCallback(() => {
+    const restored=workspace.reopenClosedSession();
+    if(restored)requestAnimationFrame(()=>focusEditor(restored.focusedBlockId));
+  }, []);
 
   const commands = useRef<(command: Command) => void>(() => {});
   commands.current = (command) => {
     if(!profile || editingLocked)return;
     if(command==="newSession" || command==="newTab"){workspace.createSession();return;}
+    if(command==="reopenClosedTab"){reopenClosedTab();return;}
     const current = workspace.session(); if (!current) return;
     switch (command) {
       case "run": runCurrent(); break;
@@ -636,7 +641,7 @@ export function App() {
       if (event.key === "Enter" && eventDocument.activeElement?.closest('.connection-tree-viewport [role="tree"]')) return;
       const command = commandForEvent(event.repeat ? { key: event.key, ctrlKey: event.ctrlKey, metaKey: event.metaKey, altKey: event.altKey, shiftKey: event.shiftKey, repeat: false } : event, shortcuts); if (!command) return;
       if (EDITOR_COMMANDS.has(command) && !eventDocument.activeElement?.closest(".monaco-editor")) return;
-      if (eventDocument.activeElement?.matches("input,textarea,select") && !eventDocument.activeElement.closest(".monaco-editor") && !["save","saveAs","open","settings"].includes(command)) return;
+      if (eventDocument.activeElement?.matches("input,textarea,select") && !eventDocument.activeElement.closest(".monaco-editor") && !["save","saveAs","open","settings","reopenClosedTab"].includes(command)) return;
       event.preventDefault(); event.stopPropagation(); if (!event.repeat) commands.current(command);
     };
     popoutKeyboard.current=handle;
@@ -709,6 +714,7 @@ export function App() {
       </nav>
     </header>
     {appMenu && <ContextMenu ownerDocument={appMenu.owner} anchor={appMenu.anchor} returnFocus={appMenu.button} label={translateUi("Mais opções")} onClose={()=>setAppMenu(undefined)} items={[
+      {label:translateUi("Reabrir aba fechada"),disabled:!state.closedSessionCount || editingLocked || !profile,onSelect:reopenClosedTab},
       {label:translateUi("Pacotes Python"),onSelect:()=>setPackageDialog(true)},
       {label:translateUi("Recentes"),onSelect:()=>setRecentVisible(true)},
       {label:translateUi("Workspace"),onSelect:()=>setWorkspaceManager(true)},
@@ -799,7 +805,7 @@ export function App() {
     }}/></Suspense>}
     {layoutDialog && dockControls && !editingLocked && <Suspense fallback={null}><LayoutDialog controls={dockControls} visiblePanels={dockPanels} restoreShortcut={shortcuts.restoreView} resetShortcut={shortcuts.resetLayout} onRestore={()=>restoreDockLayout()} onReset={()=>restoreDockLayout(true)} canSave={Boolean(profile) && !editingLocked} onSave={async()=>{await flushWorkspace.current();reportMessage(translateUi("Layout salvo."));}} onMessage={reportMessage} onClose={()=>setLayoutDialog(false)}/></Suspense>}
     {entityInfo && <Suspense fallback={null}><EntityInfoDialog identifier={entityInfo.identifier} scope={{session_id:session.id,block_id:entityInfo.blockId,scope_inherited:entityScope.scopeInherited,automatic_transactions:entityScope.automaticTransactions,connection_id:entityScope.connectionId,database:entityScope.database,schema:entityScope.schema}} onClose={()=>setEntityInfo(undefined)}/></Suspense>}
-    {tabContext && <><div className="context-dismiss" onClick={()=>setTabContext(undefined)}/><div className="tab-context" style={{left:Math.min(tabContext.x,innerWidth-190),top:Math.min(tabContext.y,innerHeight-190)}}><button onClick={()=>{workspace.duplicateSession(tabContext.id);setTabContext(undefined);}}>{translateUi("Duplicar análise")}</button><button onClick={()=>{const target=workspace.session(tabContext.id);if(target){setEditingTitle(target.id);setTitleDraft(target.title);}setTabContext(undefined);}}>{translateUi("Renomear")}</button><button onClick={()=>{run(closeSession(tabContext.id));setTabContext(undefined);}}>{translateUi("Fechar")}</button><button onClick={()=>{setClosingMany(state.sessions.filter(s=>s.id !== tabContext.id).map(s=>s.id));setTabContext(undefined);}}>{translateUi("Fechar outras")}</button><button onClick={()=>{setClosingMany(state.sessions.map(s=>s.id));setTabContext(undefined);}}>{translateUi("Fechar todas")}</button></div></>}
+    {tabContext && <><div className="context-dismiss" onClick={()=>setTabContext(undefined)}/><div className="tab-context" style={{left:Math.min(tabContext.x,innerWidth-190),top:Math.min(tabContext.y,innerHeight-220)}}><button onClick={()=>{workspace.duplicateSession(tabContext.id);setTabContext(undefined);}}>{translateUi("Duplicar análise")}</button><button onClick={()=>{const target=workspace.session(tabContext.id);if(target){setEditingTitle(target.id);setTitleDraft(target.title);}setTabContext(undefined);}}>{translateUi("Renomear")}</button><button onClick={()=>{run(closeSession(tabContext.id));setTabContext(undefined);}}>{translateUi("Fechar")}</button><button onClick={()=>{setClosingMany(state.sessions.filter(s=>s.id !== tabContext.id).map(s=>s.id));setTabContext(undefined);}}>{translateUi("Fechar outras")}</button><button onClick={()=>{setClosingMany(state.sessions.map(s=>s.id));setTabContext(undefined);}}>{translateUi("Fechar todas")}</button><button disabled={!state.closedSessionCount || editingLocked || !profile} title={shortcuts.reopenClosedTab} onClick={()=>{setTabContext(undefined);reopenClosedTab();}}>{translateUi("Reabrir aba fechada")}</button></div></>}
     {closingMany && <Modal title={translateUi("Fechar análises")} onClose={()=>setClosingMany(undefined)}><div className="confirm-copy"><p>{closingMany.length} {translateUi("análises. Alterações permanecem no workspace até serem salvas ou descartadas.")}</p><ul>{closingMany.map(id=><li key={id}>{workspace.session(id)?.title}{workspace.session(id)?.modified?" •":""}</li>)}</ul></div><footer className="modal-footer"><button onClick={()=>setClosingMany(undefined)}>{translateUi("Voltar")}</button><button disabled={closingMany.some(id=>workspace.session(id)?.busy)} onClick={()=>run((async()=>{for(const id of closingMany){const target=workspace.session(id);if(target){await workspace.closeSession(id);target.blocks.forEach(b=>disposeModel(b.id));}}setClosingMany(undefined);})())}>{translateUi("Descartar e fechar")}</button><button className="primary-button" disabled={closingMany.some(id=>workspace.session(id)?.busy)} onClick={()=>run((async()=>{for(const id of closingMany){const target=workspace.session(id);if(!target)continue;if(target.modified){await saveDocument(false,id);if(workspace.session(id)?.modified)return;}await workspace.closeSession(id);target.blocks.forEach(b=>disposeModel(b.id));}setClosingMany(undefined);})())}>{translateUi("Salvar e fechar")}</button></footer></Modal>}
     {editingChart && <Modal title={translateUi("Nome do gráfico")} onClose={()=>setEditingChart(undefined)}><div className="confirm-copy"><input autoFocus aria-label={translateUi("Nome do gráfico")} value={editingChart.title} onChange={e=>setEditingChart({...editingChart,title:e.target.value})}/></div><footer className="modal-footer"><button className="primary-button" onClick={()=>{workspace.patchSession(session.id,s=>({...s,modified:true,extras:{...s.extras,charts:charts.map(c=>c.id === editingChart.id?{...c,title:editingChart.title.trim() || c.title,config:{...c.config,title:editingChart.title.trim() || c.title}}:c)}}));setEditingChart(undefined);}}>{translateUi("Salvar")}</button></footer></Modal>}
     {aboutDialog && <Suspense fallback={null}><AboutDialog onClose={()=>setAboutDialog(false)} onMessage={reportMessage}/></Suspense>}

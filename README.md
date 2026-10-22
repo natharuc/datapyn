@@ -52,6 +52,7 @@ Fluxo tipico: executar SQL, materializar o resultado como DataFrame nomeado e co
 - **Parametros SQL** (`@nome`) com painel lateral de definicao
 - Formatacao com **Ruff** (Python) e **sqlparse** (SQL)
 - [Confirmacao de SQL destrutivo](docs/SQL_SAFETY.md), habilitada por padrao e configuravel
+- [Recuperacao de abas fechadas](docs/REOPEN_CLOSED_TABS.md) com `Ctrl+Shift+T` durante o uso do aplicativo
 
 ### Bancos suportados
 
@@ -202,6 +203,8 @@ O PyQt6 retido em `source/main.py`, `scripts/install.bat`, `scripts/run.bat` e `
 | `Shift+F5` | Executar Python |
 | `Ctrl+N` | Nova aba |
 | `Ctrl+W` | Fechar aba |
+| `Ctrl+Shift+T` | Recuperar ultima aba fechada |
+| `Ctrl+Alt+R` | Atualizar schema |
 | `Ctrl+S` | Salvar workspace |
 | `Ctrl+O` | Abrir workspace |
 | `Ctrl+B` | Novo bloco |
