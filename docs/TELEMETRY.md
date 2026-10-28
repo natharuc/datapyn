@@ -94,6 +94,9 @@ capacidade ilimitada ou de preços futuros.
 
 ## Publicação e testes
 
+O painel web protegido em `painel.docfis.com` é um serviço separado. Consulte
+[TELEMETRY_ADMIN.md](TELEMETRY_ADMIN.md) para identidade, consulta e publicação.
+
 O workflow `telemetry.yml` instala o lock do serviço, roda testes/typecheck e um
 dry run, e publica somente a partir de `main`. Usa o secret GitHub
 `CLOUDFLARE_API_TOKEN`, restrito à conta do DataPyn e à zona `datapyn.com`.

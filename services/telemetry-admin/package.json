@@ -1,0 +1,23 @@
+{
+  "name": "datapyn-telemetry-admin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/*.test.mjs",
+    "typecheck": "wrangler types && tsc --noEmit",
+    "types": "wrangler types",
+    "dev": "wrangler dev",
+    "check": "wrangler deploy --dry-run",
+    "deploy": "node ../../scripts/cloudflare/telemetry-admin.mjs deploy"
+  },
+  "dependencies": {
+    "jose": "6.2.13"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261028.1",
+    "@types/node": "22.20.5",
+    "typescript": "7.0.2",
+    "wrangler": "4.154.0"
+  }
+}
