@@ -40,10 +40,11 @@ export const BlockExecutionStatus=memo(function BlockExecutionStatus({block}:{bl
   const active=block.status==="running" || block.status==="cancelling";
   const started=typeof block.executionStartedAt==="number"?block.executionStartedAt:undefined;
   const duration=useExecutionElapsed(active,started,block.duration_ms);
+  const label=block.status==="failed"&&block.errorInfo?block.errorInfo.title:labels[block.status];
   if(block.status==="idle")return null;
-  return <span className={`block-status ${block.status}`} title={t(labels[block.status])} aria-label={t(labels[block.status])}>
+  return <span className={`block-status ${block.status}`} title={block.errorInfo?t(block.errorInfo.message):t(label)} aria-label={t(label)}>
     {active && <LoaderCircle size={12} className="spin" aria-hidden="true"/>}
-    {block.status!=="succeeded" && <span className="block-status-label">{t(labels[block.status])}</span>}
+    {block.status!=="succeeded" && <span className="block-status-label">{t(label)}</span>}
     {!active && block.transactionState?.pending === true && <span className="block-transaction-state" title={t("Use COMMIT ou ROLLBACK neste bloco para finalizar a transação.")}>{t("Transação aberta")}</span>}
     {!active && block.transactionState?.pending === null && <span className="block-transaction-state" title={t("A conexão foi interrompida ou não foi possível verificar a transação.")}>{t("Transação: estado desconhecido")}</span>}
     {duration!==undefined && <time className="block-elapsed" aria-label={t("Tempo de execução")}>{formatExecutionTime(duration)}</time>}

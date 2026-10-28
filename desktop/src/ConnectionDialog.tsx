@@ -2,7 +2,9 @@ import { translate as t, useLocale } from "./i18n";
 import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { FolderOpen, LoaderCircle } from "lucide-react";
-import { isDesktop, errorText, runtime, type RuntimeInfo } from "./runtime";
+import { isDesktop, runtime, type RuntimeInfo, type RuntimeErrorInfo } from "./runtime";
+import {ErrorDetails} from "./ErrorDetails";
+import {errorInfoFor} from "./errorPresentation";
 import type { ConnectionConfig } from "./workspace";
 import { groupHierarchy, type ConnectionGroup } from "./connections";
 import { parseConnectionString } from "./connectionStrings";
@@ -28,7 +30,7 @@ export function ConnectionDialog({ initial, onConnect, onClose, mode = "connect"
     db_type: "sqlite", host: "", port: 0, database: ":memory:", username: "", password: "", name: "",
     sqlserver_auth_mode: "sql_password", schema: "", http_path: "", trust_server_certificate: false,
   });
-  const [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const [busy, setBusy] = useState(false), [error, setError] = useState<RuntimeErrorInfo>();
   const [authCapabilities, setAuthCapabilities] = useState<SqlServerAuthenticationCapabilities>();
   useEffect(() => {
     if (config.db_type !== "sqlserver") return;
@@ -59,43 +61,43 @@ export function ConnectionDialog({ initial, onConnect, onClose, mode = "connect"
       const imported = parseConnectionString(stringInput, config.db_type);
       setConfig({ ...imported, name: config.name, ssh_tunnel_id: !["sqlite", "databricks"].includes(imported.db_type) ? config.ssh_tunnel_id ?? null : null });
       importedString.current = true; setSavePassword(false);
-      setDatabricksAuth(imported.databricks_auth_mode ?? "oauth"); setStringInput(""); setError(""); setTestMessage("");
-    } catch (failure) { setError(errorText(failure)); }
+      setDatabricksAuth(imported.databricks_auth_mode ?? "oauth"); setStringInput(""); setError(undefined); setTestMessage("");
+    } catch (failure) { setError(errorInfoFor(failure,"Falha ao abrir a conexão")); }
   }
   async function submit(event: React.FormEvent) {
-    event.preventDefault(); setBusy(true); setError("");
+    event.preventDefault(); setBusy(true); setError(undefined);
     try {
       const connection = connectionConfig();
       if (mode === "save" && !connection.name?.trim()) throw new Error(t("Informe o nome da conexão."));
       if (!connection.database.trim() && connection.db_type !== "databricks") throw new Error(t("Informe o banco ou arquivo SQLite."));
       await onConnect(connection, { group_id: groupId, color, save_password: config.db_type==="databricks"&&databricksAuth==="oauth"?false:savePassword, save_ssh_credentials: Boolean(connection.ssh_tunnel_id), use_saved_database_password: !importedString.current }); onClose();
-    } catch (failure) { setError(errorText(failure)); } finally { setBusy(false); }
+    } catch (failure) { setError(errorInfoFor(failure,"Falha ao abrir a conexão")); } finally { setBusy(false); }
   }
   async function testConnection() {
     const id=crypto.randomUUID();testId.current=id;
-    setBusy(true); setError(""); setTestMessage("");
+    setBusy(true); setError(undefined); setTestMessage("");
     try {
       const result = await runtime.request<{ success: boolean; message?: string }>("connection.test", { test_id:id,connection_id:connectionId,resolve_database_password:!importedString.current,config: connectionConfig() });
       if(!mounted.current||testId.current!==id)return;
       if (!result.success) throw new Error(result.message ?? t("A conexão não foi estabelecida."));
       setTestMessage(result.message ?? t("Conexão testada com sucesso."));
-    } catch (failure) { if(mounted.current&&testId.current===id)setError(errorText(failure)); } finally { if(mounted.current&&testId.current===id){testId.current=undefined;setBusy(false);} }
+    } catch (failure) { if(mounted.current&&testId.current===id)setError(errorInfoFor(failure,"Falha ao abrir a conexão")); } finally { if(mounted.current&&testId.current===id){testId.current=undefined;setBusy(false);} }
   }
-  function cancelTest(){const id=testId.current;if(!id)return;testId.current=undefined;setBusy(false);void runtime.request("connection.test_cancel",{test_id:id}).catch(failure=>{if(mounted.current)setError(errorText(failure));});}
+  function cancelTest(){const id=testId.current;if(!id)return;testId.current=undefined;setBusy(false);void runtime.request("connection.test_cancel",{test_id:id}).catch(failure=>{if(mounted.current)setError(errorInfoFor(failure,"Falha ao abrir a conexão"));});}
   function closeDialog() { if (testId.current) { cancelTest(); onClose(); } else if (!busy) onClose(); }
   async function chooseSQLite() {
     try {
       if (!isDesktop()) throw new Error(t("Seleção de arquivos está disponível no aplicativo desktop."));
       const path = await open({ multiple: false, filters: [{ name: "SQLite", extensions: ["db", "sqlite", "sqlite3"] }, { name: t("Todos"), extensions: ["*"] }] });
       if (typeof path === "string") field("database", path);
-    } catch (failure) { setError(errorText(failure)); }
+    } catch (failure) { setError(errorInfoFor(failure,"Falha ao abrir a conexão")); }
   }
   async function chooseTlsCa(key: "sslrootcert" | "ssl_ca" = "sslrootcert") {
     try {
       if (!isDesktop()) throw new Error(t("Seleção de arquivos está disponível no aplicativo desktop."));
       const path = await open({ multiple: false, title: t("Escolher certificado CA") });
       if (typeof path === "string") field(key, path);
-    } catch (failure) { setError(errorText(failure)); }
+    } catch (failure) { setError(errorInfoFor(failure,"Falha ao abrir a conexão")); }
   }
   const server = config.db_type !== "sqlite", withoutPassword = config.db_type === "sqlserver" && ["windows", "entra_mfa"].includes(config.sqlserver_auth_mode ?? "sql_password");
   const networkAuth = config.db_type === "sqlserver" && ["ntlm", "kerberos"].includes(config.sqlserver_auth_mode ?? "");
@@ -143,7 +145,7 @@ export function ConnectionDialog({ initial, onConnect, onClose, mode = "connect"
           {passwordOption && hasPassword && !config.password && <p>{t("(deixe em branco para manter a senha salva)")}</p>}
         </details>}
         {testMessage && <p className="connection-test-success" role="status">{t(testMessage)}</p>}
-        {error && <p className="form-error" role="alert">{t(error)}</p>}
+        {error && <div className="form-error" role="alert"><ErrorDetails info={error}/></div>}
         <footer className="modal-footer"><button type="button" className="secondary-button" onClick={testId.current?cancelTest:onClose} disabled={busy&&!testId.current}>{testId.current?t("Cancelar teste"):t("Cancelar")}</button><button type="button" className="secondary-button" onClick={() => void testConnection()} disabled={busy}>{t("Testar conexão")}</button><button type="submit" className="primary-button" disabled={busy}>{busy && <LoaderCircle size={15} className="spin" />}{busy ? t("Aguarde…") : mode === "save" ? t("Salvar") : t("Conectar")}</button></footer>
       </form>
   </Modal>;

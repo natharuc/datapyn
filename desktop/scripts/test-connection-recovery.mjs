@@ -17,6 +17,12 @@ try{
     const t=text=>page.evaluate(text=>window.__CONNECTION_RECOVERY_TEST__.translate(text),text),header=page.locator(".block-header").first();
     const reconnect=await t("Reconectar"),confirmTitle=await t("Reconectar este bloco?"),cancel=await t("Cancelar");
     const emit=(phase,id,ack)=>page.evaluate(([phase,id,ack])=>window.__CONNECTION_RECOVERY_TEST__.emit(phase,id,ack),[phase,id,ack]);
+    await header.getByText(await t("Transação: estado desconhecido"),{exact:true}).waitFor();
+    await emit("recovering","automatic-idle",false);await header.getByText(await t("Reconectando…"),{exact:true}).waitFor();
+    await emit("ready","automatic-idle",false);await header.locator(".connection-recovery-status").waitFor({state:"hidden"});
+    assert.equal(await header.getByText(await t("Transação: estado desconhecido"),{exact:true}).count(),0);
+    assert.equal(await page.getByRole("dialog",{name:confirmTitle,exact:true}).count(),0);
+    assert.equal(await page.evaluate(()=>window.__CONNECTION_RECOVERY_TEST__.calls.filter(call=>call.method==="connection.recover").length),0);
     await emit("recovering","first",false);await header.getByText(await t("Reconectando…"),{exact:true}).waitFor();assert.equal(await header.getByRole("button",{name:await t("Executar bloco ou seleção"),exact:true}).isDisabled(),true);
     await emit("blocked","first",true);await header.getByRole("button",{name:reconnect,exact:true}).click();
     const dialog=page.getByRole("dialog",{name:confirmTitle,exact:true});await dialog.waitFor();
@@ -30,10 +36,10 @@ try{
     assert.equal(await page.evaluate(()=>window.__CONNECTION_RECOVERY_TEST__.snapshot().sessions[0].variables[0].name),"df");assert.equal(await page.evaluate(()=>window.__CONNECTION_RECOVERY_TEST__.editor()),"SELECT * FROM important_report;");
     await header.getByRole("button",{name:await t("Dispensar aviso"),exact:true}).click();await header.locator(".connection-recovery-status").waitFor({state:"hidden"});
     await emit("recovering","second",false);await emit("error","second",false);await page.evaluate(()=>window.__CONNECTION_RECOVERY_TEST__.mode("error"));await header.getByRole("button",{name:reconnect,exact:true}).click();await header.getByRole("button",{name:reconnect,exact:true}).waitFor();
-    await page.evaluate(()=>window.__CONNECTION_RECOVERY_TEST__.mode("ready"));await header.getByRole("button",{name:reconnect,exact:true}).click();await header.getByText(await t("Conexão recuperada"),{exact:true}).waitFor();
+    await page.evaluate(()=>window.__CONNECTION_RECOVERY_TEST__.mode("ready"));await header.getByRole("button",{name:reconnect,exact:true}).click();await header.locator(".connection-recovery-status").waitFor({state:"hidden"});
     calls=await page.evaluate(()=>window.__CONNECTION_RECOVERY_TEST__.calls.filter(call=>call.method==="connection.recover"));assert.equal(calls.length,3);assert.equal(calls[1].params.acknowledge_state_loss,false);assert.equal(calls[2].params.acknowledge_state_loss,false);
     assert.equal(await page.evaluate(()=>window.__CONNECTION_RECOVERY_TEST__.calls.filter(call=>call.method==="execution.run").length),0);assert.deepEqual(await page.evaluate(()=>window.__CONNECTION_RECOVERY_TEST__.failures),[]);
-    console.log(`PASS ${locale}: actual App/Monaco recovery indicator, explicit state-loss confirmation, Escape/cancel, retry in the same tab, preserved data/code and no SQL replay`);
+    console.log(`PASS ${locale}: quiet automatic recovery, cleared stale transaction state, explicit state-loss confirmation, Escape/cancel, same-tab retry, preserved data/code and no SQL replay`);
   }
   assert.deepEqual(errors,[]);
 }finally{await browser?.close();await server.close();}

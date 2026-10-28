@@ -1,6 +1,6 @@
 [package]
 name = "datapyn-desktop"
-version = "1.0.13"
+version = "1.0.14"
 description = "DataPyn desktop with isolated Python session kernels"
 authors = ["DataPyn"]
 edition = "2021"

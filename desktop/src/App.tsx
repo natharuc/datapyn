@@ -22,6 +22,7 @@ import {useTelemetry} from "./useTelemetry";
 import type { EditorPreferences } from "./MonacoBlock";
 import { ResultGrid } from "./ResultGrid";
 import { CommandResults } from "./CommandResults";
+import { OutputPanel } from "./OutputPanel";
 import { ConnectionDialog } from "./ConnectionDialog";
 import { SshHostTrustDialog } from "./SshHostTrustDialog";
 import { loadShortcuts, commandForEvent, EDITOR_COMMANDS, type Command } from "./shortcuts";
@@ -908,10 +909,4 @@ function ViewportEditor({forceMount,...props}:{id:string;code:string;language:"s
   useEffect(()=>{if(forceMount)setStartupPinned(true);},[forceMount]);
   useEffect(()=>{const node=container.current;if(!node)return;const Observer=node.ownerDocument.defaultView?.IntersectionObserver ?? IntersectionObserver;const observer=new Observer(([entry])=>{setVisible(entry.isIntersecting);if(entry.isIntersecting)setStartupPinned(false);},{root:node.closest(".editor-area"),rootMargin:"350px"});observer.observe(node);return()=>observer.disconnect();},[documentRevision]);
   return <div className="block-editor-viewport" ref={container} style={{height:props.height}}>{(visible || forceMount || startupPinned) && <Suspense fallback={<div className="editor-loading">{translateUi("Carregando editor…")}</div>}><MonacoBlock {...props}/></Suspense>}</div>;
-}
-
-function OutputPanel({ session }: { session: SessionDocument }) {
-  const end = useRef<HTMLDivElement>(null);
-  useEffect(() => { end.current?.scrollIntoView({ block: "nearest" }); }, [session.logs]);
-  return <div className="output-panel">{session.logs.length ? session.logs.map((line) => <div key={line.id} className={`output-entry ${line.stream}`}><span>{line.time}</span><span className="output-stream">{line.stream === "stderr" ? "ERR" : line.stream === "system" ? "SYS" : "OUT"}</span><pre>{line.text}</pre></div>) : <div className="output-empty"><Terminal size={19} /><span>{translateUi("Sem saída.")}</span></div>}<div ref={end} /></div>;
 }

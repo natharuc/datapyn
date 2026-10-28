@@ -303,6 +303,22 @@ class ConnectorPool:
         self.on_recovery = None
         self.last_recovery = None
         self._recovery_cooldowns = {}
+        self._blocked_recoveries = {}
+
+    @staticmethod
+    def _transaction_snapshot(connector):
+        """Publish the replacement's state, never the dead socket's old status."""
+        getter = getattr(connector, "get_transaction_state", None)
+        if not callable(getter):
+            return None
+        try:
+            value = getter()
+        except Exception:
+            return None
+        if not isinstance(value, dict):
+            return None
+        fields = {"automatic_transactions", "pending", "state", "transaction_count", "xact_state"}
+        return {field: item for field, item in value.items() if field in fields}
 
     @staticmethod
     def recovery_state(connector, config):
@@ -370,8 +386,13 @@ class ConnectorPool:
                    "acknowledgement_required": requires_ack, "session_state_lost": True, "duration_ms": 0,
                    "affected_block_ids": self._affected_blocks(key, params)}
         if requires_ack and not acknowledge:
-            self._recovery_event(outcome, params)
             outcome.update(phase="blocked", error="A conexão foi interrompida. Confirme a abertura de uma nova conexão; transações e objetos temporários anteriores não podem ser recuperados.")
+            # Metadata refreshes must not replace the confirmation the user is
+            # reading. This is the same lost physical session until replaced.
+            previous_outcome = self._blocked_recoveries.get(key)
+            if previous_outcome is not None:
+                outcome["recovery_id"] = previous_outcome["recovery_id"]
+            self._blocked_recoveries[key] = dict(outcome)
             self._recovery_event(outcome, params)
             raise ConnectionLostError(outcome["error"], acknowledgement_required=True, submitted=bool(state.get("submitted")))
         cooldown = self._recovery_cooldowns.get(key)
@@ -390,7 +411,8 @@ class ConnectorPool:
                 if attempt < 2 and classify_connection_error(error, config.get("db_type", "")):
                     time.sleep(0.2)
                     continue
-                outcome.update(phase="error", error=f"Não foi possível reconectar: {type(error).__name__}: {error}",
+                from .errors import error_summary, format_error
+                outcome.update(phase="error", error=f"Não foi possível reconectar: {error_summary(format_error(error))}",
                                duration_ms=round((time.perf_counter() - started) * 1000, 3))
                 self._recovery_cooldowns[key] = (time.monotonic() + 3, dict(outcome))
                 self._recovery_event(outcome, params)
@@ -415,11 +437,17 @@ class ConnectorPool:
             if self.default_config is not None:
                 self.default_config.update({field: config[field] for field in ("password", "sslpassword", "ssl_key_password") if field in config})
         self._recovery_cooldowns.pop(key, None)
+        self._blocked_recoveries.pop(key, None)
         try:
             previous.disconnect()
         except Exception:
             pass
-        outcome.update(phase="ready", acknowledgement_required=False, duration_ms=round((time.perf_counter() - started) * 1000, 3))
+        outcome.update(phase="ready", acknowledgement_required=False,
+                       state_loss_acknowledged=requires_ack and acknowledge,
+                       duration_ms=round((time.perf_counter() - started) * 1000, 3))
+        transaction_state = self._transaction_snapshot(replacement)
+        if transaction_state is not None:
+            outcome["transaction_state"] = transaction_state
         self._recovery_event(outcome, params)
         return replacement
 
@@ -448,7 +476,11 @@ class ConnectorPool:
         if key not in self.items:
             owned = {**params, **({"_execution_scope_id": block} if block else {})}
             self.activate(owned, default=params.get("scope_inherited") is True)
-            return {"recovery_id": __import__("uuid").uuid4().hex, "phase": "ready", "acknowledgement_required": False, "session_state_lost": False}
+            outcome = {"recovery_id": __import__("uuid").uuid4().hex, "phase": "ready", "acknowledgement_required": False, "session_state_lost": False}
+            transaction_state = self._transaction_snapshot(self.active)
+            if transaction_state is not None:
+                outcome["transaction_state"] = transaction_state
+            return outcome
         state = self.recovery_state(self.items[key], self.configs[key])
         if state is None:
             validator = getattr(self.items[key], "validate_connection_for_execution", None)
@@ -459,8 +491,12 @@ class ConnectorPool:
                     state = self.recovery_state(self.items[key], self.configs[key])
         if state is None:
             self.active_key = key
-            return {"recovery_id": __import__("uuid").uuid4().hex, "phase": "ready", "acknowledgement_required": False,
-                    "session_state_lost": False, "affected_block_ids": self._affected_blocks(key, params)}
+            outcome = {"recovery_id": __import__("uuid").uuid4().hex, "phase": "ready", "acknowledgement_required": False,
+                       "session_state_lost": False, "affected_block_ids": self._affected_blocks(key, params)}
+            transaction_state = self._transaction_snapshot(self.active)
+            if transaction_state is not None:
+                outcome["transaction_state"] = transaction_state
+            return outcome
         try:
             replacement = self._recover_key(key, params, acknowledge=params.get("acknowledge_state_loss") is True, force=True)
         except Exception:
@@ -518,6 +554,7 @@ class ConnectorPool:
         self.last_used.pop(key, None)
         self.configs.pop(key, None)
         self._recovery_cooldowns.pop(key, None)
+        self._blocked_recoveries.pop(key, None)
         self.block_affinity = {block: item for block, item in self.block_affinity.items() if item != key}
         if self.default_active_key == key:
             self.default_active_key = None

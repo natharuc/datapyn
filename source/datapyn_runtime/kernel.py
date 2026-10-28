@@ -10,7 +10,6 @@ from pathlib import Path
 import sys
 import threading
 import time
-import traceback
 import types
 
 from . import database
@@ -50,6 +49,7 @@ def python_uses_database(code, namespace=None):
 def connection_loss_error(error):
     """SQLAlchemy can wrap a managed engine's transport error in DBAPIError."""
     from src.database.connection_recovery import ConnectionLostError
+    from .errors import safe_exception_attribute
     pending, seen = [error], set()
     while pending and len(seen) < 12:
         current = pending.pop(0)
@@ -58,7 +58,9 @@ def connection_loss_error(error):
         seen.add(id(current))
         if isinstance(current, ConnectionLostError):
             return current
-        pending.extend((getattr(current, "orig", None), current.__cause__, current.__context__))
+        # An exception handled by user/library fallback code is not the cause
+        # of the new failure. Only explicit wrappers/causes retain ownership.
+        pending.extend((safe_exception_attribute(current, "orig"), safe_exception_attribute(current, "__cause__")))
     return None
 
 
@@ -378,6 +380,7 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                 old_stdout, old_stderr = sys.stdout, sys.stderr
                 sys.stdout, sys.stderr = CapturedStream(capture, "stdout"), CapturedStream(capture, "stderr")
                 results, rich_outputs, error, download_result = [], [], None, None
+                error_info = None
                 connection_error = None
                 pool.last_recovery = None
                 command_results = []
@@ -392,6 +395,9 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                 previous_search_path = None
                 sql_scope_changed = False
                 rich_capture.begin()
+                from .errors import suppress_internal_console_logs
+                diagnostic_logging = suppress_internal_console_logs()
+                diagnostic_logging.__enter__()
                 try:
                     safety_config = params.get("_connection_config") or params.get("config") or pool.default_config or {}
                     safety_enabled, safety_authorized = require_kernel_review("execution.run", params, safety_config.get("db_type", ""))
@@ -519,20 +525,23 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                         if any(owner is item for item in pool.items.values()):
                             executing_connector = owner
                         exc = lost_error
-                    code = getattr(exc, "code", "")
+                    from .errors import exception_code
+                    code = exception_code(exc)
                     if code == "transaction_pending":
                         affinity = pool.block_affinity.get(str(params.get("_execution_scope_id") or ""))
                         executing_connector = pool.items.get(affinity)
+                    from .errors import serialize_runtime_error, error_summary
+                    formatted = serialize_runtime_error(exc, language=params["language"])
+                    error_info = formatted["error_info"]
+                    error = formatted["message"]
                     if isinstance(code, str) and code.startswith(("ssh_", "transaction_", "destructive_sql_", "connection_lost", "connection_unavailable")):
-                        from .errors import serialize_runtime_error
-                        connection_error = serialize_runtime_error(exc)
-                        error = connection_error["message"]
+                        connection_error = formatted
                         if code == "ssh_host_key_unknown":
-                            error += " Abra o cadastro da conexão e use Testar conexão para conferir e confirmar a fingerprint SSH."
-                    else:
-                        error = traceback.format_exc()[-32_768:]
+                            error_info["message"] = (error_info["message"] + " Abra o cadastro da conexão e use Testar conexão para conferir e confirmar a fingerprint SSH.")[:8192]
+                            error = error_summary(error_info)
                 finally:
                     sql_helper_scope["active"] = False
+                    diagnostic_logging.__exit__(None, None, None)
                     delimiter_context.__exit__(None, None, None)
                     sys.stdout, sys.stderr = old_stdout, old_stderr
                     capture.close()
@@ -548,41 +557,39 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                     "variables": describe_variables(namespace),
                     "automatic_transactions": params["automatic_transactions"],
                 }
-                transaction_state = getattr(executing_connector, "get_transaction_state", None)
+                transaction_connector = executing_connector
                 if executing_connector is not None and executing_connector.db_type in {"sqlserver", "postgresql", "mysql", "mariadb", "databricks", "sqlite"}:
                     payload["db_type"] = executing_connector.db_type
-                if callable(transaction_state):
-                    try:
-                        state = transaction_state()
-                        payload["transaction_state"] = {key: value for key, value in state.items()
-                                                        if key in {"automatic_transactions", "pending", "state", "transaction_count", "xact_state"}}
-                    except Exception:
-                        payload["transaction_state"] = {"automatic_transactions": params["automatic_transactions"],
-                                                        "pending": None, "state": "unknown"}
                 if params.get("block_id"):
                     payload["block_id"] = params["block_id"]
                 if "scope_inherited" in params:
                     payload["scope_inherited"] = params["scope_inherited"] is True
                 if error:
                     payload["error"] = error
+                    payload["error_info"] = error_info
                 if connection_error:
                     payload["error_code"] = connection_error["code"]
                     payload["error_details"] = connection_error.get("details", {})
                     if connection_error["code"] in {"connection_lost", "connection_unavailable"}:
                         payload["connection_lost"] = True
                 if error and executing_connector is not None:
-                    lost = pool.recovery_state(executing_connector, pool.configs.get(pool.active_key, {}))
+                    affected = next((key for key, item in pool.items.items() if item is executing_connector), None)
+                    lost = pool.recovery_state(executing_connector, pool.configs.get(affected, {}))
                     if lost:
                         payload["connection_lost"] = True
                         # Repair the transport for the NEXT command. The failed
                         # job remains failed, including SQL that may have run.
                         try:
-                            affected = next((key for key, item in pool.items.items() if item is executing_connector), None)
                             if affected is not None:
                                 replacement = pool._recover_key(affected, params)
+                                transaction_connector = replacement
+                                replacement_key = next(key for key, item in pool.items.items() if item is replacement)
+                                if replacement_key != affected and affected in connection_labels:
+                                    connection_labels[replacement_key] = connection_labels.pop(affected)
                                 if connector is executing_connector:
                                     connector = replacement
                                     namespace["db_engine"] = replacement.engine
+                                    publish_safety_context()
                         except Exception:
                             pass
                 if pool.last_recovery:
@@ -592,6 +599,25 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                         # before assigning executing_connector. It still lost
                         # a cached transport, so clients must retain old grids.
                         payload["connection_lost"] = True
+                    if (error_info and error_info["category"] == "network"
+                            and pool.last_recovery.get("phase") == "ready"):
+                        # The failed command stays failed, but recovery has
+                        # already completed; asking to reconnect is now stale.
+                        error_info["title"] = "Execução interrompida"
+                        error_info["message"] = "A conexão foi restabelecida. A execução interrompida não foi repetida."
+                        if (connection_error or {}).get("details", {}).get("submitted") is True:
+                            error_info["message"] += " Confira seu resultado antes de executar novamente."
+                        from .errors import error_summary
+                        error = payload["error"] = error_summary(error_info)
+                # Recovery events arrive before this terminal event. Reading
+                # the dead connector here would overwrite the new idle state
+                # with "unknown" and leave the UI blocked after reconnecting.
+                transaction_state = pool._transaction_snapshot(transaction_connector)
+                if transaction_state is not None:
+                    payload["transaction_state"] = transaction_state
+                elif callable(getattr(transaction_connector, "get_transaction_state", None)):
+                    payload["transaction_state"] = {"automatic_transactions": params["automatic_transactions"],
+                                                    "pending": None, "state": "unknown"}
                 if rich_outputs:
                     payload["rich_outputs"] = rich_outputs
                 if download_result is not None:

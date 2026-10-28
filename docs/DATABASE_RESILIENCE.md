@@ -1,6 +1,6 @@
 # Recuperação das conexões
 
-A versão Tauri 1.0.13 recupera conexões na própria aba/bloco, mantendo o kernel
+A versão Tauri 1.0.14 recupera conexões na própria aba/bloco, mantendo o kernel
 Python, códigos, parâmetros, DataFrames e resultados que já estavam carregados.
 São cobertos SQL Server (ODBC/TDS e métodos de autenticação existentes),
 PostgreSQL, MySQL, MariaDB, Databricks, SQLite e conexões com túnel SSH.
@@ -22,6 +22,17 @@ PostgreSQL, MySQL, MariaDB, Databricks, SQLite e conexões com túnel SSH.
 - `Reconectando…` aparece no bloco afetado. Em caso de falha persistente, há um
   botão para tentar novamente na mesma aba. Os demais blocos e abas continuam
   disponíveis conforme suas próprias conexões e execuções.
+- Falhas de permissão, autenticação, objeto inexistente e sintaxe mantêm sua
+  causa original. Elas não iniciam uma reconexão nem herdam uma queda de rede
+  de um tratamento de erro anterior. Um `USE` negado interrompe a operação;
+  a consulta não pode continuar no banco anterior por engano.
+- Sockets auxiliares de metadados são isolados da conexão de execução. Um
+  erro de consulta ou rollback de limpeza nesses sockets não transforma a
+  transação do bloco em um commit de resultado desconhecido.
+- A recuperação concluída atualiza o estado transacional da interface e fica
+  silenciosa quando não houve perda de estado relevante confirmada. Consultas
+  simples em sessão manual previamente ociosa não exigem confirmação apenas
+  por terem sido enviadas ao servidor.
 - O Object Explorer e os metadados do autocomplete são invalidados quando a
   conexão física muda. As sugestões Python continuam refletindo os DataFrames,
   inclusive após um bloco Python alterar colunas e terminar com erro.
@@ -54,6 +65,9 @@ supervisor e interface. `ConnectorPool` recupera a conexão física afetada;
 `connection.recovery` identifica bloco, escopo, modo e geração da recuperação.
 Eventos antigos, respostas após fechamento e confirmações de contexto antigo
 são recusados.
+
+Os erros usam um resumo e detalhes técnicos locais recolhidos por padrão,
+conforme [ERROR_HANDLING.md](ERROR_HANDLING.md).
 
 Os testes usam sockets/servidores de protocolo locais, SSH local, SQLite e
 drivers simulados. Cobrem falhas em execute/fetch/nextset/commit, cancelamento,

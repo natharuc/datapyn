@@ -1,6 +1,8 @@
 import { Check, CircleAlert, Square } from "lucide-react";
 import { useTranslation } from "./i18n";
 import type { CommandExecution } from "./workspace";
+import {ErrorDetails} from "./ErrorDetails";
+import {errorInfoFor} from "./errorPresentation";
 
 export function CommandResults({ executions, blockLabels }: { executions: CommandExecution[]; blockLabels: Record<string, string> }) {
   const { t, locale } = useTranslation();
@@ -17,7 +19,7 @@ export function CommandResults({ executions, blockLabels }: { executions: Comman
           <span>{command.rows_affected === null ? t("Comando executado.") : t(command.rows_affected === 1 ? "{rows} linha afetada." : "{rows} linhas afetadas.", { rows: command.rows_affected.toLocaleString(locale) })}</span>
         </li>)}
       </ol>
-      {execution.status === "failed" && <div className="command-execution-error"><CircleAlert size={14} aria-hidden="true"/><span>{execution.error || t("Erro na execução.")}</span></div>}
+      {execution.status === "failed" && <div className="command-execution-error"><CircleAlert size={14} aria-hidden="true"/><ErrorDetails info={execution.errorInfo??errorInfoFor(execution.error||t("Erro na execução."))}/></div>}
       {execution.status === "cancelled" && <div className="command-execution-cancelled"><Square size={12} aria-hidden="true"/><span>{t("Execução cancelada.")}</span></div>}
     </section>)}
   </div>;

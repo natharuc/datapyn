@@ -30,7 +30,7 @@ afterEach(()=>{controllers.splice(0).forEach(controller=>controller.dispose());v
 describe("connection recovery event contract",()=>{
   it("accepts scoped recovery and compact terminal outcomes while rejecting malformed flags",()=>{
     const state=recovering("session","block");expect(isRuntimeEvent({event:"connection.recovery",payload:state})).toBe(true);
-    for(const invalid of [{automatic_transactions:"false"},{phase:"retry"},{recovery_id:""},{requested_scope:[]},{attempt:-1},{acknowledgement_required:1},{requested_scope:{database:{secret:true}}}])expect(isRuntimeEvent({event:"connection.recovery",payload:{...state,...invalid}})).toBe(false);
+    for(const invalid of [{automatic_transactions:"false"},{phase:"retry"},{recovery_id:""},{requested_scope:[]},{attempt:-1},{acknowledgement_required:1},{state_loss_acknowledged:1},{transaction_state:{automatic_transactions:true,pending:"false",state:"idle"}},{requested_scope:{database:{secret:true}}}])expect(isRuntimeEvent({event:"connection.recovery",payload:{...state,...invalid}})).toBe(false);
     expect(isRuntimeEvent({event:"execution.finished",payload:{session_id:"session",execution_id:"exec",status:"failed",connection_lost:true,connection_recovery:{phase:"blocked",recovery_id:"lost",acknowledgement_required:true}}})).toBe(true);
     expect(isRuntimeEvent({event:"execution.finished",payload:{session_id:"session",execution_id:"exec",status:"failed",connection_lost:"true"}})).toBe(false);
   });
@@ -71,6 +71,22 @@ describe("connection recovery event contract",()=>{
     expect(next.blocks[1].connectionRecovery).toMatchObject({phase:"ready",recovery_id:"new"});expect(next.blocks[1].connectionRecovery?.acknowledgement_required).not.toBe(true);
     expect(next.blocks[2]).toBe(differentSocket);expect(next.blocks[3]).toBe(manual);
   });
+  it("replaces stale transaction state only on the socket and peers confirmed ready by the backend",()=>{
+    const session=newSession(),first=session.blocks[0],shared=newBlock(),independent=newBlock();session.blocks.push(shared,independent);
+    const unknown={automatic_transactions:true,pending:null,state:"unknown" as const},idle={automatic_transactions:true,pending:false,state:"idle" as const};
+    for(const block of session.blocks){block.transactionState=unknown;block.connectionRecovery=recovering(session.id,block.id,{phase:"blocked",recovery_id:block.id,acknowledgement_required:true});}
+    let next=applyConnectionRecovery(session,recovering(session.id,first.id,{recovery_id:"replacement"}));
+    expect(next.blocks[0].transactionState).toBe(unknown);
+    next=applyConnectionRecovery(next,recovering(session.id,first.id,{recovery_id:"replacement",phase:"ready",transaction_state:idle,affected_block_ids:[first.id,shared.id]}));
+    expect(next.blocks[0].transactionState).toEqual(idle);expect(next.blocks[1].transactionState).toEqual(idle);
+    expect(next.blocks[2]).toBe(independent);expect(next.blocks[2].transactionState).toBe(unknown);
+  });
+  it("clears a lost socket's transaction state when an older backend confirms ready without a snapshot",()=>{
+    const session=newSession(),block=session.blocks[0];block.transactionState={automatic_transactions:false,pending:null,state:"unknown"};
+    block.disable_automatic_transactions=true;
+    const next=applyConnectionRecovery(session,recovering(session.id,block.id,{automatic_transactions:false,phase:"ready"}));
+    expect(next.blocks[0].transactionState).toBeUndefined();
+  });
 });
 
 describe("recovering a connection without rerunning code",()=>{
@@ -85,6 +101,14 @@ describe("recovering a connection without rerunning code",()=>{
   it("retains the existing behavior for failures unrelated to a connection",()=>{
     const session=newSession();session.currentExecutionId="syntax";session.currentBlockId=session.focusedBlockId;session.results=[{result_id:"old",variable_name:"df",row_count:1,columns:[]}];
     expect(applyRuntimeEvent(session,{event:"execution.finished",payload:{session_id:session.id,execution_id:"syntax",status:"failed",duration_ms:1,results:[],variables:[]}}).results).toEqual([]);
+  });
+  it("does not restore a dead socket's unknown transaction state after recovery completed",()=>{
+    const session=newSession(),block=session.blocks[0];session.currentExecutionId="lost";session.currentBlockId=block.id;
+    const replacement={automatic_transactions:true,pending:false,state:"idle" as const};
+    const updated=applyRuntimeEvent(session,{event:"execution.finished",payload:{session_id:session.id,execution_id:"lost",block_id:block.id,status:"failed",duration_ms:1,results:[],variables:[],connection_lost:true,transaction_state:{automatic_transactions:true,pending:null,state:"unknown"},connection_recovery:{phase:"ready",recovery_id:"fresh",session_state_lost:true,transaction_state:replacement}}});
+    expect(updated.blocks[0].transactionState).toEqual(replacement);
+    expect(updated.blocks[0].status).toBe("failed");
+    expect(updated.blocks[0].connectionRecovery?.acknowledgement_required).not.toBe(true);
   });
   it("deduplicates explicit recovery, pins its target and never sends SQL or resets a kernel",async()=>{
     const {transport,controller,session}=setup(),block=session.blocks[0],gate=deferred<ConnectionRecoveryOutcome>();

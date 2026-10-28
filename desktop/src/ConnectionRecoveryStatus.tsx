@@ -11,7 +11,9 @@ export function ConnectionRecoveryStatus({state,disabled=false,compact=false,onR
 }) {
   const {t}=useTranslation(),[confirming,setConfirming]=useState<string>(),[pending,setPending]=useState(false);
   useEffect(()=>{if(confirming!==state?.recovery_id)setConfirming(undefined);},[state?.recovery_id,confirming]);
-  if(!state || state.phase==="ready"&&!state.session_state_lost)return null;
+  // A new physical socket does not imply lost user state. Routine automatic
+  // recovery is quiet once ready; only an acknowledged state loss needs notice.
+  if(!state || state.phase==="ready"&&state.state_loss_acknowledged!==true)return null;
   const recovering=state.phase==="recovering",ready=state.phase==="ready";
   const label=recovering?"Reconectando…":ready?"Conexão recuperada":"Reconectar";
   const warning=recovering?label:ready?"A sessão física anterior foi perdida. Recrie tabelas temporárias se necessário. O código não foi executado novamente.":state.acknowledgement_required?"O resultado da execução anterior pode ser desconhecido. Revise antes de reconectar.":state.error??"Não foi possível recuperar a conexão. Tente novamente quando a rede estiver disponível.";

@@ -25,7 +25,7 @@ from src.utils.sql_parameter_service import (
 )
 from src.language import S
 from src.database.namespace import format_context, parse_context
-from src.database.connection_recovery import ConnectionLostError, classify_connection_error
+from src.database.connection_recovery import ConnectionLostError, classify_connection_error, is_read_only_query
 from src.database.query_stream_exporter import (
     ExportFormat,
     StreamExportResult,
@@ -557,6 +557,8 @@ class DatabaseConnector:
         self._recovery_requires_ack = False
         self._recovery_submitted = False
         self._query_submitted = False
+        self._execution_transaction_state = None
+        self._execution_read_only = False
         self._commit_in_progress = False
         self._health_probe_in_progress = False
         self._last_connection_validation = time.monotonic()
@@ -1157,8 +1159,14 @@ class DatabaseConnector:
 
     def _mark_connection_lost(self, *, submitted=False, acknowledgement_required=None):
         if acknowledgement_required is None:
+            state = self._transaction_state_cache
+            owns_execution = self._query_owner == threading.get_ident()
+            if state is None and owns_execution:
+                state = self._execution_transaction_state
+            idle = isinstance(state, dict) and state.get("pending") is False
+            ordinary_read = owns_execution and self._execution_read_only
             acknowledgement_required = (not self.automatic_transactions and
-                (submitted or self._transaction_state_cache is None or self._transaction_state_cache.get("pending") is not False))
+                (not idle or submitted and not ordinary_read))
         self._connection_lost = True
         self._recovery_requires_ack = self._recovery_requires_ack or bool(acknowledgement_required) or self._commit_in_progress
         self._recovery_submitted = self._recovery_submitted or bool(submitted)
@@ -1345,7 +1353,10 @@ class DatabaseConnector:
         return raw
 
     def _execution_raw_connection(self):
-        raw = self.engine.raw_connection() if self.automatic_transactions else self.get_manual_connection()
+        # Internal execution is tracked by execute_query/stream_query_to_files.
+        # The public escape hatch deliberately invalidates transaction state,
+        # but doing that here turned every ordinary SELECT into unknown state.
+        raw = self.engine.raw_connection() if self.automatic_transactions else self._open_manual_connection()
         physical = getattr(raw, "driver_connection", raw)
         if self._physical_connection_closed(physical):
             if self.automatic_transactions:
@@ -1412,7 +1423,11 @@ class DatabaseConnector:
         # maintenance path issue SQL or block the kernel waiting for the network.
         if self.automatic_transactions:
             return False
-        if self._query_lock.locked() or self._manual_connection_lost:
+        if self._query_lock.locked():
+            return True
+        if self._connection_lost:
+            return self._recovery_requires_ack
+        if self._manual_connection_lost:
             return True
         if self.db_type == "databricks":
             return False
@@ -1483,6 +1498,8 @@ class DatabaseConnector:
             self._query_submitted = False
             self._cancelled = False
             self.validate_connection_for_execution()
+            self._execution_transaction_state = self._transaction_state_cache
+            self._execution_read_only = not self.automatic_transactions and is_read_only_query(query, self.db_type)
             self._transaction_state_cache = None
             self._last_command_results = []
             value = self._execute_query_unlocked(query, parameters=parameters)
@@ -1497,6 +1514,8 @@ class DatabaseConnector:
             logger.error(f"Error executing query: {str(e)}")
             raise
         finally:
+            self._execution_transaction_state = None
+            self._execution_read_only = False
             self._query_owner = None
             self._query_lock.release()
 
@@ -1691,6 +1710,8 @@ class DatabaseConnector:
             self._query_submitted = False
             self._cancelled = False
             self.validate_connection_for_execution()
+            self._execution_transaction_state = self._transaction_state_cache
+            self._execution_read_only = not self.automatic_transactions and is_read_only_query(query, self.db_type)
             self._transaction_state_cache = None
             result = self._stream_query_unlocked(
                 query,
@@ -1714,6 +1735,8 @@ class DatabaseConnector:
             self._raise_if_connection_lost(exc)
             raise
         finally:
+            self._execution_transaction_state = None
+            self._execution_read_only = False
             self._query_owner = None
             self._query_lock.release()
 
@@ -1952,7 +1975,9 @@ class DatabaseConnector:
                     init_cursor.close()
                 except Exception as e:
                     self._raise_if_connection_lost(e, submitted=False)
-                    logger.warning(f"Failed to set database [{current_db}]: {e}")
+                    # Permission/context errors must stop execution as well;
+                    # continuing could run the user's SQL in another database.
+                    raise
 
             for batch_idx, batch in enumerate(batches, start=1):
                 if self._cancelled or (is_cancelled and is_cancelled()):
@@ -2606,6 +2631,7 @@ class DatabaseConnector:
         raw_conn = None
         dataframes = []
         errors = []
+        provider_errors = []
         import re
 
         statement_offset = 0
@@ -2654,7 +2680,7 @@ class DatabaseConnector:
                     init_cursor.close()
                 except Exception as e:
                     self._raise_if_connection_lost(e, submitted=False)
-                    logger.warning(f"Failed to set database [{current_db}]: {e}")
+                    raise
 
             for batch_idx, batch in enumerate(batches, start=1):
                 if self._cancelled:
@@ -2683,6 +2709,8 @@ class DatabaseConnector:
                     batch_error = f"Batch {batch_idx}/{len(batches)}: {str(e)}"
                     logger.warning(batch_error)
                     errors.append(batch_error)
+                    if len(provider_errors) < 32:
+                        provider_errors.append(e)
                     try:
                         cursor.close()
                     except Exception:
@@ -2763,10 +2791,14 @@ class DatabaseConnector:
                     except self._sqlserver_driver_errors() as e:
                         self._raise_if_connection_lost(e)
                         batch_error = f"Batch {batch_idx}/{len(batches)}: {str(e)}"
+                        if len(provider_errors) < 32:
+                            provider_errors.append(e)
                         break
                     except Exception as e:
                         self._raise_if_connection_lost(e)
                         batch_error = f"Batch {batch_idx}/{len(batches)}: {str(e)}"
+                        if len(provider_errors) < 32:
+                            provider_errors.append(e)
                         break
 
                     try:
@@ -2786,10 +2818,14 @@ class DatabaseConnector:
                     except self._sqlserver_driver_errors() as e:
                         self._raise_if_connection_lost(e)
                         batch_error = f"Batch {batch_idx}/{len(batches)}: {str(e)}"
+                        if len(provider_errors) < 32:
+                            provider_errors.append(e)
                         break
                     except Exception as e:
                         self._raise_if_connection_lost(e)
                         batch_error = f"Batch {batch_idx}/{len(batches)}: {str(e)}"
+                        if len(provider_errors) < 32:
+                            provider_errors.append(e)
                         break
 
                 try:
@@ -2837,7 +2873,14 @@ class DatabaseConnector:
                     error_df = pd.DataFrame({"Error": errors})
                     dataframes.append(error_df)
                 else:
-                    raise Exception(error_summary)
+                    failure = Exception(error_summary)
+                    if provider_errors:
+                        # Preserve provider identity for concise local error
+                        # formatting instead of trying to parse repr(tuple).
+                        failure.orig = provider_errors[0]
+                        failure._datapyn_provider_errors = tuple(provider_errors)
+                        raise failure from provider_errors[0]
+                    raise failure
 
             return self._with_command_results(dataframes, query="\nGO\n".join(batches))
 
@@ -3436,9 +3479,11 @@ class DatabaseConnector:
             context.is_disconnect = True
             if getattr(context, "is_pre_ping", False):
                 return None
-            physical = None
+            physical, info = None, {}
             try:
-                physical = context.connection.connection.driver_connection
+                pooled = context.connection._dbapi_connection
+                physical = pooled.driver_connection
+                info = pooled.info
             except Exception:
                 pass
             if not self.automatic_transactions and physical is not self._manual_raw_conn:
@@ -3446,20 +3491,54 @@ class DatabaseConnector:
                 # failure cannot discard this block's retained transaction.
                 return None
             submitted = not self._health_probe_in_progress and bool(context.statement)
-            commit_unknown = (not self._health_probe_in_progress and context.connection is not None
-                              and context.statement is None)
-            return self._mark_connection_lost(submitted=submitted or commit_unknown,
-                acknowledgement_required=commit_unknown or (not self.automatic_transactions and submitted))
+            # Both commit() AND cleanup rollback() report statement=None.
+            # Only an actual commit event can make its outcome uncertain.
+            commit_unknown = (not self._health_probe_in_progress and context.statement is None
+                              and (self._commit_in_progress or info.get("_datapyn_commit_pending") is True))
+            active = getattr(self._active_raw_conn, "driver_connection", self._active_raw_conn)
+            if not self.automatic_transactions or physical is not None and physical is active or self._commit_in_progress:
+                return self._mark_connection_lost(submitted=submitted or commit_unknown,
+                    acknowledgement_required=True if commit_unknown else None)
+            # SQLAlchemy owns independent metadata/Python sockets. Evict the
+            # failed pool entry without poisoning a healthy execution lane.
+            # If this exception reaches a Python execution, the kernel can use
+            # its owner hint to recover; a handled metadata error stays local.
+            error = ConnectionLostError(acknowledgement_required=commit_unknown,
+                                        submitted=submitted or commit_unknown)
+            error._datapyn_connector = self
+            return error
+
+        def on_commit(connection):
+            pooled = connection._dbapi_connection
+            if pooled is not None:
+                pooled.info["_datapyn_commit_pending"] = True
+
+        def on_rollback(connection):
+            # Reading Connection.info after invalidation can itself reconnect
+            # and mask the original failure with PendingRollbackError.
+            pooled = connection._dbapi_connection
+            if pooled is not None:
+                pooled.info.pop("_datapyn_commit_pending", None)
+
+        def before_cursor_execute(connection, cursor, statement, parameters, context, executemany):
+            on_rollback(connection)
 
         try:
             event.listen(self.engine, "handle_error", on_connection_error, retval=True)
+            event.listen(self.engine, "commit", on_commit)
+            event.listen(self.engine, "rollback", on_rollback)
+            event.listen(self.engine, "begin", on_rollback)
+            event.listen(self.engine, "before_cursor_execute", before_cursor_execute)
         except Exception:
             # Unit fixtures may replace the engine with a non-SQLAlchemy fake.
             pass
 
         def listen_checkout(handler) -> None:
+            def checkout(dbapi_conn, connection_record, connection_proxy):
+                connection_record.info.pop("_datapyn_commit_pending", None)
+                return handler(dbapi_conn, connection_record, connection_proxy)
             try:
-                event.listens_for(self.engine, "checkout")(handler)
+                event.listens_for(self.engine, "checkout")(checkout)
             except Exception:
                 # Tests mock create_engine(); SQLAlchemy rejects MagicMock targets.
                 return
@@ -3471,15 +3550,14 @@ class DatabaseConnector:
                 current_db = connector_ref.connection_params.get("database", "")
                 if not current_db:
                     return
+                cursor = dbapi_conn.cursor()
                 try:
-                    cursor = dbapi_conn.cursor()
-                    cursor.execute(f"USE [{current_db}]")
-                    cursor.close()
-                except Exception as exc:
-                    if self.automatic_transactions:
-                        self._raise_if_connection_lost(exc, submitted=False)
-                    elif classify_connection_error(exc, db_type):
-                        raise
+                    cursor.execute("USE [" + current_db.replace("]", "]]") + "]")
+                finally:
+                    try:
+                        cursor.close()
+                    except Exception:
+                        pass
             listen_checkout(on_sqlserver_checkout)
             return
         if db_type == "postgresql":
@@ -3488,17 +3566,16 @@ class DatabaseConnector:
                     str(connector_ref.connection_params.get("postgresql_schema") or "public").strip()
                     or "public"
                 )
+                cursor = dbapi_conn.cursor()
                 try:
-                    cursor = dbapi_conn.cursor()
                     search_path = connector_ref.connection_params.get("postgresql_search_path")
                     search_path_sql = "SET search_path TO " + (search_path or "''") if search_path is not None else DatabaseConnector._postgresql_search_path_sql(schema)
                     cursor.execute(search_path_sql)
-                    cursor.close()
-                except Exception as exc:
-                    if self.automatic_transactions:
-                        self._raise_if_connection_lost(exc, submitted=False)
-                    elif classify_connection_error(exc, db_type):
-                        raise
+                finally:
+                    try:
+                        cursor.close()
+                    except Exception:
+                        pass
             listen_checkout(on_postgresql_checkout)
             return
         if db_type in {"mysql", "mariadb", "databricks"}:

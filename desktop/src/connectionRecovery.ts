@@ -27,7 +27,10 @@ export function applyConnectionRecovery(session:SessionDocument,recovery:Connect
   if(recovery.phase!=="recovering" && previous && previous.recovery_id!==recovery.recovery_id && previous.recovery_id!==expectedPreviousId)return session;
   if(recovery.phase==="recovering" && previous?.recovery_id===recovery.recovery_id && previous.phase!=="recovering")return session;
   if(recovery.execution_id && recovery.execution_id!==session.currentExecutionId && previous?.recovery_id!==recovery.recovery_id)return session;
-  const next=block?{...session,blocks:session.blocks.map(item=>item.id===block.id?{...item,connectionRecovery:recovery}:item)}:{...session,connectionRecovery:recovery};
+  // A successful replacement owns new transaction state. Never keep the lost
+  // socket's "unknown" state after the backend has confirmed recovery.
+  const recoveredState=recovery.phase==="ready"?{transactionState:recovery.transaction_state}:{};
+  const next=block?{...session,blocks:session.blocks.map(item=>item.id===block.id?{...item,...recoveredState,connectionRecovery:recovery}:item)}:{...session,connectionRecovery:recovery};
   if(recovery.phase!=="ready" || !recovery.automatic_transactions || !recovery.affected_block_ids?.length)return next;
   // Equal public scopes can still own different physical sockets. Only the
   // backend affinity list can authorize refreshing a sibling's recovery state.
@@ -37,6 +40,6 @@ export function applyConnectionRecovery(session:SessionDocument,recovery:Connect
     if(peer.id===block?.id || !affected.has(peer.id) || !old || !["blocked","error"].includes(old.phase) || !old.automatic_transactions)return peer;
     if(!equal(old.requested_scope.connection_id,recovery.requested_scope.connection_id)||!equal(old.requested_scope.database,recovery.requested_scope.database)||!equal(old.requested_scope.schema,recovery.requested_scope.schema))return peer;
     const ready={...recovery,block_id:peer.id,scope_inherited:old.scope_inherited};
-    return recoveryMatches(next,peer,ready,automaticTransactions)?{...peer,connectionRecovery:ready}:peer;
+    return recoveryMatches(next,peer,ready,automaticTransactions)?{...peer,...recoveredState,connectionRecovery:ready}:peer;
   })};
 }

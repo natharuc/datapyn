@@ -85,6 +85,8 @@ def test_stale_lane_reconnects_once_before_submission_preserving_affinity_and_fo
     assert opened[-1][0]["database"] == "after_use" and opened[-1][0]["schema"] == "analysis"
     assert [event[0]["phase"] for event in events] == ["recovering", "ready"]
     assert events[-1][0]["affected_block_ids"] == ["first", "peer"]
+    assert events[-1][0]["state_loss_acknowledged"] is False
+    assert events[-1][0]["transaction_state"]["state"] == "idle"
     assert previous.statements == replacement.statements == []
 
 
@@ -104,6 +106,8 @@ def test_pending_unknown_manual_lane_requires_ack_and_other_lane_remains_usable(
     assert blocked["phase"] == "blocked"
     recovered = pool.recover({**params(automatic=False), "acknowledge_state_loss": True})
     assert recovered["phase"] == "ready" and len(opened) == 3 and first.closed
+    assert recovered["state_loss_acknowledged"] is True
+    assert recovered["transaction_state"] == {"automatic_transactions": False, "pending": False, "state": "idle"}
     assert pool.items[other_key] is other and not other.closed
     assert pool.block_affinity["first"] == key and not pool.items[key].automatic_transactions
 
@@ -233,7 +237,25 @@ def test_lost_temporary_namespace_requires_ack_before_replacing_it(monkeypatch):
     with pytest.raises(ConnectionLostError) as failure:
         pool.activate(params(), validate=True)
     assert failure.value.details["acknowledgement_required"] and len(opened) == 1
-    assert pool.recover({**params(), "acknowledge_state_loss": True})["phase"] == "ready"
+    outcome = pool.recover({**params(), "acknowledge_state_loss": True})
+    assert outcome["phase"] == "ready" and outcome["state_loss_acknowledged"] is True
+
+
+def test_metadata_refresh_preserves_the_pending_state_loss_confirmation(monkeypatch):
+    opened = factory(monkeypatch)
+    pool = database.ConnectorPool()
+    previous = pool.activate(params(automatic=False))
+    previous.lost = {"required": True, "acknowledgement_required": True, "submitted": True}
+    events = []
+    pool.on_recovery = lambda outcome, scope: events.append(outcome)
+    for _ in range(3):
+        with pytest.raises(ConnectionLostError):
+            pool.activate(params(automatic=False), validate=True)
+    assert len(opened) == 1 and not previous.closed
+    assert len({outcome["recovery_id"] for outcome in events}) == 1
+    assert {outcome["phase"] for outcome in events} == {"blocked"}
+    assert pool.recover({**params(automatic=False), "acknowledge_state_loss": True})["phase"] == "ready"
+    assert not pool._blocked_recoveries
 
 
 def test_closed_sqlite_memory_requires_acknowledgement_of_data_loss():
@@ -398,3 +420,70 @@ def test_cached_ssh_preflight_rejection_retains_result_contract_and_original_cha
     assert "password" not in failed["error_details"]
     assert any(variable["name"] == "frame" for variable in failed["variables"])
     assert opened[0].statements == []
+
+
+@pytest.mark.parametrize("db_type", ["sqlserver", "postgresql", "mysql", "mariadb", "databricks", "sqlite"])
+@pytest.mark.parametrize("during_execution", [False, True])
+def test_idle_read_lane_recovers_in_place_without_confirmation_or_replaying_sql(db_type, during_execution, monkeypatch):
+    """A provider-confirmed idle lane must not inherit the dead socket's state.
+
+    Before submission the original job can continue after reconnecting. Once
+    submitted, even a SELECT stays failed, but the next job is immediately
+    usable with the same block, context and Python namespace.
+    """
+    opened, messages = [], []
+    class IdleReadConnector(Connector):
+        def execute_query(self, code, **kwargs):
+            self.statements.append(code)
+            if during_execution and self is opened[0] and code == "SELECT TOP 100 * FROM account_view":
+                self.lost = {"required": True, "acknowledgement_required": False,
+                             "submitted": True, "session_state_lost": True}
+                raise ConnectionLostError(submitted=True)
+            return pd.DataFrame({"answer": [42]})
+    def connect(config):
+        item = IdleReadConnector(config)
+        opened.append(item)
+        return item
+    monkeypatch.setattr(database, "connect", connect)
+    for method in ("initialize_kernel_group", "isolate_kernel_output", "_watch_parent", "enable_user_packages"):
+        monkeypatch.setattr(kernel, method, lambda: None)
+    monkeypatch.setattr("datapyn_runtime.notifications.capture_completion", lambda *args, **kwargs: None)
+    monkeypatch.setattr("datapyn_runtime.variable_snapshot.settings_get", lambda: {"enabled": False})
+    monkeypatch.setattr("datapyn_runtime.sql_safety_guard.settings_get", lambda *args: {"confirm_destructive_sql": False})
+    target = {**params(db_type=db_type, automatic=False), "_automatic_transactions_snapshot": False}
+    jobs = [
+        {"method": "connection.connect", "job_id": "connect", "params": target},
+        {"method": "execution.run", "job_id": "seed", "params": {**target, "execution_id": "seed", "language": "python", "code": "frame=pd.DataFrame({'id':[7]})"}},
+        {"method": "execution.run", "job_id": "read", "params": {**target, "execution_id": "read", "language": "sql", "code": "SELECT TOP 100 * FROM account_view"}},
+        {"method": "execution.run", "job_id": "next", "params": {**target, "execution_id": "next", "language": "sql", "code": "SELECT 42"}},
+        {"method": "execution.run", "job_id": "local", "params": {**target, "execution_id": "local", "language": "python", "code": "assert frame['id'].tolist()==[7]"}},
+        {"method": "shutdown", "job_id": "shutdown", "params": {}},
+    ]
+    class Commands:
+        def poll(self, timeout): return True
+        def recv(self): return jobs.pop(0)
+        def close(self): pass
+    def send(message):
+        messages.append(message)
+        if not during_execution and message.get("job_id") == "seed":
+            opened[0].lost = {"required": True, "acknowledgement_required": False, "submitted": False}
+    kernel.kernel_main("session", Commands(), SimpleNamespace(send=send, close=lambda: None))
+    read = next(message["payload"] for message in messages if message.get("job_id") == "read")
+    assert read["status"] == ("failed" if during_execution else "succeeded"), read
+    if during_execution:
+        assert read["error_info"]["category"] == "network"
+        assert read["error_info"]["title"] == "Execução interrompida"
+        assert "A conexão foi restabelecida." in read["error_info"]["message"]
+        assert "Reconecte para continuar" not in read["error"]
+    assert read["transaction_state"] == {"automatic_transactions": False, "pending": False, "state": "idle"}
+    assert read["connection_recovery"]["phase"] == "ready"
+    assert read["connection_recovery"]["state_loss_acknowledged"] is False
+    assert read["connection_recovery"]["transaction_state"] == read["transaction_state"]
+    next_execution = next(message["payload"] for message in messages if message.get("job_id") == "next")
+    local = next(message["payload"] for message in messages if message.get("job_id") == "local")
+    assert next_execution["status"] == local["status"] == "succeeded"
+    assert len(opened) == 2 and opened[0].closed
+    assert sum(item.statements.count("SELECT TOP 100 * FROM account_view") for item in opened) == 1
+    assert sum(item.statements.count("SELECT 42") for item in opened) == 1
+    assert opened[1].connection_params == {"database": "after_use", "schema": "analysis"}
+    assert not any(message.get("payload", {}).get("phase") == "blocked" for message in messages)

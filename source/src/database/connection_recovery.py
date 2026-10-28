@@ -51,13 +51,54 @@ def _error_chain(error):
             continue
         seen.add(id(current))
         yield current
-        pending.extend((getattr(current, "orig", None), current.__cause__, current.__context__))
+        # __context__ may be a handled failure from an earlier fallback. Only
+        # an explicit cause (or a provider's documented wrapper) belongs to the
+        # current failure: a syntax/timeout error must not inherit an old reset.
+        pending.extend((getattr(current, "orig", None), current.__cause__))
         # Databricks RequestError retains the original network exception as a
         # positional argument, while its JSON context only contains str(error).
         pending.extend(value for value in current.args[:4] if isinstance(value, BaseException))
         context = getattr(current, "context", None)
         if isinstance(context, dict):
             pending.append(context.get("original-exception"))
+
+
+def is_read_only_query(query, db_type=""):
+    """Conservatively recognize a single ordinary read, never authorize replay.
+
+    This only decides whether losing an *idle* manual session needs a
+    transaction-loss confirmation. Unknown functions, session mutations,
+    locking reads, procedural SQL and multi-command scripts stay conservative.
+    """
+    if not isinstance(query, str) or not query.strip() or len(query) > 128 * 1024:
+        return False
+    from datapyn_runtime.sql_context import lexical_spans, sql_code_mask
+    if any(not closed for _start, _end, _kind, closed in lexical_spans(query, db_type)):
+        return False
+    code = sql_code_mask(query, db_type, identifiers=True)
+    if re.search(r"\b(?:INTO|OUTFILE|DUMPFILE|UPDLOCK|XLOCK|HOLDLOCK|TABLOCKX|NEXT\s+VALUE|GO)\b", code, re.I):
+        return False
+    try:
+        from sqlglot import parse, exp
+        from src.services.syntax_validator import _silence_sqlglot_warnings
+        dialect = {"sqlserver": "tsql", "postgresql": "postgres", "mariadb": "mysql"}.get(db_type, db_type or "tsql")
+        with _silence_sqlglot_warnings():
+            statements = [node for node in parse(query, read=dialect) if node is not None]
+        if len(statements) != 1 or not isinstance(statements[0], (exp.Select, exp.SetOperation)):
+            return False
+        allowed_functions = {"ABS", "AVG", "COUNT", "MIN", "MAX", "SUM", "COALESCE", "NULLIF",
+                             "CAST", "TRY_CAST", "LOWER", "UPPER", "LENGTH", "ROUND", "CONCAT",
+                             "SUBSTRING", "TRIM", "REPLACE", "FLOOR", "CEIL", "ROW_NUMBER", "RANK",
+                             "DENSE_RANK", "CURRENT_DATE", "CURRENT_TIMESTAMP", "DATE", "DATE_TRUNC",
+                             "DATE_ADD", "DATE_DIFF", "IF", "CASE"}
+        for node in statements[0].walk():
+            if isinstance(node, (exp.DML, exp.DDL, exp.Into, exp.Lock, exp.Command, exp.Parameter)):
+                return False
+            if isinstance(node, exp.Func) and (isinstance(node, exp.Anonymous) or node.sql_name() not in allowed_functions):
+                return False
+        return True
+    except Exception:
+        return False
 
 
 def classify_connection_error(error, db_type=""):
@@ -87,6 +128,12 @@ def classify_connection_error(error, db_type=""):
         if any(str(state or "").upper() in _CANCEL_STATES for state in states):
             return False
         if any(str(state or "").upper().startswith("28") for state in states):
+            return False
+        if any(str(state or "").upper() == "08004" or
+               str(state or "").upper().startswith(("22", "23", "25", "2D", "3D", "3F", "40", "42"))
+               for state in states):
+            # Server rejection, permissions, missing objects, syntax and
+            # transaction failures are SQL outcomes, not broken transports.
             return False
         context = getattr(item, "context", None)
         if isinstance(context, dict) and str(context.get("http-code", "")) in {"401", "403"}:

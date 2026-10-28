@@ -1,0 +1,15 @@
+.error-details{flex:1;min-width:0;font-family:Ubuntu,sans-serif;font-size:12px;line-height:1.5;color:var(--text)}
+.error-details-title{display:block;font-size:12px;font-weight:500;color:var(--danger)}
+.error-details .error-details-message{margin:3px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--text);font-size:12px;line-height:1.5;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:4;overflow:hidden}
+.error-details-actions{display:flex;align-items:flex-start;gap:12px;margin-top:5px;flex-wrap:wrap}
+.error-details-actions>details{flex:1;min-width:120px}
+.error-details-actions summary{width:fit-content;cursor:pointer;color:var(--muted);font-size:11px;line-height:22px}
+.error-details-actions summary:hover{color:var(--text)}
+.error-details-actions summary:focus-visible,.error-details-actions>button:focus-visible{outline:2px solid var(--blue-light);outline-offset:2px}
+.error-details-actions>button{display:inline-flex;align-items:center;gap:5px;margin-left:auto;padding:2px 4px;font:inherit;font-size:11px;color:var(--muted);line-height:18px}
+.error-details-actions>button:hover{color:var(--text)}
+.error-details .error-details-actions pre,.output-panel .error-details .error-details-actions pre{margin:6px 0 0;padding:8px 10px;max-height:260px;overflow:auto;border:1px solid var(--border);border-radius:3px;background:var(--input);color:var(--text);font-family:var(--editor-font-family,'Ubuntu Mono',monospace);font-size:11px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;tab-size:2}
+.error-details-copy-status{display:block;margin-top:5px;color:var(--muted);font-size:11px}
+.output-entry.output-error{padding-top:8px;padding-bottom:8px;align-items:flex-start}
+.output-entry>.error-details-owner{flex:1;min-width:0}
+.output-entry .output-block-name{color:var(--muted);font-size:10px;font-family:Ubuntu,sans-serif;margin-bottom:3px}

@@ -23,7 +23,7 @@ runtime.request=async<T,>(method:string,params:Record<string,unknown>={}):Promis
     const state:ConnectionRecoveryState={session_id:String(params.session_id),block_id:params.block_id as string|undefined,scope_inherited:params.scope_inherited as boolean,automatic_transactions:params.automatic_transactions!==false,requested_scope:{connection_id:params.connection_id as string|undefined,database:params.database as string|undefined,schema:params.schema as string|undefined},recovery_id:`manual-${++recoveryNumber}`,phase:"recovering"};
     send({event:"connection.recovery",payload:state});
     await new Promise(resolve=>setTimeout(resolve,150));
-    const outcome=mode==="ready"?{phase:"ready" as const,session_state_lost:true}:{phase:"error" as const,error:"Network unavailable",acknowledgement_required:false};
+    const outcome=mode==="ready"?{phase:"ready" as const,session_state_lost:true,state_loss_acknowledged:params.acknowledge_state_loss===true,transaction_state:{automatic_transactions:params.automatic_transactions!==false,pending:false,state:"idle" as const}}:{phase:"error" as const,error:"Network unavailable",acknowledgement_required:false};
     send({event:"connection.recovery",payload:{...state,...outcome}});return {...outcome,recovery_id:state.recovery_id} as T;
   }
   if(method==="session.create")return {session_id:params.session_id} as T;
@@ -33,7 +33,7 @@ runtime.request=async<T,>(method:string,params:Record<string,unknown>={}):Promis
 };
 const {App,workspace}=await import("../src/App");
 const test={calls,failures,snapshot:workspace.getSnapshot,translate:(text:string)=>translate(text,{},locale),
-  seed(){const session=workspace.session()!;workspace.updateBlock(session.id,session.focusedBlockId,{code:"SELECT * FROM important_report;"});workspace.patchSession(session.id,s=>({...s,variables:[{name:"df",type:"DataFrame",preview:"5000000 rows"}]}));},
+  seed(){const session=workspace.session()!;workspace.updateBlock(session.id,session.focusedBlockId,{code:"SELECT * FROM important_report;",status:"failed",transactionState:{automatic_transactions:true,pending:null,state:"unknown"}});workspace.patchSession(session.id,s=>({...s,variables:[{name:"df",type:"DataFrame",preview:"5000000 rows"}]}));},
   emit(phase:ConnectionRecoveryState["phase"],id="network-loss",acknowledgement_required=false){const session=workspace.session()!;send({event:"connection.recovery",payload:{session_id:session.id,block_id:session.focusedBlockId,scope_inherited:true,automatic_transactions:true,requested_scope:{},recovery_id:id,phase,acknowledgement_required,session_state_lost:phase==="ready"}});},
   mode(value:typeof mode){mode=value;},
   editor(){return models.get(workspace.session()!.focusedBlockId)?.editor?.getValue();},

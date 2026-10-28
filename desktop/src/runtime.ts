@@ -5,6 +5,18 @@ import type { DataImportProgress } from "./dataImport";
 import { cancelSshHostTrust, requestSshHostTrust, SshHostTrustCancelledError, type SshHostKeyDetails } from "./sshHostTrust";
 
 export type Language = "sql" | "python";
+export interface RuntimeErrorInfo {
+  category: "permission" | "authentication" | "not_found" | "syntax" | "timeout" | "network" | "cancelled" | "python" | "constraint" | "data" | "file" | "internal";
+  title: string; message: string; technical_details?: string;
+}
+export function isRuntimeErrorInfo(input: unknown): input is RuntimeErrorInfo {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return false;
+  const value=input as Partial<RuntimeErrorInfo>;
+  return ["permission","authentication","not_found","syntax","timeout","network","cancelled","python","constraint","data","file","internal"].includes(String(value.category))
+    && typeof value.title==="string" && value.title.length>0 && value.title.length<=256
+    && typeof value.message==="string" && value.message.length<=8192
+    && (value.technical_details===undefined || typeof value.technical_details==="string" && value.technical_details.length<=32768);
+}
 export type Primitive = null | string | number | boolean;
 export interface Column { name: string; dtype: string }
 export interface ResultRef { result_id: string; variable_name: string; columns: Column[]; row_count: number }
@@ -50,6 +62,8 @@ export interface ConnectionRecoveryOutcome {
   phase: "recovering" | "ready" | "error" | "blocked";
   recovery_id: string; attempt?: number; max_attempts?: number; error?: string;
   acknowledgement_required?: boolean; session_state_lost?: boolean;
+  state_loss_acknowledged?: boolean;
+  transaction_state?: TransactionState;
   affected_block_ids?: string[];
 }
 export interface ConnectionRecoveryState extends ConnectionRecoveryOutcome {
@@ -58,13 +72,21 @@ export interface ConnectionRecoveryState extends ConnectionRecoveryOutcome {
   requested_scope: { connection_id?: string | null; database?: string | null; schema?: string | null };
   execution_id?: string;
 }
+function isTransactionState(input: unknown): input is TransactionState {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return false;
+  const value=input as Partial<TransactionState>;
+  return typeof value.automatic_transactions==="boolean"
+    && (typeof value.pending==="boolean" || value.pending===null)
+    && ["idle","active","failed","unknown","unsupported"].includes(String(value.state));
+}
 export function isConnectionRecoveryOutcome(input: unknown): input is ConnectionRecoveryOutcome {
   if (!input || typeof input !== "object") return false;
   const value=input as Partial<ConnectionRecoveryOutcome>;
   return typeof value.recovery_id==="string" && Boolean(value.recovery_id)
     && ["recovering","ready","error","blocked"].includes(String(value.phase))
     && (value.error===undefined || typeof value.error==="string")
-    && [value.acknowledgement_required,value.session_state_lost].every(flag=>flag===undefined || typeof flag==="boolean")
+    && [value.acknowledgement_required,value.session_state_lost,value.state_loss_acknowledged].every(flag=>flag===undefined || typeof flag==="boolean")
+    && (value.transaction_state===undefined || isTransactionState(value.transaction_state))
     && (value.affected_block_ids===undefined || Array.isArray(value.affected_block_ids) && value.affected_block_ids.every(id=>typeof id==="string"))
     && [value.attempt,value.max_attempts].every(count=>count===undefined || typeof count==="number" && Number.isInteger(count) && count>=0);
 }
@@ -87,7 +109,7 @@ export interface ExecutionFinished {
   transaction_state?: TransactionState;
   connection_lost?: boolean;
   connection_recovery?: ConnectionRecoveryOutcome;
-  duration_ms: number; error?: string; results: ResultRef[]; variables: Variable[];
+  duration_ms: number; error?: string; error_info?: RuntimeErrorInfo; results: ResultRef[]; variables: Variable[];
   rich_outputs?: RichOutput[];
   command_results?: SqlCommandResult[];
   context_change?: ExecutionContextChange;
@@ -138,15 +160,11 @@ export function isRuntimeEvent(value: unknown): value is RuntimeEvent {
   if (event === "execution.output") return typeof payload.stream === "string" && typeof payload.text === "string";
   if (event === "execution.export_progress") return typeof payload.path === "string" && typeof payload.rows === "number";
   if (event !== "execution.finished" || !["succeeded", "failed", "cancelled"].includes(String(payload.status))) return false;
+  if (payload.error_info !== undefined && !isRuntimeErrorInfo(payload.error_info)) return false;
   if (payload.automatic_transactions !== undefined && typeof payload.automatic_transactions !== "boolean") return false;
   if (payload.connection_lost !== undefined && typeof payload.connection_lost !== "boolean") return false;
   if (payload.connection_recovery !== undefined && !isConnectionRecoveryOutcome(payload.connection_recovery)) return false;
-  if (payload.transaction_state !== undefined) {
-    const state=payload.transaction_state as Partial<TransactionState> | null;
-    if (!state || typeof state.automatic_transactions !== "boolean"
-      || (typeof state.pending !== "boolean" && state.pending !== null)
-      || !["idle", "active", "failed", "unknown", "unsupported"].includes(String(state.state))) return false;
-  }
+  if (payload.transaction_state !== undefined && !isTransactionState(payload.transaction_state)) return false;
   return true;
 }
 
@@ -160,7 +178,7 @@ export class BackendUnavailableError extends Error {
 }
 
 export class RuntimeRequestError extends Error {
-  constructor(readonly code: string, message: string, readonly details?: Record<string, unknown>) { super(message); }
+  constructor(readonly code: string, message: string, readonly details?: Record<string, unknown>, readonly errorInfo?: RuntimeErrorInfo) { super(message); }
 }
 
 export function runtimeRequestError(error: unknown): Error {
@@ -168,7 +186,8 @@ export function runtimeRequestError(error: unknown): Error {
   if (error && typeof error === "object" && !Array.isArray(error)) {
     const value = error as Record<string, unknown>;
     if (typeof value.message === "string") return new RuntimeRequestError(typeof value.code === "string" ? value.code : "runtime_error", value.message,
-      value.details && typeof value.details === "object" && !Array.isArray(value.details) ? value.details as Record<string, unknown> : undefined);
+      value.details && typeof value.details === "object" && !Array.isArray(value.details) ? value.details as Record<string, unknown> : undefined,
+      isRuntimeErrorInfo(value.error_info) ? value.error_info : undefined);
   }
   return new Error(typeof error === "string" ? error : "O runtime não concluiu a solicitação.");
 }

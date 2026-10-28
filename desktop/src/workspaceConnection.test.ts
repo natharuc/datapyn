@@ -92,7 +92,8 @@ describe("opening a tab connection",()=>{
     const task=controller.connectSaved(session.id,"esim","ESIM"),failed=expect(task).rejects.toThrow("Login failed");
     await vi.waitFor(()=>expect(transport.connections).toHaveLength(1));transport.connections[0].reject(new Error("Login failed: account disabled"));await failed;
     expect(controller.session()!.id).toBe(other.id);expect(controller.session()!.connectionState).toBeUndefined();
-    expect(controller.session(session.id)!.connectionState).toEqual({phase:"error",connectionId:"esim",name:"ESIM",error:"Login failed: account disabled"});
+    expect(controller.session(session.id)!.connectionState).toEqual({phase:"error",connectionId:"esim",name:"ESIM",error:"Login failed: account disabled",
+      errorInfo:{category:"internal",title:"Falha ao abrir a conexão",message:"Login failed: account disabled"}});
     const retry=controller.connectSaved(session.id,"esim","ESIM");
     await vi.waitFor(()=>expect(transport.connections).toHaveLength(2));transport.connections[1].resolve(connected);await retry;
     expect(controller.session(session.id)!.connectionState).toMatchObject({phase:"ready"});

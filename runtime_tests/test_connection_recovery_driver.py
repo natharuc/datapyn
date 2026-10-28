@@ -11,7 +11,7 @@ import ssl
 import pyodbc
 import pytest
 
-from src.database.connection_recovery import ConnectionLostError, classify_connection_error
+from src.database.connection_recovery import ConnectionLostError, classify_connection_error, is_read_only_query
 from src.database.database_connector import DatabaseConnector
 from test_transaction_driver import OdbcConnection, OdbcCursor, odbc, open_connector  # noqa: F401
 from test_sql_command_feedback_connector import Result, connector_for
@@ -24,6 +24,9 @@ from test_sql_command_feedback_connector import Result, connector_for
     ("sqlserver", pyodbc.Error("HY010", "function sequence error"), False),
     ("sqlserver", pyodbc.Error("HY008", "cancelled"), False),
     ("sqlserver", pyodbc.InterfaceError("28000", "login failed"), False),
+    ("sqlserver", pyodbc.InterfaceError("08004", "Cannot open database requested by the login (4060)"), False),
+    ("sqlserver", pyodbc.ProgrammingError("42000", "The server principal cannot access this database (916)"), False),
+    ("sqlserver", pyodbc.ProgrammingError("42S02", "Invalid object name (208)"), False),
     ("sqlserver", pyodbc.ProgrammingError("42000", "syntax error"), False),
     ("postgresql", SimpleNamespace(), False),
     ("postgresql", RuntimeError("server closed the connection unexpectedly"), True),
@@ -61,6 +64,43 @@ def test_classifier_checks_wrapped_driver_causes_but_never_overrides_auth_or_cer
     assert not classify_connection_error(wrapped, "sqlserver")
     wrapped.orig = wrapped
     assert not classify_connection_error(wrapped, "sqlserver")
+
+
+@pytest.mark.parametrize("state,message", [("42S02", "Invalid object name (208)"),
+    ("42000", "Database access denied (916)"), ("08004", "Cannot open database (4060)"),
+    ("HYT00", "Statement timeout")])
+def test_handled_transport_context_does_not_reclassify_a_new_sql_error(state, message):
+    error = pyodbc.OperationalError(state, message)
+    error.__context__ = ConnectionResetError("handled earlier attempt")
+    assert not classify_connection_error(error, "sqlserver")
+
+
+@pytest.mark.parametrize("dialect,query,expected", [
+    ("sqlserver", "SELECT TOP 100 * FROM VW_U21_A_SALF", True),
+    ("sqlserver", "SELECT COUNT(*), MAX(id) FROM sample", True),
+    ("postgresql", 'SELECT "id" FROM public.sample WHERE id > 1', True),
+    ("mysql", "SELECT * FROM `sample` LIMIT 10", True),
+    ("mariadb", "SELECT * FROM sample WHERE value = 'DELETE FROM t'", True),
+    ("databricks", "SELECT * FROM catalog.schema.sample LIMIT 10", True),
+    ("sqlite", "SELECT * FROM sample WHERE id = ?", True),
+    ("sqlserver", "WITH x AS (SELECT * FROM sample) SELECT * FROM x", True),
+    ("sqlserver", "SELECT * INTO #copy FROM sample", False),
+    ("sqlserver", "SELECT @value = id FROM sample", False),
+    ("sqlserver", "SELECT * FROM sample WITH (UPDLOCK)", False),
+    ("sqlserver", "SELECT 1\nGO\nUPDATE sample SET value=1", False),
+    ("postgresql", "SELECT * FROM sample FOR UPDATE", False),
+    ("postgresql", "WITH x AS (DELETE FROM sample RETURNING *) SELECT * FROM x", False),
+    ("postgresql", "SELECT nextval('sequence')", False),
+    ("postgresql", "SELECT public.mutate()", False),
+    ("mysql", "SELECT * INTO OUTFILE '/tmp/copy' FROM sample", False),
+    ("mysql", "SELECT GET_LOCK('name', 1)", False),
+    ("sqlserver", "UPDATE sample SET value=1; SELECT * FROM sample", False),
+    ("sqlserver", "SELECT 1; SELECT 2", False),
+    ("sqlserver", "EXEC sample", False),
+    ("sqlserver", "SELECT 'unterminated", False),
+])
+def test_confirmation_read_classifier_rejects_mutations_and_opaque_commands(dialect, query, expected):
+    assert is_read_only_query(query, dialect) is expected
 
 
 @pytest.mark.parametrize("http_code,expected", [(401, False), (403, False), (None, True)])
@@ -275,10 +315,129 @@ def test_sqlalchemy_engine_errors_recover_without_invalidating_an_independent_ma
                 connection.exec_driver_sql("SELECT 99")
         if automatic:
             assert isinstance(caught.value, ConnectionLostError)
-            assert connector.get_connection_recovery_state()["submitted"]
+            assert caught.value.details["submitted"]
+            assert caught.value._datapyn_connector is connector
+            assert connector.get_connection_recovery_state() is None
         else:
             assert not isinstance(caught.value, ConnectionLostError)
             assert connector.get_connection_recovery_state() is None
             assert manual.transaction_count == 1 and manual.closed == 0
+    finally:
+        connector.disconnect()
+
+
+@pytest.mark.parametrize("prior", ["idle", "active", "unknown"])
+@pytest.mark.parametrize("statement", ["SELECT TOP 100 * FROM sample", "UPDATE sample SET value=2"])
+def test_manual_read_loss_confirms_only_real_or_uncertain_state(odbc, monkeypatch, prior, statement):
+    connector = open_connector(False)
+    raw = connector._manual_raw_conn
+    if prior == "active":
+        connector.execute_query("BEGIN TRANSACTION")
+    elif prior == "unknown":
+        connector.get_manual_connection()  # A public borrower may execute arbitrary SQL.
+    before = (raw.commits, raw.rollbacks)
+    original = OdbcCursor.execute
+
+    def fail(cursor, sql, *params):
+        value = original(cursor, sql, *params)
+        if sql == statement:
+            raise pyodbc.OperationalError("08S01", "transport failed")
+        return value
+
+    monkeypatch.setattr(OdbcCursor, "execute", fail)
+    try:
+        with pytest.raises(ConnectionLostError) as caught:
+            connector.execute_query(statement)
+        expected = prior != "idle" or statement.startswith("UPDATE")
+        assert caught.value.details["acknowledgement_required"] is expected
+        assert connector.has_pending_transaction() is expected
+        assert [sql for sql, _ in raw.commands].count(statement) == 1
+        assert (raw.commits, raw.rollbacks) == before
+    finally:
+        connector.disconnect()
+
+
+@pytest.mark.parametrize("stage,requires_ack", [("commit", True), ("rollback", False)])
+def test_sqlalchemy_cleanup_is_not_mistaken_for_an_uncertain_commit(odbc, stage, requires_ack):
+    connector = open_connector(True)
+    raw = odbc[-1]
+
+    def fail():
+        raise pyodbc.OperationalError("08S01", "connection lost during " + stage)
+
+    setattr(raw, stage, fail)
+    try:
+        with pytest.raises(ConnectionLostError) as caught:
+            with connector.engine.connect() as connection:
+                connection.exec_driver_sql("SELECT 7")
+                if stage == "commit":
+                    connection.commit()
+        assert caught.value.details["acknowledgement_required"] is requires_ack
+        assert caught.value._datapyn_connector is connector
+        assert connector.get_connection_recovery_state() is None
+    finally:
+        connector.disconnect()
+
+
+@pytest.mark.parametrize("automatic", [True, False])
+def test_checkout_database_permission_errors_propagate_without_executing_on_wrong_database(odbc, monkeypatch, automatic):
+    connector = open_connector(automatic)
+    original = OdbcCursor.execute
+    requested_query = "SELECT TOP 100 * FROM sample"
+
+    def deny(cursor, sql, *params):
+        value = original(cursor, sql, *params)
+        if sql == "USE [denied]":
+            raise pyodbc.InterfaceError("08004", "Cannot open database requested by the login (4060)")
+        return value
+
+    monkeypatch.setattr(OdbcCursor, "execute", deny)
+    connector.connection_params["database"] = "denied"
+    try:
+        with pytest.raises(Exception) as caught:
+            with connector.engine.connect() as connection:
+                connection.exec_driver_sql(requested_query)
+        assert not isinstance(caught.value, ConnectionLostError)
+        assert "4060" in str(caught.value)
+        assert not any(sql == requested_query for raw in odbc for sql, _ in raw.commands)
+        assert connector.get_connection_recovery_state() is None
+        connector.connection_params["database"] = "sample"
+        with connector.engine.connect() as connection:
+            assert connection.exec_driver_sql(requested_query).scalar() == 1
+    finally:
+        connector.disconnect()
+
+
+@pytest.mark.parametrize("state,native,message,category", [
+    ("42S02", 208, "Invalid object name 'missing'.", "not_found"),
+    ("42000", 916, "The server principal cannot access the database.", "permission"),
+    ("08004", 4060, "Cannot open database requested by the login.", "permission"),
+])
+def test_sqlserver_batch_errors_keep_the_provider_for_clean_runtime_messages(odbc, monkeypatch, state, native, message, category):
+    from datapyn_runtime.errors import format_error
+    connector = open_connector(False)
+    target = "SELECT TOP 100 * FROM missing"
+    original = OdbcCursor.execute
+    provider = pyodbc.ProgrammingError(state,
+        f"[{state}] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]{message} ({native}) (SQLExecDirectW)")
+
+    def fail(cursor, sql, *params):
+        value = original(cursor, sql, *params)
+        if sql == target:
+            raise provider
+        return value
+
+    monkeypatch.setattr(OdbcCursor, "execute", fail)
+    try:
+        with pytest.raises(Exception) as caught:
+            connector.execute_query(target)
+        assert caught.value.orig is provider
+        assert caught.value._datapyn_provider_errors == (provider,)
+        assert not isinstance(caught.value, ConnectionLostError)
+        assert connector.get_connection_recovery_state() is None
+        info = format_error(caught.value, language="sql")
+        assert info["category"] == category
+        assert info["message"] == message
+        assert target not in info["technical_details"]
     finally:
         connector.disconnect()

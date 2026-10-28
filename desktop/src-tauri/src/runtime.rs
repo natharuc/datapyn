@@ -25,6 +25,8 @@ pub struct RuntimeRequestError {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_info: Option<Value>,
 }
 
 impl From<String> for RuntimeRequestError {
@@ -33,6 +35,7 @@ impl From<String> for RuntimeRequestError {
             code: "runtime_error".into(),
             message,
             details: None,
+            error_info: None,
         }
     }
 }
@@ -499,6 +502,10 @@ fn decode_response(message: &Value) -> Result<Value, RuntimeRequestError> {
                 .to_owned(),
             details: error
                 .get("details")
+                .filter(|value| value.is_object())
+                .cloned(),
+            error_info: error
+                .get("error_info")
                 .filter(|value| value.is_object())
                 .cloned(),
         })
@@ -1038,6 +1045,21 @@ mod tests {
         assert!(allowed_method("ssh.tunnels.test"));
         assert!(!allowed_method("ssh.tunnels.exec"));
         assert!(!allowed_method("ssh.exec"));
+    }
+    #[test]
+    fn actionable_error_summaries_survive_the_native_bridge() {
+        let info = json!({"category":"permission","title":"Acesso negado","message":"Sem permissão para acessar o banco.","technical_details":"SQLSTATE 08004; provider 4060"});
+        let error = decode_response(&json!({"error":{"code":"operation_failed","message":"Sem permissão para acessar o banco.","error_info":info}})).unwrap_err();
+        let encoded = serde_json::to_value(error).unwrap();
+        assert_eq!(encoded["error_info"], info);
+        assert_eq!(encoded["message"], "Sem permissão para acessar o banco.");
+        let malformed =
+            decode_response(&json!({"error":{"message":"failed","error_info":"not an object"}}))
+                .unwrap_err();
+        assert!(malformed.error_info.is_none());
+        assert!(RuntimeRequestError::from("host unavailable")
+            .error_info
+            .is_none());
     }
     #[test]
     fn native_bridge_only_exposes_runtime_contract() {

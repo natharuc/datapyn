@@ -1,6 +1,6 @@
 {
   "name": "datapyn-desktop",
-  "version": "1.0.13",
+  "version": "1.0.14",
   "private": true,
   "type": "module",
   "overrides": {
@@ -27,6 +27,7 @@
     "test:sql-safety-settings": "node scripts/test-sql-safety-settings.mjs",
     "test:closed-tabs": "node scripts/test-closed-tabs.mjs",
     "test:connection-recovery": "node scripts/test-connection-recovery.mjs",
+    "test:runtime-errors": "node scripts/test-runtime-errors.mjs",
     "test:telemetry-settings": "node scripts/test-telemetry-settings.mjs"
   },
   "dependencies": {
