@@ -1,0 +1,32 @@
+name: DataPyn telemetry admin - Cloudflare
+
+on:
+  push:
+    branches: [main]
+    paths: ["services/telemetry-admin/**", "scripts/cloudflare/telemetry-admin*", ".github/workflows/telemetry-admin.yml"]
+  pull_request:
+    paths: ["services/telemetry-admin/**", "scripts/cloudflare/telemetry-admin*", ".github/workflows/telemetry-admin.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: datapyn-telemetry-admin-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: node --test scripts/cloudflare/telemetry-admin.test.mjs
+      - name: Inspect exact domain and Access permissions
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: node scripts/cloudflare/telemetry-admin.mjs probe
