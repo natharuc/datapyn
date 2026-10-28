@@ -1,9 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {checkQueries} from './telemetry-admin-sql.mjs';
 import {readFile} from 'node:fs/promises';
 import {resolve, dirname} from 'node:path';
 import {probe, cloudflare, ACCOUNT_ID, HOSTNAME, WORKER, APP_NAME, OTP_NAME, parseEmails,
   prepareDeployment, validateApplication, productionConfig, verifyProtection, deploy} from './telemetry-admin.mjs';
+
+test('real-query diagnostic uses fixed account scope without logging telemetry rows', async () => {
+  const requests = [];
+  const results = await checkQueries('test-token', async (url, options) => {
+    requests.push([url, JSON.parse(options.body)]);
+    return Response.json({data: [], rows: 0});
+  }, Date.parse('2026-10-28T12:00:00Z'));
+  assert.equal(results.validated, true);
+  assert.equal(requests.length, 4);
+  for (const [url, body] of requests) {
+    assert.equal(url, 'https://api.cloudflare.com/client/v4/analytics/sql');
+    assert.deepEqual(body.scope, {accountTag: ACCOUNT_ID});
+    assert.match(body.query, /FROM events\.analyticsEngine\.datapyn_telemetry/);
+    assert.match(body.query, /blob2 != 'dev'/);
+    assert.equal(body.params.start, '2026-10-21T12:00:00.000Z');
+  }
+  assert.equal(JSON.stringify(results).includes('test-token'), false);
+  await assert.rejects(checkQueries('test-token', async () => Response.json({error: 'do-not-log'}, {status: 403})), error =>
+    /HTTP 403/.test(error.message) && !error.message.includes('do-not-log'));
+});
 
 test('probe uses exact requested zone and emits no identity-provider secrets', async () => {
   const paths = [];

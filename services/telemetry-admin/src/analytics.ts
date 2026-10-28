@@ -13,7 +13,7 @@ export function dashboardQueries(filters: Filters): Query[] {
   return [
     {query: `SELECT blob1 AS event, blob2 AS version, blob3 AS platform, blob4 AS dbType, blob5 AS status, blob6 AS errorCode, COUNT(*) AS count, SUM(double1) AS durationTotalMs FROM ${dataset} WHERE ${where} GROUP BY blob1, blob2, blob3, blob4, blob5, blob6 LIMIT ${limit}`, params},
     {query: `SELECT ${filters.interval === "HOUR" ? "toStartOfHour" : "toStartOfDay"}(timestamp) AS bucket, blob1 AS event, blob5 AS status, COUNT(*) AS count, SUM(double1) AS durationTotalMs FROM ${dataset} WHERE ${where} AND blob1 = 'execution_finished' GROUP BY bucket, event, status ORDER BY bucket ASC LIMIT ${limit}`, params},
-    {query: `SELECT timestamp, blob1 AS event, blob2 AS version, blob3 AS platform, blob4 AS dbType, blob5 AS status, blob6 AS errorCode, blob7 AS rowsBucket, double1 AS durationMs, double2 AS attempt FROM ${dataset} WHERE ${where} ORDER BY timestamp DESC LIMIT 100`, params},
+    {query: `SELECT timestamp, blob1 AS event, blob2 AS version, blob3 AS platform, blob4 AS dbType, blob5 AS status, blob6 AS errorCode, blob7 AS rowsBucket, double1 AS durationMs, double2 AS attempt, sampleInterval AS sampleWeight FROM ${dataset} WHERE ${where} ORDER BY timestamp DESC LIMIT 100`, params},
     {query: `SELECT blob2 AS version, blob3 AS platform, blob4 AS dbType, COUNT(*) AS count FROM ${dataset} WHERE ${whereClause(filters, false)} GROUP BY blob2, blob3, blob4 LIMIT ${limit}`, params: queryParameters(filters, false)},
   ];
 }
@@ -27,6 +27,11 @@ function number(value: unknown): number {
 function string(value: unknown): string {
   if (typeof value !== "string" || value.length > 128) throw new AnalyticsError();
   return value;
+}
+function sampleWeight(value: unknown): number {
+  const weight = number(value);
+  if (weight < 1) throw new AnalyticsError();
+  return weight;
 }
 function timestamp(value: unknown): string {
   const source = string(value);
@@ -95,7 +100,7 @@ export function assembleDashboard(filters: Filters, groups: Row[], points: Row[]
   return {summary, series, breakdowns: {databases: entries(databases),errors: entries(errors),versions: entries(versions)},
     events: events.map(row => ({timestamp:timestamp(row.timestamp),event:string(row.event),version:string(row.version),platform:string(row.platform),
       dbType:string(row.dbType),status:string(row.status),errorCode:string(row.errorCode),rowsBucket:string(row.rowsBucket),
-      durationMs:number(row.durationMs),attempt:number(row.attempt),sampleWeight:null})),
+      durationMs:number(row.durationMs),attempt:number(row.attempt),sampleWeight:sampleWeight(row.sampleWeight)})),
     filters: {versions:[...versionsAvailable].sort().reverse(),platforms:[...platforms].sort(),databases:[...databasesAvailable].sort()},
     meta: {generatedAt:new Date(now).toISOString(),start:filters.start,end:filters.end,sampled:true,cacheSeconds:60,eventLimit:100}};
 }

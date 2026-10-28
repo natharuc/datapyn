@@ -28,9 +28,9 @@ execuções ponderadas. Recuperação considera os resultados finais, sem contar
 fases intermediárias como novas recuperações. Contagens são estimativas; não há
 identificador que permita calcular pessoas, instalações ou sessões únicas.
 
-O peso individual das linhas não é presumido: `sampleWeight` fica nulo enquanto
-o schema específico do dataset na nova API não for confirmado. A tabela é uma
-amostra, não uma trilha completa. Respostas são reaproveitadas internamente por
+O schema real foi confirmado pelo diagnóstico: `sampleInterval` fornece o peso
+individual, exibido como `sampleWeight`. A tabela é uma amostra, não uma trilha
+completa. Respostas são reaproveitadas internamente por
 até 60 segundos, sempre depois da autenticação; o navegador recebe `no-store`.
 Logs e observabilidade bruta do Worker permanecem desativados.
 
@@ -111,6 +111,9 @@ indicadores. Os testes do deploy usam uma API simulada para validar colisões,
 allowlist e falhas antes de qualquer escrita. A interface também foi conferida
 com Playwright isolado em desktop/celular e estados de vazio/erro/sessão expirada.
 Nenhum dado fictício é incluído nos arquivos publicados.
+O diagnóstico executa as quatro consultas reais pela mesma SQL API com escopo
+explícito da conta e valida o contrato resultante. Apenas o resultado da
+verificação e as quantidades de linhas são registrados, sem imprimir eventos.
 
 ## Limites e situação verificada
 

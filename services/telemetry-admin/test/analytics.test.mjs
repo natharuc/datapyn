@@ -13,12 +13,14 @@ test("uses four bounded queries, fixed dataset, bound filter values and automati
     assert.match(query,/FROM events\.analyticsEngine\.datapyn_telemetry/);
     assert.match(query,/timestamp >= \$start/); assert.match(query,/timestamp < \$end/);
     assert.match(query,/blob2 != 'dev'/);
-    assert.doesNotMatch(query,/FORMAT|accountTag|_sample_interval|sampleInterval|1\.0\.13|windows|sqlserver/);
+    assert.doesNotMatch(query,/FORMAT|accountTag|_sample_interval|1\.0\.13|windows|sqlserver/);
     assert.ok(query.length<10*1024); assert.ok(params.start && params.end);
   }
   assert.match(queries[0].query,/COUNT\(\*\) AS count, SUM\(double1\) AS durationTotalMs/);
   assert.equal(queries[0].params.blob2,"1.0.13");
   assert.deepEqual(queries[3].params,{start:filters.start,end:filters.end});
+  assert.match(queries[2].query,/sampleInterval AS sampleWeight/);
+  for (const index of [0,1,3]) assert.doesNotMatch(queries[index].query,/sampleInterval/);
   assert.match(queries[2].query,/LIMIT 100$/);
 });
 test("combines sampling-adjusted counts/totals correctly and excludes cancellations from failures",()=>{
@@ -30,7 +32,7 @@ test("combines sampling-adjusted counts/totals correctly and excludes cancellati
     group("app_start","started",5),group("runtime_error","error",4,0,"unknown"),group("ui_error","error",1,0,"unknown")];
   const points=[{bucket:"2026-10-28 10:00:00",...group("execution_finished","succeeded",10,1000)},
     {bucket:"2026-10-28 10:00:00",...group("execution_finished","failed",2,800)}];
-  const events=[{timestamp:"2026-10-28 10:30:00",event:"execution_finished",version:"1.0.13",platform:"windows",dbType:"sqlserver",status:"failed",errorCode:"transport",rowsBucket:"none",durationMs:400,attempt:0}];
+  const events=[{timestamp:"2026-10-28 10:30:00",event:"execution_finished",version:"1.0.13",platform:"windows",dbType:"sqlserver",status:"failed",errorCode:"transport",rowsBucket:"none",durationMs:400,attempt:0,sampleWeight:10}];
   const result=assembleDashboard(filters,groups,points,events,[{version:"1.0.13",platform:"windows",dbType:"sqlserver"}],now);
   assert.equal(result.summary.executions,15); assert.equal(result.summary.failures,2);
   assert.equal(result.summary.failureRate,2/15); assert.equal(result.summary.averageDurationMs,160);
@@ -41,7 +43,19 @@ test("combines sampling-adjusted counts/totals correctly and excludes cancellati
   assert.equal(result.series.length,24);assert.equal(result.series[0].executions,0);
   assert.deepEqual(result.breakdowns.databases,[{name:"sqlserver",count:15}]);
   assert.deepEqual(result.breakdowns.errors,[{name:"unknown",count:5},{name:"transport",count:4}]);
-  assert.equal(result.events[0].sampleWeight,null);assert.equal(result.meta.sampled,true);
+  assert.equal(result.events[0].sampleWeight,10);assert.equal(result.meta.sampled,true);
+});
+
+test("retains the verified per-row sample weight without scaling row duration or counting sample rows as aggregate totals",()=>{
+  const event={timestamp:"2026-10-28T10:30:00Z",event:"execution_finished",version:"1.0.13",platform:"windows",dbType:"sqlserver",status:"succeeded",errorCode:"none",rowsBucket:"1-100",durationMs:125,attempt:0};
+  const rows=[{...event,sampleWeight:1},{...event,sampleWeight:"20"}];
+  const result=assembleDashboard(filters,[group("execution_finished","succeeded",21,2625)],[],rows,[],now);
+  assert.deepEqual(result.events.map(row=>row.sampleWeight),[1,20]);
+  assert.deepEqual(result.events.map(row=>row.durationMs),[125,125]);
+  assert.equal(result.summary.executions,21);assert.equal(result.summary.averageDurationMs,125);
+  for (const weight of [0,0.5,-1,null,undefined,"",true,"NaN",Infinity]) {
+    assert.throws(()=>assembleDashboard(filters,[],[],[{...event,sampleWeight:weight}],[],now));
+  }
 });
 test("empty telemetry yields zeros, null averages/rates and all expected buckets",()=>{
   const result=assembleDashboard(filters,[],[],[],[],now);

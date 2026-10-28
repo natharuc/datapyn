@@ -57,6 +57,10 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_ADMIN_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
         run: node scripts/cloudflare/telemetry-admin.mjs probe
+      - name: Validate real telemetry query contracts without logging data
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_ADMIN_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
+        run: node --experimental-strip-types scripts/cloudflare/telemetry-admin-sql.mjs
 
   deploy:
     needs: validate
