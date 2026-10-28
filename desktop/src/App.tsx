@@ -16,6 +16,9 @@ import { WorkspaceController, encodeDocument, type Block, type SessionDocument, 
 import { disposeModel, focusEditor, insertInEditor, selectedCode, setCompletionContext,setCompletionContextResolver, editorAction, formatEditor, forceAutocomplete, transformEditorSelection, getRegisteredEditor,revealEditorRange } from "./editorRegistry";
 import { BlockSyntaxDiagnostics } from "./BlockSyntaxDiagnostics";
 import {BlockExecutionLine,BlockExecutionStatus,SessionExecutionTime} from "./BlockExecutionStatus";
+import {ConnectionRecoveryStatus} from "./ConnectionRecoveryStatus";
+import {activeConnectionRecovery} from "./connectionRecovery";
+import {useTelemetry} from "./useTelemetry";
 import type { EditorPreferences } from "./MonacoBlock";
 import { ResultGrid } from "./ResultGrid";
 import { CommandResults } from "./CommandResults";
@@ -110,6 +113,7 @@ function IconButton({ title, children, onClick, disabled = false, className = ""
 }
 
 export function App() {
+  useTelemetry();
   const {t}=useTranslation();
   const catalogState=useSyncExternalStore(connections.subscribe,connections.getSnapshot);
   const state = useSyncExternalStore(workspace.subscribe, workspace.getSnapshot);
@@ -697,7 +701,9 @@ export function App() {
     workspace.updateBlock(session.id,block.id,{connection_id:exportScope.connectionId,database_name:exportScope.database,schema:exportScope.schema});
     requestAnimationFrame(()=>focusEditor(block.id));
   };
-  const runDisabled = editingLocked || session.busy || dataImportPending(session.dataImport) || openingConnection || (session.connectionState?.phase==="error"&&focusedBlock?.language==="sql"&&!focusedBlock.connection_id) || state.runtimeStatus !== "ready" || !profile || switchingProfile || Boolean(session.runtimeError);
+  const blockRunDisabled = editingLocked || session.busy || dataImportPending(session.dataImport) || openingConnection || (session.connectionState?.phase==="error"&&focusedBlock?.language==="sql"&&!focusedBlock.connection_id) || state.runtimeStatus !== "ready" || !profile || switchingProfile || Boolean(session.runtimeError);
+  const focusedRecovery=activeConnectionRecovery(session,focusedBlock,preferences.automaticTransactions);
+  const runDisabled=blockRunDisabled || focusedRecovery?.phase==="recovering" || Boolean(focusedRecovery?.acknowledgement_required);
   return <div className="app-shell">
     <SqlSafetyConfirmation/>
     <header className="app-header">
@@ -763,8 +769,9 @@ export function App() {
               setPreparedSession(`${profile?.active_id}:${session.id}`);
             })())}/>
           {session.notice && <div className="session-notice" role="status">{session.notice}</div>}
+          <ConnectionRecoveryStatus state={activeConnectionRecovery(session,undefined,preferences.automaticTransactions)} disabled={editingLocked||session.busy} onRecover={acknowledge=>workspace.recoverConnection(session.id,undefined,acknowledge,session.connectionRecovery?.recovery_id)} onDismiss={()=>workspace.dismissConnectionRecovery(session.id)} onError={reportMessage}/>
           <ParameterPanel title={translateUi("Parâmetros compartilhados")} parameters={sharedParameters} enabled={session.extras.shared_parameters_enabled !== false} disabled={session.busy} onEnabled={enabled => workspace.patchSession(session.id,s=>({...s,modified:true,extras:{...s.extras,shared_parameters_enabled:enabled}}))} onChange={parameters => workspace.patchSession(session.id,s=>({...s,modified:true,extras:{...s.extras,shared_parameters:parameters}}))}/>
-          {session.blocks.map((block, index) => <BlockCard scopeMetadata={scopeMetadata} onScopeChange={applyBlockScope} scopeRefresh={explorerRefresh} scopeReady={!connectionBlocked&&preparedSession === `${profile?.active_id}:${session.id}`} diagnosticsReady={!openingConnection&&state.runtimeStatus === "ready"} diagnosticRevision={diagnosticRevisionFor(session, block)} diagnosticContext={diagnosticContext} locked={editingLocked} forceMount={startupActive && requiredEditor === block.id} onEditorReady={startupEditorInitialized} key={block.id} block={block} index={index} count={session.blocks.length} session={session} disabled={runDisabled} preferences={preferences} onFontSizeChange={editorFontSize=>setPreferences(p=>({...p,editorFontSize}))} onPickConnection={() => setConnectionPicker(block.id)} onDownload={()=>run(downloadBlock(block.id))}
+          {session.blocks.map((block, index) => <BlockCard scopeMetadata={scopeMetadata} onScopeChange={applyBlockScope} scopeRefresh={explorerRefresh} scopeReady={!connectionBlocked&&preparedSession === `${profile?.active_id}:${session.id}`} diagnosticsReady={!openingConnection&&state.runtimeStatus === "ready"} diagnosticRevision={diagnosticRevisionFor(session, block)} diagnosticContext={diagnosticContext} locked={editingLocked} forceMount={startupActive && requiredEditor === block.id} onEditorReady={startupEditorInitialized} key={block.id} block={block} index={index} count={session.blocks.length} session={session} disabled={blockRunDisabled} preferences={preferences} onFontSizeChange={editorFontSize=>setPreferences(p=>({...p,editorFontSize}))} onPickConnection={() => setConnectionPicker(block.id)} onDownload={()=>run(downloadBlock(block.id))}
             onRun={() => run(workspace.runBlock(session.id, block.id))} />)}
           <div className="add-block-row"><button title={shortcuts.addBlock} onClick={() => addBlock("sql")}><Plus size={14} /><span className="sql-color">{translateUi("SQL")}</span></button><button title={shortcuts.addBlock} onClick={() => addBlock("python")}><Plus size={14} /><span className="python-color">{translateUi("Python")}</span></button></div>
         </div>,
@@ -843,6 +850,7 @@ const BlockCard = memo(function BlockCard({ block, index, count, session, disabl
   const customConnection = catalog.catalog.connections.find(c => c.id === (block.connection_id ?? session.savedConnectionId));
   const dialect = blockConnectionConfig(session,block)?.db_type;
   const scope = blockScope(session, block,preferences.automaticTransactions),metadata=scopeMetadata(session,block);
+  const recovery=activeConnectionRecovery(session,block,preferences.automaticTransactions);
   const diagnosticKey = JSON.stringify([session.id, scope.connectionId, scope.database, scope.schema, scope.scopeInherited, scope.automaticTransactions, dialect, preferences.sharedDelimiter, preferences.locale, diagnosticRevision]);
   useParameterScan(block.language === "sql" ? [block.code] : [], (block.sql_parameters ?? []) as ParameterDefinition[], false, preferences.sharedDelimiter,
     parameters => workspace.updateBlock(session.id,block.id,{sql_parameters:parameters}));
@@ -853,7 +861,7 @@ const BlockCard = memo(function BlockCard({ block, index, count, session, disabl
       if(event.target === event.currentTarget || (event.target as Element).matches(".block-header-controls, .block-header-details")) workspace.maximizeBlock(session.id,block.id);
     }}>
       <div className="block-header-controls"><span draggable={!session.busy} onDragStart={e=>{e.dataTransfer.setData("application/x-datapyn-block",block.id);e.dataTransfer.effectAllowed="move";}}><GripVertical className="block-grip" size={13} /></span><button title={block.collapsed ? "Expandir bloco" : "Recolher bloco"} onClick={()=>workspace.updateBlock(session.id,block.id,{collapsed:!block.collapsed})}>{block.collapsed ? <ChevronRight size={12}/> : <ChevronDown size={12}/>}</button>
-        <button className="block-run" disabled={disabled} onClick={onRun} aria-label={translateUi("Executar bloco ou seleção")} title={translateUi("Executar bloco ou seleção")}><Play size={12} fill="currentColor" /></button>
+        <button className="block-run" disabled={disabled||recovery?.phase==="recovering"||recovery?.acknowledgement_required} onClick={onRun} aria-label={translateUi("Executar bloco ou seleção")} title={translateUi("Executar bloco ou seleção")}><Play size={12} fill="currentColor" /></button>
         <span className="block-index">{String(index + 1).padStart(2, "0")}</span><select className={`language-select ${block.language}`} aria-label={`Linguagem do bloco ${index + 1}`} value={block.language} disabled={session.busy} onChange={(event) => workspace.updateBlock(session.id, block.id, { language: event.target.value as "sql" | "python" })}><option value="sql">{translateUi("SQL")}</option><option value="python">{translateUi("Python")}</option></select>
       </div>
       <div className="block-header-details">
@@ -864,6 +872,7 @@ const BlockCard = memo(function BlockCard({ block, index, count, session, disabl
           onChange={context=>onScopeChange(session.id,block.id,context)} /></>}
       {!block.is_active && <span className="block-inactive">{translateUi("Desativado")}</span>}
       <BlockExecutionStatus block={block}/>
+      <ConnectionRecoveryStatus state={recovery} compact disabled={locked||session.busy} onRecover={acknowledge=>workspace.recoverConnection(session.id,block.id,acknowledge,recovery?.recovery_id)} onDismiss={()=>workspace.dismissConnectionRecovery(session.id,block.id)} onError={reportMessage}/>
       <button className="icon-button" aria-label={translateUi("Ações do bloco")} title={translateUi("Ações do bloco")} aria-haspopup="menu" aria-expanded={Boolean(actions)} onClick={e=>{const rect=e.currentTarget.getBoundingClientRect();setActions({owner:e.currentTarget.ownerDocument,anchor:{x:rect.right,y:rect.bottom},button:e.currentTarget});}}><MoreHorizontal size={15}/></button>
       {actions && <ContextMenu ownerDocument={actions.owner} anchor={actions.anchor} returnFocus={actions.button} label={translateUi("Ações do bloco")} onClose={()=>setActions(undefined)} items={[
         {label:translateUi(block.is_active ? "Desativar na execução de todos" : "Ativar na execução de todos"),disabled:session.busy,onSelect:()=>workspace.updateBlock(session.id,block.id,{is_active:!block.is_active})},

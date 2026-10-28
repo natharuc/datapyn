@@ -1,4 +1,5 @@
-import { errorText, isRuntimeEvent, type ExecutionContextChange, type ExecutionFinished, type Language, type ResultRef, type RuntimeEvent, type RuntimeInfo, type RuntimeTransport, type Variable,type RichOutput, type SqlCommandResult, type TransactionState } from "./runtime";
+import { errorText, isConnectionRecoveryOutcome, isConnectionRecoveryState, isRuntimeEvent, RuntimeRequestError, type ConnectionRecoveryState, type ExecutionContextChange, type ExecutionFinished, type Language, type ResultRef, type RuntimeEvent, type RuntimeInfo, type RuntimeTransport, type Variable,type RichOutput, type SqlCommandResult, type TransactionState } from "./runtime";
+import {activeConnectionRecovery,applyConnectionRecovery,recoveryMatches} from "./connectionRecovery";
 import type { NativeDocumentRecord, NativeWorkspaceState } from "./nativeDrafts";
 import { disposeModel, flushEditorViewStates,restoreEditorViewState, selectedCode, subscribeEditorViewStates } from "./editorRegistry";
 import type { QueueCompletion } from "./executionNotifications";
@@ -16,6 +17,7 @@ export interface Block {
   sql_parameters?: Record<string, unknown>[]; sql_parameters_enabled?: boolean;
   disable_automatic_transactions?: boolean;
   transactionState?: TransactionState;
+  connectionRecovery?: ConnectionRecoveryState;
   cell_type?: "code" | "markdown" | "raw";
   results?: ResultRef[];
   [key: string]: unknown;
@@ -70,6 +72,7 @@ export interface SessionDocument {
   periodicSeconds?: number; executionStartedAt?: number; lastDurationMs?: number;
   notice?: string; runtimeError?: string; extras: Record<string, unknown>;
   connectionState?: SessionConnectionState;
+  connectionRecovery?: ConnectionRecoveryState;
   dataImport?: DataImportState;
 }
 export interface ImportedData { result: ResultRef; variables: Variable[]; options?: DataImportOptions; code?: string }
@@ -156,7 +159,7 @@ export function decodeDocument(input: unknown, title = "Análise importada", res
     if (block.language !== "sql" && block.language !== "python") throw new Error(`Linguagem de bloco não suportada: ${String(block.language)}`);
     if (typeof block.code !== "string") throw new Error("Código de bloco inválido.");
     return { ...block, id: newId(), block_name: String(block.block_name ?? ""), language: block.language,
-      code: block.code, is_active: block.is_active !== false, disable_automatic_transactions: block.disable_automatic_transactions === true, transactionState: undefined, status: "idle", executionStartedAt: undefined } as Block;
+      code: block.code, is_active: block.is_active !== false, disable_automatic_transactions: block.disable_automatic_transactions === true, transactionState: undefined, connectionRecovery: undefined, status: "idle", executionStartedAt: undefined } as Block;
   });
   if (session.blocks.length === 0) session.blocks = [newBlock()];
   session.focusedBlockId = session.blocks[0].id;
@@ -175,12 +178,13 @@ export function encodeDocument(session: SessionDocument): Record<string, unknown
   return { ...encodeCharts(session.extras), version: "1.0", database_context: session.database ?? session.extras.database_context,
     desktop: { ...(session.extras.desktop as object ?? {}), session_id:session.id, connection_id: session.savedConnectionId, schema: session.schema,
       focused_block_key: session.blocks.find(b => b.id === session.focusedBlockId)?.block_key ?? session.focusedBlockId },
-    blocks: session.blocks.map(({ id, status, duration_ms, executionStartedAt, transactionState, error, results, ...block }) => ({ ...block, block_key: block.block_key ?? id })) };
+    blocks: session.blocks.map(({ id, status, duration_ms, executionStartedAt, transactionState, connectionRecovery, error, results, ...block }) => ({ ...block, block_key: block.block_key ?? id })) };
 }
 
 export function eventBelongsToSession(session: SessionDocument, event: RuntimeEvent): boolean {
   if (event.event === "backend.exited" || event.event === "language.context_updated" || event.event === "result.export_progress" || event.event === "data.import_progress" || event.event === "notifications.delivery_finished") return false;
   if (event.payload.session_id !== session.id) return false;
+  if (event.event === "connection.recovery") return true;
   return event.event === "session.reset" || event.event === "session.error" || event.event === "session.ready" || event.event === "namespace.changed" || event.payload.execution_id === session.currentExecutionId;
 }
 
@@ -218,25 +222,26 @@ export function applyExecutionContextChange(session: SessionDocument, blockId: s
   return next;
 }
 
-export function applyRuntimeEvent(session: SessionDocument, event: RuntimeEvent): SessionDocument {
+export function applyRuntimeEvent(session: SessionDocument, event: RuntimeEvent, automaticTransactions=true): SessionDocument {
   if (!isRuntimeEvent(event)) return session;
   if (event.event === "backend.exited" || event.event === "language.context_updated" || event.event === "result.export_progress" || event.event === "data.import_progress" || event.event === "notifications.delivery_finished") return session;
   if (!eventBelongsToSession(session, event)) return session;
+  if (event.event === "connection.recovery") return applyConnectionRecovery(session,event.payload,automaticTransactions);
   if (event.event === "session.ready") return session;
   if (event.event === "namespace.changed") return {...session,variables:event.payload.variables,results:event.payload.results,resultRevision:session.resultRevision+1};
   if (event.event === "session.error") {
     return { ...session, busy: false, currentExecutionId: undefined, currentBlockId: undefined,
-      results: [], variables: [], images: [], richOutputs:[], commandExecutions:[], executionOutput:undefined, connection: undefined, connectionState:{...session.connectionState,phase:"error",error:event.payload.error},runtimeError: event.payload.error,
+      results: [], variables: [], images: [], richOutputs:[], commandExecutions:[], executionOutput:undefined, connection: undefined, connectionRecovery:undefined, connectionState:{...session.connectionState,phase:"error",error:event.payload.error},runtimeError: event.payload.error,
       notice: `Runtime desta sessão indisponível: ${event.payload.error}. Salve a análise, feche esta aba e reabra para criar uma nova sessão.`,
-      blocks: session.blocks.map((block) => ["running", "queued", "cancelling"].includes(block.status) ? { ...block, results:undefined, transactionState:undefined, executionStartedAt:undefined, status: "failed", error: event.payload.error } : {...block,results:undefined,transactionState:undefined,executionStartedAt:undefined}),
+      blocks: session.blocks.map((block) => ["running", "queued", "cancelling"].includes(block.status) ? { ...block, results:undefined, transactionState:undefined, connectionRecovery:undefined, executionStartedAt:undefined, status: "failed", error: event.payload.error } : {...block,results:undefined,transactionState:undefined,connectionRecovery:undefined,executionStartedAt:undefined}),
       logs: appendLog(session, "stderr", event.payload.error + "\n") };
   }
   if (event.event === "session.reset") {
     const lastCommands = session.commandExecutions?.at(-1);
-    return { ...session, results: [], variables: [], images: [], richOutputs:[], connection: undefined,connectionState:undefined,
+    return { ...session, results: [], variables: [], images: [], richOutputs:[], connection: undefined,connectionState:undefined,connectionRecovery:undefined,
       executionOutput: lastCommands ? {executionId:lastCommands.executionId,kind:"commands"} : undefined,
       notice: "Runtime da sessão reiniciado. Variáveis e conexão foram descartadas; reconecte antes de executar SQL.",
-      blocks: session.blocks.map((block) => ["running", "queued", "cancelling"].includes(block.status) ? { ...block, results:undefined, transactionState:undefined, executionStartedAt:undefined, status: "cancelled" } : {...block,results:undefined,transactionState:undefined,executionStartedAt:undefined}),
+      blocks: session.blocks.map((block) => ["running", "queued", "cancelling"].includes(block.status) ? { ...block, results:undefined, transactionState:undefined, connectionRecovery:undefined, executionStartedAt:undefined, status: "cancelled" } : {...block,results:undefined,transactionState:undefined,connectionRecovery:undefined,executionStartedAt:undefined}),
       logs: appendLog(session, "system", "Sessão reiniciada: namespace e conexão descartados.\n") };
   }
   if (event.event === "execution.started") {
@@ -249,6 +254,14 @@ export function applyRuntimeEvent(session: SessionDocument, event: RuntimeEvent)
   }
   if (event.event === "execution.export_progress") return {...session,notice:`Download: ${event.payload.total_rows.toLocaleString()} linhas · ${(event.payload.size_bytes/1048576).toFixed(1)} MiB`};
   const payload = event.payload;
+  if(payload.connection_recovery){
+    const blockId=payload.block_id??session.currentBlockId,block=session.blocks.find(item=>item.id===blockId);
+    const scope=block?completionConnectionScope(session,block):{connectionId:session.savedConnectionId,database:session.database,schema:session.schema};
+    session=applyConnectionRecovery(session,{...payload.connection_recovery,session_id:session.id,block_id:blockId,
+      automatic_transactions:payload.automatic_transactions??(automaticTransactions&&block?.disable_automatic_transactions!==true),
+      scope_inherited:payload.scope_inherited??(block?inheritsSessionScope(block):false),
+      requested_scope:{connection_id:scope.connectionId,database:scope.database,schema:scope.schema}},automaticTransactions);
+  }
   session = applyExecutionContextChange(session, session.currentBlockId, payload.context_change);
   const resultRefs = payload.results ?? [];
   const runningBlock = session.blocks.find(block => block.id === session.currentBlockId);
@@ -262,13 +275,13 @@ export function applyRuntimeEvent(session: SessionDocument, event: RuntimeEvent)
     executionOutput: payload.rich_outputs?.length ? {executionId:payload.execution_id,kind:"rich"}
       : resultRefs.length && payload.status !== "failed" ? {executionId:payload.execution_id,kind:"results",resultId:resultRefs.at(-1)?.result_id}
       : commands.length ? {executionId:payload.execution_id,kind:"commands"} : session.executionOutput,
-    blocks: session.blocks.map(block => block.id === session.currentBlockId ? { ...block, status: payload.status, duration_ms: payload.duration_ms, executionStartedAt: undefined, transactionState: payload.transaction_state, error: payload.error, results: payload.results } : block),
-    results: payload.status === "failed" ? [] : resultRefs.length ? resultRefs : session.results,
+    blocks: session.blocks.map(block => block.id === session.currentBlockId ? { ...block, status: payload.status, duration_ms: payload.duration_ms, executionStartedAt: undefined, transactionState: payload.transaction_state, error: payload.error, results: payload.connection_lost ? block.results : payload.results } : block),
+    results: payload.connection_lost ? session.results : payload.status === "failed" ? [] : resultRefs.length ? resultRefs : session.results,
     resultRevision: session.resultRevision + (payload.status === "succeeded" ? 1 : 0),
     // Cancelling a queued job does not restart the kernel. session.reset owns namespace invalidation.
-    variables: payload.status === "cancelled" ? session.variables : payload.variables ?? session.variables,
-    images: payload.status === "cancelled" ? session.images : payload.rich_outputs?.filter((item) => item.type === "image").map(({ data, mime }) => ({ data, mime })) ?? [],
-    richOutputs:payload.status === "cancelled" ? session.richOutputs : payload.rich_outputs ?? [],
+    variables: payload.status === "cancelled" || payload.connection_lost ? session.variables : payload.variables ?? session.variables,
+    images: payload.status === "cancelled" || payload.connection_lost ? session.images : payload.rich_outputs?.filter((item) => item.type === "image").map(({ data, mime }) => ({ data, mime })) ?? [],
+    richOutputs:payload.status === "cancelled" || payload.connection_lost ? session.richOutputs : payload.rich_outputs ?? [],
     notice:payload.export ? (payload.export.cancelled?"Download cancelado.":`Download concluído: ${payload.export.total_rows.toLocaleString()} linhas · ${payload.export.files.map(f=>f.path).join(", ")}`) : session.notice,
     logs: payload.error ? appendLog(session, "stderr", payload.error + "\n") : payload.export ? appendLog(session,"system",`Download: ${payload.export.files.map(f=>f.path).join(", ")}\n`) : session.logs,
   };
@@ -301,6 +314,8 @@ export class WorkspaceController {
   private readonly runtimeSessions = new Set<string>();
   private readonly creatingSessions = new Map<string, Promise<void>>();
   private readonly connectingSessions = new Map<string, {key:string; task?:Promise<ConnectionResponse>}>();
+  private readonly recoveringConnections = new Map<string, Promise<void>>();
+  private readonly dismissedRecoveries = new Set<string>();
   private readonly closingSessions = new Map<string, Promise<void>>();
   private readonly closedSessions: ClosedSession[] = [];
   private closedSessionBytes = 0;
@@ -331,7 +346,7 @@ export class WorkspaceController {
   private browserMigrationRead=false;
   private editingLocked=false;
   private workspaceIdentity?:string;
-  setWorkspaceIdentity(id:string|undefined){if(this.workspaceIdentity!==id){for(const review of this.pendingSqlReviews.values())review.abort();this.clearClosedSessions();}this.workspaceIdentity=id;}
+  setWorkspaceIdentity(id:string|undefined){if(this.workspaceIdentity!==id){for(const review of this.pendingSqlReviews.values())review.abort();this.recoveringConnections.clear();this.clearClosedSessions();}this.workspaceIdentity=id;}
   private clearClosedSessions(){this.closedHistoryGeneration++;this.closedSessions.length=0;this.closedSessionBytes=0;this.closedPlaceholderId=undefined;if(this.state.closedSessionCount)this.setState({...this.state});}
   setEditingLocked(locked:boolean){this.editingLocked=locked;}
   isEditingLocked(){return this.editingLocked;}
@@ -357,7 +372,7 @@ export class WorkspaceController {
     if(this.state.sessions.some(s=>s.busy))throw new Error("Aguarde ou cancele as execuções antes de trocar de workspace.");
     this.clearClosedSessions();this.closingSessions.clear();
     for(const timer of this.periodicTimers.values())clearTimeout(timer);this.periodicTimers.clear();
-    this.runtimeGeneration++;this.runtimeSessions.clear();this.creatingSessions.clear();this.connectingSessions.clear();this.transientConnections.clear();this.transientCredentialIds.clear();this.directConnectionTargets.clear();this.cancelRequests.clear();
+    this.runtimeGeneration++;this.runtimeSessions.clear();this.creatingSessions.clear();this.connectingSessions.clear();this.recoveringConnections.clear();this.transientConnections.clear();this.transientCredentialIds.clear();this.directConnectionTargets.clear();this.cancelRequests.clear();
     this.nativeRecords.clear();this.nativeSources.clear();this.editorViews.clear();
     const seenBlocks=new Set<string>(),seenSessions=new Set<string>();
     const sessions=(snapshot.documents ?? []).map(entry=>{
@@ -410,7 +425,7 @@ export class WorkspaceController {
     const saved=this.readBrowserSnapshot();if(!saved?.documents?.length)return false;
     this.restoreSnapshot({documents:saved.documents,activeIndex:saved.activeIndex});return true;
   }
-  dispose(){this.runtimeGeneration++;this.clearClosedSessions();this.closingSessions.clear();for(const review of this.pendingSqlReviews.values())review.abort();this.pendingSqlReviews.clear();this.connectingSessions.clear();this.transientConnections.clear();this.transientCredentialIds.clear();this.directConnectionTargets.clear();this.unsubscribeEditorViews?.();this.unsubscribeEditorViews=undefined;if(this.persistTimer)clearTimeout(this.persistTimer);for(const timer of this.periodicTimers.values())clearTimeout(timer);this.periodicTimers.clear();}
+  dispose(){this.runtimeGeneration++;this.clearClosedSessions();this.closingSessions.clear();this.recoveringConnections.clear();for(const review of this.pendingSqlReviews.values())review.abort();this.pendingSqlReviews.clear();this.connectingSessions.clear();this.transientConnections.clear();this.transientCredentialIds.clear();this.directConnectionTargets.clear();this.unsubscribeEditorViews?.();this.unsubscribeEditorViews=undefined;if(this.persistTimer)clearTimeout(this.persistTimer);for(const timer of this.periodicTimers.values())clearTimeout(timer);this.periodicTimers.clear();}
 
   getSnapshot = () => this.state;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
@@ -467,7 +482,8 @@ export class WorkspaceController {
   activate(id: string) { if (this.session(id)) this.setState({ ...this.state, activeId: id }); }
   focusBlock(sessionId: string, blockId: string) { this.patchSession(sessionId, (session) => session.focusedBlockId === blockId ? session : { ...session, focusedBlockId: blockId }); }
   updateBlock(sessionId: string, id: string, update: Partial<Block>) {
-    this.patchSession(sessionId, (session) => ({ ...session, modified: true, blocks: session.blocks.map((block) => block.id === id ? { ...block, ...update } : block) }));
+    const scopeChanged=["connection_id","database_name","schema","disable_automatic_transactions"].some(key=>Object.hasOwn(update,key));
+    this.patchSession(sessionId, (session) => ({ ...session, modified: true, blocks: session.blocks.map((block) => block.id === id ? { ...block, ...update,...(scopeChanged?{connectionRecovery:undefined}:{}) } : block) }));
   }
   renameSession(id: string, title: string) { if (title.trim()) this.patchSession(id, (session) => ({ ...session, title: title.trim(), modified: true })); }
   private applyNewSessionLayout(session:SessionDocument):SessionDocument {
@@ -700,13 +716,54 @@ export class WorkspaceController {
   duplicateBlock(sessionId: string, blockId: string) {
     const source = this.session(sessionId)?.blocks.find(b => b.id === blockId); if (!source) return;
     const copy = this.addBlock(sessionId, source.language, source.code, blockId);
-    const { id: _id, status: _status, error: _error, duration_ms: _duration, executionStartedAt: _startedAt, transactionState: _transactionState, results: _results, ...definition } = source;
+    const { id: _id, status: _status, error: _error, duration_ms: _duration, executionStartedAt: _startedAt, transactionState: _transactionState, connectionRecovery: _connectionRecovery, results: _results, ...definition } = source;
     this.updateBlock(sessionId, copy.id, { ...definition, block_key: copy.id, block_name: source.block_name ? `${source.block_name}_copy` : "" });
     return copy;
   }
   maximizeBlock(sessionId: string, blockId?: string) { this.patchSession(sessionId, s => ({ ...s, maximizedBlockId: s.maximizedBlockId === blockId ? undefined : blockId })); }
   connectSaved(sessionId: string, connectionId: string, name?: string,scope:{database?:string;schema?:string}={}) {
     return this.establishConnection(sessionId, {key:connectionId,name,connectionId}, {connection_id:connectionId,...(scope.database!==undefined?{database:scope.database}:{}),...(scope.schema!==undefined?{schema:scope.schema}:{})});
+  }
+  /** Recover one physical connection without replacing the tab's Python kernel. */
+  recoverConnection(sessionId:string,blockId?:string,acknowledgeStateLoss=false,expectedRecoveryId?:string):Promise<void> {
+    const session=this.session(sessionId),block=blockId?session?.blocks.find(item=>item.id===blockId):undefined;
+    if(!session || blockId && !block)return Promise.reject(new Error("Aba ou bloco encerrado."));
+    if(this.editingLocked || session.busy || this.importingSessions.has(sessionId) || this.closingSessions.has(sessionId))return Promise.reject(new Error("Aguarde a operação atual antes de reconectar."));
+    if(acknowledgeStateLoss&&expectedRecoveryId&&activeConnectionRecovery(session,block,this.automaticTransactions)?.recovery_id!==expectedRecoveryId)return Promise.reject(new Error("A conexão mudou. Revise novamente antes de reconectar."));
+    const scope=block?completionConnectionScope(session,block):{connectionId:session.savedConnectionId,database:session.database,schema:session.schema};
+    const params={session_id:sessionId,block_id:blockId,scope_inherited:block?inheritsSessionScope(block):false,
+      automatic_transactions:this.automaticTransactions && block?.disable_automatic_transactions!==true,
+      connection_id:scope.connectionId,database:scope.database,schema:scope.schema,acknowledge_state_loss:acknowledgeStateLoss};
+    const fingerprint=JSON.stringify(params),pending=this.recoveringConnections.get(fingerprint);if(pending)return pending;
+    const generation=this.runtimeGeneration,identity=this.workspaceIdentity,historyGeneration=this.closedHistoryGeneration;
+    const fallback:ConnectionRecoveryState={...params,requested_scope:{connection_id:scope.connectionId,database:scope.database,schema:scope.schema},phase:"recovering",recovery_id:newId()};
+    const current=()=>{
+      const owner=this.session(sessionId),target=blockId?owner?.blocks.find(item=>item.id===blockId):undefined;
+      return generation===this.runtimeGeneration&&identity===this.workspaceIdentity&&historyGeneration===this.closedHistoryGeneration&&!this.closingSessions.has(sessionId)&&owner&&(!blockId||target)&&recoveryMatches(owner,target,fallback,this.automaticTransactions)?owner:undefined;
+    };
+    const task=(async()=>{
+      this.patchSession(sessionId,s=>applyConnectionRecovery(s,fallback,this.automaticTransactions));
+      try {
+        await this.ensureSession(sessionId);if(!current())return;
+        const response=await this.transport.request<unknown>("connection.recover",params);
+        if(!current())return;
+        const result=response && typeof response==="object"?response as {recovery?:unknown;connection_recovery?:unknown}:undefined;
+        const outcome=isConnectionRecoveryOutcome(response)?response:isConnectionRecoveryOutcome(result?.connection_recovery)?result.connection_recovery:isConnectionRecoveryOutcome(result?.recovery)?result.recovery:undefined;
+        const recovery=isConnectionRecoveryState(outcome)?outcome:outcome?{...fallback,...outcome}:undefined;
+        if(recovery&&!this.dismissedRecoveries.has(recovery.recovery_id))this.patchSession(sessionId,s=>applyConnectionRecovery(s,recovery,this.automaticTransactions,fallback.recovery_id));
+      }catch(error){
+        const owner=current();if(owner){const target=blockId?owner.blocks.find(item=>item.id===blockId):undefined,previous=activeConnectionRecovery(owner,target,this.automaticTransactions);
+          this.patchSession(sessionId,s=>applyConnectionRecovery(s,{...fallback,...previous,phase:"error",error:errorText(error)},this.automaticTransactions));}
+        throw error;
+      }
+    })().finally(()=>{if(this.recoveringConnections.get(fingerprint)===task)this.recoveringConnections.delete(fingerprint);});
+    this.recoveringConnections.set(fingerprint,task);return task;
+  }
+  dismissConnectionRecovery(sessionId:string,blockId?:string) {
+    const session=this.session(sessionId),recovery=blockId?session?.blocks.find(block=>block.id===blockId)?.connectionRecovery:session?.connectionRecovery;
+    if(recovery?.phase!=="ready")return;
+    this.dismissedRecoveries.add(recovery.recovery_id);while(this.dismissedRecoveries.size>64)this.dismissedRecoveries.delete(this.dismissedRecoveries.values().next().value!);
+    this.patchSession(sessionId,s=>blockId?{...s,blocks:s.blocks.map(block=>block.id===blockId&&block.connectionRecovery?.phase==="ready"?{...block,connectionRecovery:undefined}:block)}:s.connectionRecovery?.phase==="ready"?{...s,connectionRecovery:undefined}:s);
   }
   private establishConnection(sessionId:string,target:{key:string;name?:string;connectionId?:string},params:Record<string,unknown>,fallback?:ConnectionConfig):Promise<ConnectionResponse> {
     const session=this.session(sessionId);
@@ -733,14 +790,25 @@ export class WorkspaceController {
         await this.ensureSession(sessionId);
         if(!current())throw new Error("A conexão foi interrompida.");
         this.patchSession(sessionId,s=>({...s,connectionState:{phase:"connecting",...targetState}}));
-        const response=await this.transport.request<ConnectionResponse>("connection.connect",{session_id:sessionId,...params});
+        let response:ConnectionResponse|undefined;
+        for(let attempt=0;attempt<3;attempt++){
+          if(!current()||this.closingSessions.has(sessionId))throw new Error("A conexão foi interrompida.");
+          try{response=await this.transport.request<ConnectionResponse>("connection.connect",{session_id:sessionId,...params});break;}
+          catch(error){
+            // Backend classification is intentionally narrow. Never retry a
+            // login, certificate/host-key decision or user cancellation here.
+            if(attempt===2 || !(error instanceof RuntimeRequestError) || error.code!=="connection_unavailable" || error.details?.retryable!==true)throw error;
+            await new Promise<void>(resolve=>setTimeout(resolve,attempt===0?300:800));
+          }
+        }
+        if(!response)throw new Error("A conexão não foi estabelecida.");
         if(!current())throw new Error("A conexão foi interrompida.");
         const config=response.config??response.connection??fallback;
         const safeConfig=config?connectionMetadata(config):undefined;
         if(target.connectionId)this.transientConnections.delete(sessionId);
         else if(config)this.transientConnections.set(sessionId,{...fallback??config});
         this.patchSession(sessionId,s=>({...s,savedConnectionId:target.connectionId,connection:config?{...safeConfig,database:response.database??config.database,schema:response.schema??config.schema} as ConnectionConfig:undefined,
-          database:response.database??config?.database,schema:response.schema??config?.schema,notice:undefined,
+          database:response.database??config?.database,schema:response.schema??config?.schema,notice:undefined,connectionRecovery:undefined,
           connectionState:{...targetState,phase:"ready",name:target.name??config?.name,...(!target.connectionId?{scope:{database:response.database??config?.database,schema:response.schema??config?.schema}}:{})},
           extras:target.connectionId?s.extras:{...s.extras,connection_name:undefined,connection_group:undefined}}));
         return response;
@@ -773,7 +841,7 @@ export class WorkspaceController {
     this.transientConnections.delete(sessionId);
     this.transientCredentialIds.delete(sessionId);
     this.directConnectionTargets.delete(sessionId);
-    this.patchSession(sessionId, s => ({ ...s, connection: undefined, connectionState:undefined,savedConnectionId: undefined, database: undefined, schema: undefined,extras:{...s.extras,connection_name:undefined,connection_group:undefined} }));
+    this.patchSession(sessionId, s => ({ ...s, connection: undefined, connectionState:undefined,connectionRecovery:undefined,blocks:s.blocks.map(block=>({...block,connectionRecovery:undefined})),savedConnectionId: undefined, database: undefined, schema: undefined,extras:{...s.extras,connection_name:undefined,connection_group:undefined} }));
   }
   setContext(sessionId: string, context: { database?: string; schema?: string }, blockId?: string) {
     if (blockId) { this.updateBlock(sessionId, blockId, { database_name: context.database, schema: context.schema }); return; }
@@ -887,6 +955,8 @@ export class WorkspaceController {
     if(session?.connectionState?.phase==="error"&&queue.some(block=>block.language==="sql"&&!block.connection_id))throw new Error(session.connectionState.error??"A conexão não foi estabelecida.");
     if (this.session(sessionId)?.busy) throw new Error("Esta aba já tem uma execução em andamento.");
     const runnable = queue.filter((block) => block.code.trim() && (!block.cell_type || block.cell_type === "code"));
+    if(session && runnable.some(block=>activeConnectionRecovery(session,session.blocks.find(item=>item.id===block.id),this.automaticTransactions)?.phase==="recovering"))throw new Error("A conexão deste bloco está sendo recuperada.");
+    if(session && runnable.some(block=>activeConnectionRecovery(session,session.blocks.find(item=>item.id===block.id),this.automaticTransactions)?.acknowledgement_required))throw new Error("Revise e confirme a reconexão deste bloco antes de executar.");
     if (!runnable.length) { this.message("Escreva código no bloco antes de executar."); return; }
     this.cancelRequests.delete(sessionId);
     this.patchSession(sessionId, (session) => ({ ...session, busy: true, executionStartedAt: undefined, notice: undefined,
@@ -915,6 +985,8 @@ export class WorkspaceController {
           break;
         }
         completed = result;
+        // A periodic rerun could repeat a write whose outcome is unknown.
+        if(result.connection_lost)this.stopPeriodic(sessionId);
         const frame = result.results.at(-1);
         if(frame)queueResult={result_id:frame.result_id,rows:frame.row_count};
         lastContext = { ...lastContext, success: result.status === "succeeded", error: result.error,
@@ -1005,6 +1077,8 @@ export class WorkspaceController {
   }
   onRuntimeEvent(event: RuntimeEvent) {
     if (!isRuntimeEvent(event)) return;
+    if(event.event==="connection.recovery"&&this.dismissedRecoveries.has(event.payload.recovery_id))return;
+    if(event.event==="execution.finished"&&event.payload.connection_recovery&&this.dismissedRecoveries.has(event.payload.connection_recovery.recovery_id))event={...event,payload:{...event.payload,connection_recovery:undefined}};
     if(event.event==="data.import_progress"){
       const progress=event.payload;
       this.patchSession(progress.session_id,s=>s.dataImport?.operationId!==progress.operation_id||s.dataImport.phase==="cancelling"||progress.phase==="completed"?s:{...s,dataImport:{...s.dataImport,phase:progress.phase,current:progress.current,total:progress.total}});
@@ -1014,18 +1088,18 @@ export class WorkspaceController {
       const message = event.payload.message || "O runtime Python foi encerrado.";
       for (const review of this.pendingSqlReviews.values()) review.abort(); this.pendingSqlReviews.clear();
       for (const timer of this.periodicTimers.values()) clearTimeout(timer); this.periodicTimers.clear();
-      this.runtimeGeneration++; this.initialization = undefined; this.runtimeSessions.clear(); this.creatingSessions.clear(); this.connectingSessions.clear();
+      this.runtimeGeneration++; this.initialization = undefined; this.runtimeSessions.clear(); this.creatingSessions.clear(); this.connectingSessions.clear();this.recoveringConnections.clear();
       for (const completion of this.completions.values()) completion.reject(new Error(message));
       this.completions.clear();
       this.setState({ ...this.state, runtimeStatus: "unavailable", runtimeInfo: undefined, message,
         sessions: this.state.sessions.map((session) => ({ ...session, busy: false, currentExecutionId: undefined, currentBlockId: undefined,
-          connection: undefined, connectionState:{...session.connectionState,...(session.connectionState?.phase==="ready"?{scope:{database:session.database,schema:session.schema}}:{}),phase:"error",error:message},variables: [], results: [], images: [], richOutputs:[], commandExecutions:[], executionOutput:undefined, periodicSeconds:undefined, runtimeError: undefined, notice: "Runtime encerrado. As variáveis e conexões foram descartadas.",
+          connection: undefined, connectionRecovery:undefined, connectionState:{...session.connectionState,...(session.connectionState?.phase==="ready"?{scope:{database:session.database,schema:session.schema}}:{}),phase:"error",error:message},variables: [], results: [], images: [], richOutputs:[], commandExecutions:[], executionOutput:undefined, periodicSeconds:undefined, runtimeError: undefined, notice: "Runtime encerrado. As variáveis e conexões foram descartadas.",
           dataImport:session.dataImport?{...session.dataImport,phase:"error",error:message}:undefined,
-          blocks: session.blocks.map((block) => block.status === "running" || block.status === "cancelling" ? { ...block, results:undefined, transactionState:undefined, executionStartedAt:undefined, status: "failed", error: message } : block.status === "queued" ? { ...block, results:undefined, transactionState:undefined, executionStartedAt:undefined, status: "cancelled" } : {...block,results:undefined,transactionState:undefined,executionStartedAt:undefined}) })) });
+          blocks: session.blocks.map((block) => block.status === "running" || block.status === "cancelling" ? { ...block, results:undefined, transactionState:undefined, connectionRecovery:undefined, executionStartedAt:undefined, status: "failed", error: message } : block.status === "queued" ? { ...block, results:undefined, transactionState:undefined, connectionRecovery:undefined, executionStartedAt:undefined, status: "cancelled" } : {...block,results:undefined,transactionState:undefined,connectionRecovery:undefined,executionStartedAt:undefined}) })) });
       return;
     }
     if (!event || !event.payload?.session_id) return;
-    this.patchSession(event.payload.session_id, (session) => applyRuntimeEvent(session, event));
+    this.patchSession(event.payload.session_id, (session) => applyRuntimeEvent(session, event,this.automaticTransactions));
     if (event.event === "session.error") {
       this.pendingSqlReviews.get(event.payload.session_id)?.abort();
       this.connectingSessions.delete(event.payload.session_id);

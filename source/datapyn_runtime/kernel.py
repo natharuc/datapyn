@@ -29,6 +29,39 @@ MAX_OUTPUT_BYTES = 256 * 1024
 from .result_store import ResultStore, MAX_PAGE_ROWS, MAX_RESULT_HANDLES
 
 
+def python_uses_database(code, namespace=None):
+    """Local DataFrame work must remain available while a database is offline."""
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return False
+    nodes = list(ast.walk(tree))
+    if any(isinstance(node, ast.Name) and node.id == "db_engine" for node in nodes):
+        return True
+    # A legacy DataFrame/user function called sql is ordinary Python. New local
+    # definitions can still call the managed helper lazily before replacing it.
+    shadows_sql = any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == "sql"
+                      or isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store) and node.id == "sql" for node in nodes)
+    existing = (namespace or {}).get("sql")
+    managed = existing is None or type(existing) is types.FunctionType and existing.__dict__.get("_datapyn_sql_helper") is True
+    return managed and not shadows_sql and any(isinstance(node, ast.Name) and node.id == "sql" for node in nodes)
+
+
+def connection_loss_error(error):
+    """SQLAlchemy can wrap a managed engine's transport error in DBAPIError."""
+    from src.database.connection_recovery import ConnectionLostError
+    pending, seen = [error], set()
+    while pending and len(seen) < 12:
+        current = pending.pop(0)
+        if not isinstance(current, BaseException) or id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, ConnectionLostError):
+            return current
+        pending.extend((getattr(current, "orig", None), current.__cause__, current.__context__))
+    return None
+
+
 class OutputCapture:
     """Stream small batches with a shared stdout/stderr budget per execution."""
 
@@ -188,6 +221,31 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
     connection_labels = {}
     snapshot_dirty = False
 
+    def recovery_event(outcome, params):
+        config = params.get("_connection_config") or params.get("config") or pool.default_config or {}
+        event = {"session_id": session_id, **outcome,
+                 "automatic_transactions": context_automatic_transactions(params),
+                 "requested_scope": {field: params.get(field) for field in ("connection_id", "database", "schema")}}
+        if params.get("block_id"):
+            event["block_id"] = params["block_id"]
+        if params.get("scope_inherited") is True:
+            event["scope_inherited"] = True
+        if config.get("db_type"):
+            event["db_type"] = config["db_type"]
+        emit("connection.recovery", event)
+        if outcome["phase"] == "ready":
+            send({"language_context": {"key": editor_context_key(params), "variables": namespace_snapshot(namespace),
+                  "connection_id": params.get("connection_id") or pool.default_id,
+                  "block_id": params.get("block_id"), "scope_inherited": params.get("scope_inherited") is True,
+                  "automatic_transactions": context_automatic_transactions(params),
+                  "db_type": config.get("db_type", ""), "database": params.get("database") or config.get("database", ""),
+                  "schema_name": params.get("schema") if params.get("schema") is not None else config.get("schema", ""),
+                  "requested_scope": {field: params.get(field) for field in ("connection_id", "database", "schema")},
+                  "schema": {}, "metadata_invalidated": True,
+                  "metadata_invalidation_scope": "connection" if context_automatic_transactions(params) else "block"}})
+
+    pool.on_recovery = recovery_event
+
     def autosave():
         nonlocal snapshot_dirty
         if not snapshot_dirty:
@@ -215,9 +273,9 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
               "connection_id": pool.active_key[0] if pool.active_key else None,
               "connection_name": connection_labels.get(pool.active_key)}})
 
-    def activate(params, *, default=False):
+    def activate(params, *, default=False, validate=False):
         nonlocal connector, context_key, context_params
-        connector = pool.activate(params, default=default)
+        connector = pool.activate(params, default=default, validate=validate)
         config = params.get("_connection_config") or params.get("config") or pool.default_config or {}
         name = params.get("_connection_name") or config.get("name")
         if name:
@@ -240,17 +298,19 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
         })
         return connector
 
-    def publish_context(params=None, *, metadata=False, invalidated=False, invalidation_scope="connection"):
+    def publish_context(params=None, *, metadata=False, invalidated=False, invalidation_scope="connection", namespace_only=False):
         publish_safety_context()
         params = context_params if params is None else params
-        key = context_key
+        key = editor_context_key(params) if namespace_only else context_key
         context = {"key": key, "variables": namespace_snapshot(namespace), "connection_id": pool.active_key[0] if pool.active_key else None,
                    "automatic_transactions": context_automatic_transactions(params)}
+        if namespace_only:
+            context["connection_id"] = params.get("connection_id") or pool.default_id
         if params.get("block_id"):
             context["block_id"] = params["block_id"]
         if params.get("scope_inherited"):
             context["scope_inherited"] = True
-        if connector is not None:
+        if connector is not None and not namespace_only:
             context["automatic_transactions"] = getattr(connector, "automatic_transactions", True)
             resolved = pool.explorer().context()
             context.update(db_type=resolved["db_type"], database=resolved["database"], schema_name=resolved["schema"],
@@ -319,6 +379,7 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                 sys.stdout, sys.stderr = CapturedStream(capture, "stdout"), CapturedStream(capture, "stderr")
                 results, rich_outputs, error, download_result = [], [], None, None
                 connection_error = None
+                pool.last_recovery = None
                 command_results = []
                 execution_connection = None
                 executing_connector = None
@@ -335,10 +396,11 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                     safety_config = params.get("_connection_config") or params.get("config") or pool.default_config or {}
                     safety_enabled, safety_authorized = require_kernel_review("execution.run", params, safety_config.get("db_type", ""))
                     before = {name: id(value) for name, value in namespace.items() if store.is_frame(value)}
-                    if (params.get("connection_id") or params.get("_connection_config") or params.get("config")
+                    uses_database = params["language"] == "sql" or python_uses_database(params["code"], namespace)
+                    if uses_database and (params.get("connection_id") or params.get("_connection_config") or params.get("config")
                             or pool.default_config is not None or connector is not None):
-                        activate(params, default=bool(params.get("scope_inherited")))
-                    if connector is not None:
+                        activate(params, default=bool(params.get("scope_inherited")), validate=True)
+                    if connector is not None and uses_database:
                         executing_connector = connector
                         physical_scope_changed = previous_connector is not None and previous_connector is not connector
                         previous_context = pool.explorer().context()
@@ -402,11 +464,13 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                         enable_user_packages()
                         def make_sql_helper(target, mode, scope):
                             def run_sql(query, parameters=None):
-                                nonlocal command_results
+                                nonlocal command_results, target, executing_connector, previous_context
                                 if not scope["active"]:
                                     raise ConnectionError("Use sql() from the currently executing block")
                                 if target is None:
-                                    raise ConnectionError("Connect this block to a database first")
+                                    target = activate(params, default=bool(params.get("scope_inherited")), validate=True)
+                                    executing_connector = target
+                                    previous_context = pool.explorer().context()
                                 require_query_review(query, safety_enabled, safety_authorized, target.db_type)
                                 from .sql_commands import command_results as normalize_results, is_command_frame
                                 if isinstance(query, str):
@@ -449,11 +513,17 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                         rich_capture.add(output)
                     rich_outputs = rich_capture.outputs
                 except BaseException as exc:
+                    lost_error = connection_loss_error(exc)
+                    if lost_error is not None:
+                        owner = getattr(lost_error, "_datapyn_connector", None)
+                        if any(owner is item for item in pool.items.values()):
+                            executing_connector = owner
+                        exc = lost_error
                     code = getattr(exc, "code", "")
                     if code == "transaction_pending":
                         affinity = pool.block_affinity.get(str(params.get("_execution_scope_id") or ""))
                         executing_connector = pool.items.get(affinity)
-                    if isinstance(code, str) and code.startswith(("ssh_", "transaction_", "destructive_sql_")):
+                    if isinstance(code, str) and code.startswith(("ssh_", "transaction_", "destructive_sql_", "connection_lost", "connection_unavailable")):
                         from .errors import serialize_runtime_error
                         connection_error = serialize_runtime_error(exc)
                         error = connection_error["message"]
@@ -479,6 +549,8 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                     "automatic_transactions": params["automatic_transactions"],
                 }
                 transaction_state = getattr(executing_connector, "get_transaction_state", None)
+                if executing_connector is not None and executing_connector.db_type in {"sqlserver", "postgresql", "mysql", "mariadb", "databricks", "sqlite"}:
+                    payload["db_type"] = executing_connector.db_type
                 if callable(transaction_state):
                     try:
                         state = transaction_state()
@@ -496,6 +568,25 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                 if connection_error:
                     payload["error_code"] = connection_error["code"]
                     payload["error_details"] = connection_error.get("details", {})
+                    if connection_error["code"] in {"connection_lost", "connection_unavailable"}:
+                        payload["connection_lost"] = True
+                if error and executing_connector is not None:
+                    lost = pool.recovery_state(executing_connector, pool.configs.get(pool.active_key, {}))
+                    if lost:
+                        payload["connection_lost"] = True
+                        # Repair the transport for the NEXT command. The failed
+                        # job remains failed, including SQL that may have run.
+                        try:
+                            affected = next((key for key, item in pool.items.items() if item is executing_connector), None)
+                            if affected is not None:
+                                replacement = pool._recover_key(affected, params)
+                                if connector is executing_connector:
+                                    connector = replacement
+                                    namespace["db_engine"] = replacement.engine
+                        except Exception:
+                            pass
+                if pool.last_recovery:
+                    payload["connection_recovery"] = dict(pool.last_recovery)
                 if rich_outputs:
                     payload["rich_outputs"] = rich_outputs
                 if download_result is not None:
@@ -534,7 +625,9 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                 # All blocks share this interpreter's namespace. Publish its
                 # immutable names/types/columns before clients observe the
                 # completed execution, without waiting for database metadata.
-                if connector is None or executing_connector is connector:
+                if params["language"] == "python" and (executing_connector is None or executing_connector is not connector):
+                    publish_context(params, namespace_only=True)
+                elif connector is None or executing_connector is connector:
                     publish_context(params)
                 from .notifications import capture_completion
                 notification = capture_completion(params, payload, namespace, store, connection_context=execution_connection)
@@ -561,6 +654,25 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                     safe_config = without_secrets({**(pool.default_config or {}), **resolved})
                     result = {"status": "connected", "connection_id": params.get("connection_id"), "config": safe_config, **resolved}
                     publish_context()
+                elif method == "connection.recover":
+                    outcome = pool.recover(params)
+                    connector = pool.active
+                    if connector is not None and outcome["phase"] == "ready":
+                        context_key = editor_context_key(params)
+                        context_params = dict(params)
+                        name = params.get("_connection_name")
+                        if name:
+                            connection_labels[pool.active_key] = str(name)
+                        resolved = pool.explorer().context()
+                        namespace.update(db_engine=connector.engine, db_type=connector.db_type,
+                                         db_database=resolved["database"], db_schema=resolved["schema"],
+                                         db_host=connector.connection_params.get("host", ""),
+                                         db_username=connector.connection_params.get("username", ""))
+                        publish_context(params, invalidated=True, invalidation_scope="block")
+                        from .connection_catalog import without_secrets
+                        result = {**outcome, **resolved, "config": without_secrets({**(pool.configs.get(pool.active_key) or {}), **resolved})}
+                    else:
+                        result = outcome
                 elif method == "connection.disconnect":
                     pool.disconnect(params.get("connection_id"))
                     connector = pool.active

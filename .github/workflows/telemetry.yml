@@ -1,0 +1,42 @@
+name: DataPyn telemetry - Cloudflare
+
+on:
+  push:
+    branches: [main]
+    paths: ["services/telemetry/**", ".github/workflows/telemetry.yml"]
+  pull_request:
+    paths: ["services/telemetry/**", ".github/workflows/telemetry.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: datapyn-telemetry-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  collector:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: services/telemetry
+    env:
+      WRANGLER_SEND_METRICS: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: services/telemetry/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm run check
+      - name: Deploy scoped collector
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npm run deploy

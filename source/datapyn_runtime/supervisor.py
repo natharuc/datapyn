@@ -426,7 +426,7 @@ class SessionRuntime:
             self._active = None
             if "result" in message:
                 from .connection_catalog import without_secrets
-                if job.method == "connection.connect":
+                if job.method in {"connection.connect", "connection.recover"} and message["result"].get("phase", "ready") == "ready":
                     self._sql_safety_default = without_secrets(message["result"].get("config") or {})
                     self._sql_safety_default_name = job.params.get("_connection_name") or job.params.get("connection_name")
                 elif job.method == "connection.disconnect":
@@ -600,6 +600,8 @@ class Supervisor:
         self.background = BackgroundJobs(self.emit)
         self.desktop_services = DesktopServices(emit)
         self.pynia = PyniaService(self.emit, self.internal_rpc, self.internal_query, lambda: self.catalog, state_path=self.profile_path)
+        from .telemetry import TelemetryService
+        self.telemetry = TelemetryService()
 
     def deliver_notification(self, request_id, prepared):
         if request_id is not None:
@@ -623,6 +625,13 @@ class Supervisor:
             prepared.pop("_secrets", None)
 
     def _deliver(self, message):
+        telemetry = getattr(self, "telemetry", None)
+        if telemetry is not None:
+            try:
+                telemetry.observe(message)
+            except Exception:
+                # Diagnostics must never prevent an execution/result IPC event.
+                pass
         request_id = message.get("id")
         event = message.get("event")
         execution_id = message.get("payload", {}).get("execution_id") if event else None
@@ -899,6 +908,14 @@ class Supervisor:
             self.emit({"id": request_id, "error": serialize_runtime_error(exc, default_code="internal_error")})
 
     def dispatch(self, method: str, params: dict, request_id: int):
+        if method == "telemetry.settings.get":
+            return self.telemetry.status()
+        if method == "telemetry.settings.set":
+            return self.telemetry.configure(params)
+        if method == "telemetry.event":
+            return self.telemetry.record(params)
+        if method == "telemetry.client":
+            return self.telemetry.client_info(params)
         if method == "system.info":
             from src.database.sqlserver_network_auth import sqlserver_authentication_capabilities
             return {
@@ -1180,8 +1197,10 @@ class Supervisor:
             return {"execution_id": execution_id, "status": "queued"}
         if method == "execution.cancel":
             return self._session(params).cancel(self._identifier(params.get("execution_id"), "execution_id"))
-        if method in {"connection.connect", "connection.disconnect", "schema.get", "result.page", "result.column_values", "result.release", "explorer.list", "explorer.details", "explorer.query", "explorer.use_database"}:
+        if method in {"connection.connect", "connection.recover", "connection.disconnect", "schema.get", "result.page", "result.column_values", "result.release", "explorer.list", "explorer.details", "explorer.query", "explorer.use_database"}:
             routed = self._route(params)
+            if method == "connection.recover" and "acknowledge_state_loss" in params and not isinstance(params["acknowledge_state_loss"], bool):
+                raise RuntimeErrorResponse("invalid_params", "acknowledge_state_loss must be a boolean")
             if method == "connection.connect" and not isinstance(routed.get("config") or routed.get("_connection_config"), dict):
                 raise RuntimeErrorResponse("invalid_params", "config must be an object")
             if method in {"result.page", "result.column_values", "result.release"}:
@@ -1211,6 +1230,7 @@ class Supervisor:
 
     def close(self):
         self.background.close()
+        self.telemetry.close()
         self.desktop_services.close()
         self.pynia.close()
         for session in list(self.sessions.values()):

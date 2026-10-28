@@ -1,0 +1,19 @@
+{
+  "name": "datapyn-telemetry",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/*.test.mjs",
+    "typecheck": "wrangler types && tsc --noEmit",
+    "types": "wrangler types",
+    "dev": "wrangler dev",
+    "deploy": "node scripts/deploy.mjs",
+    "check": "wrangler deploy --dry-run"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261028.1",
+    "typescript": "7.0.2",
+    "wrangler": "4.154.0"
+  }
+}

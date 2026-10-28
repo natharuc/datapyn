@@ -15,9 +15,9 @@ from .sql_safety_settings import settings_get, settings_path
 MAX_TICKETS = 256
 TICKET_TTL = 300
 MAX_CODE_BYTES = 1024 * 1024
-CONTEXT_MUTATIONS = {"execution.run", "connection.connect", "connection.disconnect", "explorer.use_database",
+CONTEXT_MUTATIONS = {"execution.run", "connection.connect", "connection.recover", "connection.disconnect", "explorer.use_database",
                      "result.export_table", "data.import", "variable.delete", "variable.archive.import", "snapshot.restore"}
-CONTEXT_ACTIVATIONS = {"execution.run", "connection.connect", "connection.disconnect", "explorer.use_database",
+CONTEXT_ACTIVATIONS = {"execution.run", "connection.connect", "connection.recover", "connection.disconnect", "explorer.use_database",
                        "schema.get", "language.context", "explorer.list", "explorer.details", "explorer.query",
                        "explorer.snapshot", "result.export_table"}
 

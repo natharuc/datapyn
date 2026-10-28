@@ -16,4 +16,9 @@ def serialize_runtime_error(error, *, default_code="operation_failed"):
         # Only the server's public identity belongs in a trust confirmation.
         fields = {"host", "port", "key_type", "public_key", "fingerprint", "expected_fingerprint"}
         result["details"] = without_secrets({key: value for key, value in details.items() if key in fields})
+    elif code == "connection_lost" and isinstance(details, dict):
+        fields = {"acknowledgement_required", "submitted", "session_state_lost"}
+        result["details"] = {key: value for key, value in details.items() if key in fields and isinstance(value, bool)}
+    elif code == "connection_unavailable":
+        result["details"] = {"retryable": True}
     return result

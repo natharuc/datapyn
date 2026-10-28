@@ -1,0 +1,15 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "datapyn-telemetry",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-28",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "analytics_engine_datasets": [
+    {"binding": "EVENTS", "dataset": "datapyn_telemetry"}
+  ],
+  "ratelimits": [
+    {"name": "INGEST_LIMIT", "namespace_id": "10013", "simple": {"limit": 300, "period": 60}}
+  ],
+  "observability": {"enabled": false}
+}

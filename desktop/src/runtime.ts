@@ -46,11 +46,47 @@ export interface TransactionState {
   transaction_count?: number;
   xact_state?: number;
 }
+export interface ConnectionRecoveryOutcome {
+  phase: "recovering" | "ready" | "error" | "blocked";
+  recovery_id: string; attempt?: number; max_attempts?: number; error?: string;
+  acknowledgement_required?: boolean; session_state_lost?: boolean;
+  affected_block_ids?: string[];
+}
+export interface ConnectionRecoveryState extends ConnectionRecoveryOutcome {
+  session_id: string; block_id?: string; scope_inherited?: boolean;
+  automatic_transactions: boolean;
+  requested_scope: { connection_id?: string | null; database?: string | null; schema?: string | null };
+  execution_id?: string;
+}
+export function isConnectionRecoveryOutcome(input: unknown): input is ConnectionRecoveryOutcome {
+  if (!input || typeof input !== "object") return false;
+  const value=input as Partial<ConnectionRecoveryOutcome>;
+  return typeof value.recovery_id==="string" && Boolean(value.recovery_id)
+    && ["recovering","ready","error","blocked"].includes(String(value.phase))
+    && (value.error===undefined || typeof value.error==="string")
+    && [value.acknowledgement_required,value.session_state_lost].every(flag=>flag===undefined || typeof flag==="boolean")
+    && (value.affected_block_ids===undefined || Array.isArray(value.affected_block_ids) && value.affected_block_ids.every(id=>typeof id==="string"))
+    && [value.attempt,value.max_attempts].every(count=>count===undefined || typeof count==="number" && Number.isInteger(count) && count>=0);
+}
+export function isConnectionRecoveryState(input: unknown): input is ConnectionRecoveryState {
+  if (!isConnectionRecoveryOutcome(input)) return false;
+  const value=input as Partial<ConnectionRecoveryState>,scope=value.requested_scope;
+  return typeof value.session_id==="string" && typeof value.recovery_id==="string" && Boolean(value.recovery_id)
+    && ["recovering","ready","error","blocked"].includes(String(value.phase))
+    && typeof value.automatic_transactions==="boolean"
+    && Boolean(scope && typeof scope==="object" && !Array.isArray(scope))
+    && [scope?.connection_id,scope?.database,scope?.schema].every(part=>part==null || typeof part==="string")
+    && (value.block_id===undefined || typeof value.block_id==="string")
+    && (value.scope_inherited===undefined || typeof value.scope_inherited==="boolean")
+    && (value.execution_id===undefined || typeof value.execution_id==="string");
+}
 export interface ExecutionFinished {
   session_id: string; execution_id: string; block_id?: string; status: "succeeded" | "failed" | "cancelled";
   scope_inherited?: boolean;
   automatic_transactions?: boolean;
   transaction_state?: TransactionState;
+  connection_lost?: boolean;
+  connection_recovery?: ConnectionRecoveryOutcome;
   duration_ms: number; error?: string; results: ResultRef[]; variables: Variable[];
   rich_outputs?: RichOutput[];
   command_results?: SqlCommandResult[];
@@ -60,6 +96,7 @@ export interface ExecutionFinished {
   export?: {files:Array<{path:string;rows:number;columns:number;size_bytes:number}>;total_rows:number;cancelled:boolean;errors:string[]};
 }
 export type RuntimeEvent =
+  | { event: "connection.recovery"; payload: ConnectionRecoveryState }
   | { event: "notifications.delivery_finished"; payload: {session_id:string;execution_id:string;block_id?:string;workspace_id?:string;deliveries:Record<string,{status:string;error?:string}>} }
   | { event: "execution.started"; payload: { session_id: string; execution_id: string } }
   | { event: "execution.output"; payload: { session_id: string; execution_id: string; stream: string; text: string } }
@@ -80,6 +117,7 @@ export function isRuntimeEvent(value: unknown): value is RuntimeEvent {
   if (!payload || typeof payload !== "object") return false;
   if (event === "backend.exited") return typeof payload.message === "string";
   if (typeof payload.session_id !== "string") return false;
+  if (event === "connection.recovery") return isConnectionRecoveryState(payload);
   if (event === "session.ready" || event === "session.reset") return true;
   if (event === "session.error") return typeof payload.error === "string";
   if (event === "notifications.delivery_finished") return typeof payload.execution_id === "string" && Boolean(payload.deliveries && typeof payload.deliveries === "object");
@@ -101,6 +139,8 @@ export function isRuntimeEvent(value: unknown): value is RuntimeEvent {
   if (event === "execution.export_progress") return typeof payload.path === "string" && typeof payload.rows === "number";
   if (event !== "execution.finished" || !["succeeded", "failed", "cancelled"].includes(String(payload.status))) return false;
   if (payload.automatic_transactions !== undefined && typeof payload.automatic_transactions !== "boolean") return false;
+  if (payload.connection_lost !== undefined && typeof payload.connection_lost !== "boolean") return false;
+  if (payload.connection_recovery !== undefined && !isConnectionRecoveryOutcome(payload.connection_recovery)) return false;
   if (payload.transaction_state !== undefined) {
     const state=payload.transaction_state as Partial<TransactionState> | null;
     if (!state || typeof state.automatic_transactions !== "boolean"
@@ -160,7 +200,7 @@ export function createRuntimeRequester(call: <T>(method: string, params: Record<
     try {
       try {
         const result=await call<T>(method, params);
-        if(method==="connection.connect" || method==="connection.test" || method==="ssh.tunnels.test")current();
+        if(method==="connection.connect" || method==="connection.recover" || method==="connection.test" || method==="ssh.tunnels.test")current();
         return result;
       }
       catch (failure) {

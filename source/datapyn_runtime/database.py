@@ -20,6 +20,14 @@ class PendingTransactionError(ConnectionError):
         super().__init__("Há uma transação pendente neste bloco. Mantenha transações automáticas desativadas e execute COMMIT ou ROLLBACK antes de trocar o modo/conexão.")
 
 
+class ConnectionUnavailableError(ConnectionError):
+    code = "connection_unavailable"
+
+    def __init__(self, error):
+        super().__init__(f"Não foi possível estabelecer a conexão: {type(error).__name__}: {error}")
+        self.details = {"retryable": True}
+
+
 def pending_transaction(connector):
     """Uncertain manual sessions are retained, never assumed safe to discard."""
     check = getattr(connector, "has_pending_transaction", None)
@@ -29,6 +37,11 @@ def pending_transaction(connector):
         except Exception:
             return True
     return getattr(connector, "automatic_transactions", True) is False
+
+
+def context_mode_changed(params, connector):
+    from .transaction_settings import context_automatic_transactions
+    return context_automatic_transactions(params) != getattr(connector, "automatic_transactions", True)
 
 
 class SQLiteConnector:
@@ -287,6 +300,173 @@ class ConnectorPool:
         self._ssh_catalog_signature = None
         self._ssh_configs = OrderedDict()
         self._sqlite_memory_prefix = f"file:datapyn-{uuid.uuid4().hex}"
+        self.on_recovery = None
+        self.last_recovery = None
+        self._recovery_cooldowns = {}
+
+    @staticmethod
+    def recovery_state(connector, config):
+        """Read local transport flags; this method never submits SQL."""
+        state = getattr(connector, "get_connection_recovery_state", None)
+        if callable(state):
+            value = state()
+            if isinstance(value, dict) and value.get("required"):
+                return value
+        if getattr(connector, "_manual_connection_lost", False):
+            return {"required": True, "acknowledgement_required": True, "session_state_lost": True}
+        connected = getattr(connector, "is_connected", None)
+        if (ConnectorPool._ssh_connection_expired(connector, config)
+                or callable(connected) and not connected()):
+            return {"required": True, "acknowledgement_required": pending_transaction(connector), "session_state_lost": True}
+        if isinstance(connector, SQLiteConnector):
+            try:
+                connector.connection.in_transaction
+            except sqlite3.ProgrammingError as error:
+                if "closed" in str(error).lower():
+                    return {"required": True, "acknowledgement_required": connector.database == ":memory:" or not connector.automatic_transactions,
+                            "session_state_lost": True}
+                raise
+        return None
+
+    def _recovery_event(self, outcome, params):
+        self.last_recovery = dict(outcome)
+        if callable(self.on_recovery):
+            self.on_recovery(dict(outcome), dict(params))
+
+    def _affected_blocks(self, key, params):
+        return sorted({block for block, owned in self.block_affinity.items() if owned == key}
+                      | ({str(params["block_id"])} if params.get("block_id") else set()))
+
+    @staticmethod
+    def _connect_initial(config):
+        from src.database.connection_recovery import classify_connection_error
+        for attempt in range(2):
+            try:
+                return connect(config)
+            except Exception as error:
+                if not classify_connection_error(error, config.get("db_type", "")):
+                    raise
+                if attempt:
+                    raise ConnectionUnavailableError(error) from error
+                time.sleep(0.2)
+
+    def _recover_key(self, key, params, *, acknowledge=False, force=False):
+        """Replace only a dead lane, never replay the job that detected it."""
+        import uuid
+        started = time.perf_counter()
+        from src.database.connection_recovery import ConnectionLostError, classify_connection_error
+        previous = self.items[key]
+        config = dict(self.configs[key])
+        fresh = params.get("_connection_config") or params.get("config")
+        if isinstance(fresh, dict) and database_credential_identity(fresh) == database_credential_identity(config):
+            for field in ("password", "sslpassword", "ssl_key_password"):
+                if field in fresh:
+                    config[field] = fresh[field]
+        state = self.recovery_state(previous, config) or {"required": True, "session_state_lost": True,
+                                                       "acknowledgement_required": pending_transaction(previous)}
+        memory = isinstance(previous, SQLiteConnector) and previous.database == ":memory:"
+        requires_ack = state.get("acknowledgement_required") is True or memory or bool(getattr(previous, "has_temporary_tables", False))
+        outcome = {"recovery_id": uuid.uuid4().hex, "phase": "recovering", "attempt": 0, "max_attempts": 2,
+                   "acknowledgement_required": requires_ack, "session_state_lost": True, "duration_ms": 0,
+                   "affected_block_ids": self._affected_blocks(key, params)}
+        if requires_ack and not acknowledge:
+            self._recovery_event(outcome, params)
+            outcome.update(phase="blocked", error="A conexão foi interrompida. Confirme a abertura de uma nova conexão; transações e objetos temporários anteriores não podem ser recuperados.")
+            self._recovery_event(outcome, params)
+            raise ConnectionLostError(outcome["error"], acknowledgement_required=True, submitted=bool(state.get("submitted")))
+        cooldown = self._recovery_cooldowns.get(key)
+        if not force and cooldown and time.monotonic() < cooldown[0]:
+            self.last_recovery = dict(cooldown[1])
+            raise ConnectionLostError(cooldown[1]["error"], acknowledgement_required=requires_ack, submitted=False)
+        # A successful transport is published atomically; failed authentication
+        # leaves the old lane and its target available to the explicit retry.
+        for attempt in range(1, 3):
+            outcome.update(attempt=attempt)
+            self._recovery_event(outcome, params)
+            try:
+                replacement = connect(self._current_tunnel_config(config))
+                break
+            except Exception as error:
+                if attempt < 2 and classify_connection_error(error, config.get("db_type", "")):
+                    time.sleep(0.2)
+                    continue
+                outcome.update(phase="error", error=f"Não foi possível reconectar: {type(error).__name__}: {error}",
+                               duration_ms=round((time.perf_counter() - started) * 1000, 3))
+                self._recovery_cooldowns[key] = (time.monotonic() + 3, dict(outcome))
+                self._recovery_event(outcome, params)
+                if str(getattr(error, "code", "")).startswith("ssh_"):
+                    raise
+                raise ConnectionLostError(outcome["error"], acknowledgement_required=requires_ack, submitted=False) from error
+        new_key = (*self._key(key[0], config), *key[2:])
+        if new_key != key and new_key in self.items:
+            new_key = (*new_key[:2], str(time.monotonic_ns()))
+        self.items.pop(key)
+        self.configs.pop(key, None)
+        self.last_used.pop(key, None)
+        self.items[new_key] = replacement
+        self.configs[new_key] = config
+        self.explorers.pop(key, None)
+        self.last_used[new_key] = time.monotonic()
+        self.block_affinity = {block: new_key if owned == key else owned for block, owned in self.block_affinity.items()}
+        if self.active_key == key:
+            self.active_key = new_key
+        if self.default_active_key == key:
+            self.default_active_key = new_key
+            if self.default_config is not None:
+                self.default_config.update({field: config[field] for field in ("password", "sslpassword", "ssl_key_password") if field in config})
+        self._recovery_cooldowns.pop(key, None)
+        try:
+            previous.disconnect()
+        except Exception:
+            pass
+        outcome.update(phase="ready", acknowledgement_required=False, duration_ms=round((time.perf_counter() - started) * 1000, 3))
+        self._recovery_event(outcome, params)
+        return replacement
+
+    def recover(self, params):
+        """Explicit recovery returns a structured outcome even when blocked."""
+        from src.database.connection_recovery import ConnectionLostError
+        block = str(params.get("block_id") or "")
+        key = self.block_affinity.get(block)
+        identifier = params.get("connection_id")
+        def matches(candidate):
+            from .explorer import ObjectExplorer
+            item = self.items[candidate]
+            current = ObjectExplorer(item).context()
+            return not ((identifier is not None and candidate[0] != identifier)
+                        or (params.get("database") is not None and str(params["database"]) != current["database"])
+                        or (params.get("schema") is not None and str(params["schema"]) != current["schema"])
+                        or context_mode_changed(params, item))
+        if key in self.items and not matches(key):
+            return {"recovery_id": __import__("uuid").uuid4().hex, "phase": "error", "acknowledgement_required": False,
+                    "session_state_lost": False, "error": "O contexto deste bloco mudou. Revise a conexão atual antes de tentar novamente."}
+        if key not in self.items:
+            candidates = dict.fromkeys([self.default_active_key, self.active_key, *self.items])
+            key = next((candidate for candidate in candidates if candidate in self.items and matches(candidate)
+                        and (getattr(self.items[candidate], "automatic_transactions", True)
+                             or self.configs[candidate].get("_execution_scope_id") == (block or "__metadata__"))), None)
+        if key not in self.items:
+            owned = {**params, **({"_execution_scope_id": block} if block else {})}
+            self.activate(owned, default=params.get("scope_inherited") is True)
+            return {"recovery_id": __import__("uuid").uuid4().hex, "phase": "ready", "acknowledgement_required": False, "session_state_lost": False}
+        state = self.recovery_state(self.items[key], self.configs[key])
+        if state is None:
+            validator = getattr(self.items[key], "validate_connection_for_execution", None)
+            if callable(validator):
+                try:
+                    validator()
+                except ConnectionLostError:
+                    state = self.recovery_state(self.items[key], self.configs[key])
+        if state is None:
+            self.active_key = key
+            return {"recovery_id": __import__("uuid").uuid4().hex, "phase": "ready", "acknowledgement_required": False,
+                    "session_state_lost": False, "affected_block_ids": self._affected_blocks(key, params)}
+        try:
+            replacement = self._recover_key(key, params, acknowledge=params.get("acknowledge_state_loss") is True, force=True)
+        except Exception:
+            return dict(self.last_recovery)
+        self.active_key = next(candidate for candidate, item in self.items.items() if item is replacement)
+        return dict(self.last_recovery)
 
     def _current_tunnel_config(self, config):
         """An atomic catalog revision invalidates the small, kernel-local secret cache."""
@@ -337,6 +517,7 @@ class ConnectorPool:
         self.explorers.pop(key, None)
         self.last_used.pop(key, None)
         self.configs.pop(key, None)
+        self._recovery_cooldowns.pop(key, None)
         self.block_affinity = {block: item for block, item in self.block_affinity.items() if item != key}
         if self.default_active_key == key:
             self.default_active_key = None
@@ -409,7 +590,7 @@ class ConnectorPool:
         elif self.default_active_key == old_key:
             self.default_active_key = None
 
-    def activate(self, params, *, default=False):
+    def activate(self, params, *, default=False, validate=False):
         config = params.get("_connection_config") or params.get("config")
         identifier = params.get("connection_id")
         if config is None:
@@ -421,7 +602,7 @@ class ConnectorPool:
             if self.active_key is not None and not params.get("database") and not params.get("schema"):
                 current = self.items[self.active_key]
                 active_config = self.configs.get(self.active_key, {})
-                if not params.get("_execution_scope_id") and not params.get("_metadata_scope") and not active_config.get("ssh_tunnel_id") and not self._ssh_connection_expired(current, active_config):
+                if not validate and not params.get("_execution_scope_id") and not params.get("_metadata_scope") and not active_config.get("ssh_tunnel_id") and not self.recovery_state(current, active_config):
                     return current
                 # A block-only connection may have no default configuration.
                 # Recreate its physical transport instead of returning a dead cache.
@@ -552,20 +733,18 @@ class ConnectorPool:
                     break
         if key in self.items:
             existing = self.items[key]
-            if self._ssh_connection_expired(existing, self.configs.get(key, config)):
-                if pending_transaction(existing):
-                    raise PendingTransactionError()
-                was_default = was_default or self.default_active_key == key
-                self.items.pop(key)
-                self._forget(key)
-                if self.active_key == key:
-                    self.active_key = None
-                try:
-                    existing.disconnect()
-                except Exception:
-                    # Disposal must not replace a new authentication/connection
-                    # error, nor cause a disconnected cached engine to succeed.
-                    pass
+            state = self.recovery_state(existing, self.configs.get(key, config))
+            if state is None and validate:
+                validator = getattr(existing, "validate_connection_for_execution", None)
+                if callable(validator):
+                    from src.database.connection_recovery import ConnectionLostError
+                    try:
+                        validator()
+                    except ConnectionLostError:
+                        state = self.recovery_state(existing, self.configs.get(key, config)) or {"required": True}
+            if state:
+                recovered = self._recover_key(key, params)
+                key = next(candidate for candidate, item in self.items.items() if item is recovered)
         if key not in self.items:
             if len(self.items) >= 8:
                 evict = next((item for item, existing in self.items.items()
@@ -580,7 +759,7 @@ class ConnectorPool:
                 old_connector.disconnect()
             if key[:2] in self.namespace_settings:
                 config["postgresql_search_path"] = self.namespace_settings[key[:2]]
-            connector = connect(config)
+            connector = self._connect_initial(config)
             self.items[key] = connector
             self.configs[key] = config
         else:

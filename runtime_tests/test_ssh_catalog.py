@@ -409,7 +409,7 @@ def test_reconnect_replaces_dead_ssh_transport_and_preserves_default_focus(monke
     assert opened[1][0]["database"] == "focused" and opened[1][0]["schema"] == "reporting"
     assert pool.default_id == "saved" and pool.default_active_key == pool.active_key == previous_key
     assert pool.default_config["database"] == "focused" and pool.default_config["schema"] == "reporting"
-    assert previous_key not in pool.explorers and "block" not in pool.block_affinity
+    assert previous_key not in pool.explorers and pool.block_affinity["block"] == previous_key
     assert pool.activate(params) is replacement and len(opened) == 2
 
 
@@ -434,7 +434,10 @@ def test_dead_ssh_reconnect_never_reports_success_when_authentication_fails(monk
     with pytest.raises(SshTunnelError, match="authentication failed") as rejected:
         pool.activate({"connection_id": "saved", "_connection_config": config}, default=True)
     assert rejected.value is error
-    assert not pool.items and pool.active is None and pool.default_active_key is None
+    # Keep the dead lane's identity so the same tab can explicitly retry. It is
+    # never returned as usable while its tunnel remains dead.
+    assert list(pool.items) == [key] and pool.active_key == pool.default_active_key == key
+    assert pool.last_recovery["phase"] == "error"
     assert pool.default_config == config and pool.default_id == "saved"
 
 

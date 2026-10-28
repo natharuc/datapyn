@@ -148,6 +148,11 @@ fn allowed_method(method: &str) -> bool {
             | "session.create"
             | "session.close"
             | "connection.connect"
+            | "connection.recover"
+            | "telemetry.settings.get"
+            | "telemetry.settings.set"
+            | "telemetry.event"
+            | "telemetry.client"
             | "schema.get"
             | "execution.run"
             | "execution.review"
@@ -1038,6 +1043,12 @@ mod tests {
     fn native_bridge_only_exposes_runtime_contract() {
         assert!(allowed_method("execution.cancel"));
         assert!(allowed_method("execution.review"));
+        assert!(allowed_method("connection.recover"));
+        assert!(allowed_method("telemetry.settings.get"));
+        assert!(allowed_method("telemetry.settings.set"));
+        assert!(allowed_method("telemetry.event"));
+        assert!(allowed_method("telemetry.client"));
+        assert!(!allowed_method("telemetry.export"));
         assert!(allowed_method("language.cancel"));
         assert!(allowed_method("language.prepare"));
         assert!(allowed_method("workspace.read"));
