@@ -587,6 +587,11 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                             pass
                 if pool.last_recovery:
                     payload["connection_recovery"] = dict(pool.last_recovery)
+                    if error and pool.last_recovery.get("session_state_lost") is True:
+                        # A failed preflight may report an SSH trust/auth error
+                        # before assigning executing_connector. It still lost
+                        # a cached transport, so clients must retain old grids.
+                        payload["connection_lost"] = True
                 if rich_outputs:
                     payload["rich_outputs"] = rich_outputs
                 if download_result is not None:

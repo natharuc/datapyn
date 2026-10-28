@@ -349,3 +349,52 @@ def test_python_managed_engine_alias_unwraps_loss_and_preserves_data_without_sql
     assert any(message.get("language_context", {}).get("variables", {}).get("frame", {}).get("columns") == ["id", "before_loss"] for message in messages)
     local = next(message["payload"] for message in messages if message.get("job_id") == "local")
     assert local["status"] == "succeeded", local
+
+
+@pytest.mark.parametrize("error_code", ["ssh_host_key_changed", "ssh_auth_failed"])
+def test_cached_ssh_preflight_rejection_retains_result_contract_and_original_challenge(error_code, monkeypatch):
+    from datapyn_runtime.ssh_tunnel import SshTunnelError
+    opened, messages = [], []
+    details = {"host": "offline.invalid", "port": 22, "fingerprint": "SHA256:synthetic-public-key",
+               "expected_fingerprint": "SHA256:old-public-key", "password": "must-not-escape"}
+    def connect(config):
+        if opened:
+            raise SshTunnelError("Synthetic reconnect rejection", code=error_code, details=details)
+        connector = Connector(config)
+        connector._ssh_tunnel = SimpleNamespace(alive=True)
+        connector._ssh_tunnel.is_alive = lambda: connector._ssh_tunnel.alive
+        opened.append(connector)
+        return connector
+    monkeypatch.setattr(database, "connect", connect)
+    for method in ("initialize_kernel_group", "isolate_kernel_output", "_watch_parent", "enable_user_packages"):
+        monkeypatch.setattr(kernel, method, lambda: None)
+    monkeypatch.setattr("datapyn_runtime.notifications.capture_completion", lambda *args, **kwargs: None)
+    monkeypatch.setattr("datapyn_runtime.variable_snapshot.settings_get", lambda: {"enabled": False})
+    monkeypatch.setattr("datapyn_runtime.sql_safety_guard.settings_get", lambda *args: {"confirm_destructive_sql": False})
+    target = {**params(), "_automatic_transactions_snapshot": True}
+    target["config"]["ssh"] = {"enabled": True, "host": "offline.invalid", "port": 22}
+    jobs = [
+        {"method": "connection.connect", "job_id": "connect", "params": target},
+        {"method": "execution.run", "job_id": "seed", "params": {**target, "execution_id": "seed", "language": "python", "code": "frame=pd.DataFrame({'id':[7]})\nframe"}},
+        {"method": "execution.run", "job_id": "failure", "params": {**target, "execution_id": "failure", "language": "sql", "code": "SELECT 42"}},
+        {"method": "shutdown", "job_id": "shutdown", "params": {}},
+    ]
+    class Commands:
+        def poll(self, timeout): return True
+        def recv(self): return jobs.pop(0)
+        def close(self): pass
+    def send(message):
+        messages.append(message)
+        if message.get("job_id") == "seed":
+            opened[0]._ssh_tunnel.alive = False
+    kernel.kernel_main("session", Commands(), SimpleNamespace(send=send, close=lambda: None))
+    seed = next(message["payload"] for message in messages if message.get("job_id") == "seed")
+    failed = next(message["payload"] for message in messages if message.get("job_id") == "failure")
+    assert seed["status"] == "succeeded" and seed["results"]
+    assert failed["status"] == "failed" and failed["connection_lost"] is True
+    assert failed["connection_recovery"]["phase"] == "error" and failed["connection_recovery"]["session_state_lost"] is True
+    assert failed["error_code"] == error_code and failed["error_details"]["host"] == "offline.invalid"
+    assert failed["error_details"]["fingerprint"] == "SHA256:synthetic-public-key"
+    assert "password" not in failed["error_details"]
+    assert any(variable["name"] == "frame" for variable in failed["variables"])
+    assert opened[0].statements == []
