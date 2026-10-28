@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/natharuc/datapyn/releases/tag/tauri-v1.0.12"><img src="https://img.shields.io/badge/Tauri-1.0.12-blue.svg" alt="Version"></a>
+  <a href="https://github.com/natharuc/datapyn/releases/tag/tauri-v1.0.13"><img src="https://img.shields.io/badge/Tauri-1.0.13-blue.svg" alt="Version"></a>
   <img src="https://img.shields.io/badge/Python-3.12+-3776AB.svg?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/Tauri-2-24C8D8.svg?logo=tauri&logoColor=white" alt="Tauri">
   <img src="https://img.shields.io/badge/Monaco-VS_Code-007ACC.svg?logo=visualstudiocode&logoColor=white" alt="Monaco">
@@ -53,6 +53,8 @@ Fluxo tipico: executar SQL, materializar o resultado como DataFrame nomeado e co
 - Formatacao com **Ruff** (Python) e **sqlparse** (SQL)
 - [Confirmacao de SQL destrutivo](docs/SQL_SAFETY.md), habilitada por padrao e configuravel
 - [Recuperacao de abas fechadas](docs/REOPEN_CLOSED_TABS.md) com `Ctrl+Shift+T` durante o uso do aplicativo
+- [Recuperacao de conexoes](docs/DATABASE_RESILIENCE.md) na mesma aba, preservando os DataFrames
+- [Telemetria opcional](docs/TELEMETRY.md) de falhas e desempenho, desativada por padrao
 
 ### Bancos suportados
 
@@ -111,7 +113,7 @@ Site e documentacao publica: [datapyn.page](https://datapyn.page)
 
 ## Instalacao
 
-Instaladores Tauri: [release 1.0.12](https://github.com/natharuc/datapyn/releases/tag/tauri-v1.0.12). Os arquivos seguem o nome `DataPyn-Tauri-<versao>-<plataforma>`. O link `releases/latest` permanece reservado ao PyQt6 historico.
+Instaladores Tauri: [release 1.0.13](https://github.com/natharuc/datapyn/releases/tag/tauri-v1.0.13). Os arquivos seguem o nome `DataPyn-Tauri-<versao>-<plataforma>`. O link `releases/latest` permanece reservado ao PyQt6 historico.
 
 | Sistema | Artefato | Notas |
 |---------|----------|--------|
@@ -264,7 +266,7 @@ datapyn/
 npm --prefix desktop test
 npm --prefix desktop run build
 uv run pytest -c runtime_tests/pytest.ini runtime_tests -q
-node scripts/tauri/release.mjs verify-version tauri-v1.0.12
+node scripts/tauri/release.mjs verify-version tauri-v1.0.13
 
 # Contratos Rust (a partir de desktop/src-tauri)
 cargo fmt --check

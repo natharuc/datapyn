@@ -1,6 +1,6 @@
 {
   "name": "datapyn-desktop",
-  "version": "1.0.12",
+  "version": "1.0.13",
   "private": true,
   "type": "module",
   "overrides": {
@@ -25,7 +25,9 @@
     "test:font-settings": "node scripts/test-font-settings.mjs",
     "test:sql-safety": "node scripts/test-sql-safety.mjs",
     "test:sql-safety-settings": "node scripts/test-sql-safety-settings.mjs",
-    "test:closed-tabs": "node scripts/test-closed-tabs.mjs"
+    "test:closed-tabs": "node scripts/test-closed-tabs.mjs",
+    "test:connection-recovery": "node scripts/test-connection-recovery.mjs",
+    "test:telemetry-settings": "node scripts/test-telemetry-settings.mjs"
   },
   "dependencies": {
     "@glideapps/glide-data-grid": "6.0.3",
