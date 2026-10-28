@@ -77,12 +77,14 @@ constraint-dependencies = [
     "urllib3>=2.8.0",
     # Remove distrusted roots from the bundled TLS trust store.
     "certifi>=2026.10.19",
+    # Security fixes for the audit cache's cross-process locks.
+    "filelock>=4.2.1,<5",
 ]
 override-dependencies = [
-    "msgpack>=1.2.1",
+    "msgpack>=1.2.3,<2",
     "click>=8.3.3",
-    "setuptools>=83.0.0",
-    "gitpython>=3.1.55",
+    "setuptools>=84.1.0,<85",
+    "gitpython>=3.2.1,<4",
     "pip>=26.2",
     "thrift>=0.24.0",
     # Databricks still caps OAuthLib below its fixed release. OAuthLib 4 changes
