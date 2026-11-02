@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {checkQueries} from './telemetry-admin-sql.mjs';
 import {readFile} from 'node:fs/promises';
 import {resolve, dirname} from 'node:path';
-import {probe, cloudflare, ACCOUNT_ID, HOSTNAME, WORKER, APP_NAME, OTP_NAME, parseEmails,
+import {probe, cloudflare, CloudflareApiError, ACCOUNT_ID, HOSTNAME, WORKER, APP_NAME, OTP_NAME, parseEmails,
   prepareDeployment, validateApplication, productionConfig, verifyProtection, deploy} from './telemetry-admin.mjs';
 
 test('real-query diagnostic uses fixed account scope without logging telemetry rows', async () => {
@@ -71,7 +71,7 @@ function fixture(overrides = {}) {
     const parsed = new URL(url);
     const path = parsed.pathname.replace('/client/v4/', '');
     const method = options.method ?? 'GET';
-    calls.push({path, method, body: options.body});
+    calls.push({path, method, body: options.body, authorization: options.headers?.Authorization});
     if (parsed.hostname === HOSTNAME) return new Response(null, {status: 302, headers: {Location: `${issuer}/cdn-cgi/access/login/${HOSTNAME}`}});
     const wrap = result => Response.json({success: true, result});
     if (path === 'analytics/sql/introspection') return Response.json({datasets: [{name: 'events.analyticsEngine.datapyn_telemetry', columns: [{name: 'timestamp'}, {name: 'sampleInterval'}]}]});
@@ -269,4 +269,218 @@ test('probe introspects only fixed dataset metadata and never prints configured 
   assert.ok(!JSON.stringify(results).includes(email));
   assert.ok(!JSON.stringify(results).includes('private-value'));
   assert.ok(fake.calls.every(call => call.method === 'GET'));
+});
+
+test('split credentials route Access reads and writes to the admin token while Wrangler and infrastructure keep the worker token', async () => {
+  const fake = fixture();
+  let saved, executedToken;
+  const result = await deploy({token: 'worker-test-secret', accessToken: 'access-test-secret', emails: email, request: fake.request, sourceConfig: config,
+    save: async (_path, value) => {saved = value;}, run: async (_path, value) => {executedToken = value;}});
+  assert.equal(executedToken, 'worker-test-secret');
+  const apiCalls = fake.calls.filter(call => call.path.startsWith('accounts/') || call.path.startsWith('zones'));
+  assert.ok(apiCalls.some(call => call.path.includes('/access/') && call.method === 'POST'));
+  assert.ok(apiCalls.some(call => call.path.endsWith('/subdomain')));
+  for (const call of apiCalls) {
+    assert.equal(call.authorization, `Bearer ${call.path.includes('/access/') ? 'access-test-secret' : 'worker-test-secret'}`, call.path);
+  }
+  for (const secret of ['worker-test-secret', 'access-test-secret', email]) {
+    assert.equal(JSON.stringify(saved).includes(secret), false);
+    assert.equal(JSON.stringify(result).includes(secret), false);
+  }
+});
+
+test('split probe uses worker credentials for DNS and Analytics metadata and Access credentials only for Access', async () => {
+  const fake = fixture();
+  const results = await probe({token: 'worker-probe', accessToken: 'access-probe', request: fake.request});
+  assert.ok(results.every(check => check.ok));
+  for (const call of fake.calls) {
+    assert.equal(call.authorization, `Bearer ${call.path.includes('/access/') ? 'access-probe' : 'worker-probe'}`, call.path);
+  }
+  assert.equal(JSON.stringify(results).includes('worker-probe'), false);
+  assert.equal(JSON.stringify(results).includes('access-probe'), false);
+  const legacy = await probe('worker-probe', fake.request, 'access-probe');
+  assert.ok(legacy.every(check => check.ok));
+});
+
+test('single-token callers retain compatibility for either the original token or the admin token', async () => {
+  for (const options of [{token: 'only-worker', accessToken: ''}, {token: '', accessToken: 'only-admin'}]) {
+    const fake = fixture();
+    const expected = options.token || options.accessToken;
+    let executedToken;
+    await deploy({...options, emails: email, request: fake.request, sourceConfig: config,
+      save: async () => {}, run: async (_path, token) => {executedToken = token;}});
+    assert.equal(executedToken, expected);
+    for (const call of fake.calls.filter(call => call.path.startsWith('accounts/') || call.path.startsWith('zones'))) {
+      assert.equal(call.authorization, `Bearer ${expected}`, call.path);
+    }
+    const checks = await probe({...options, request: fake.request});
+    assert.ok(checks.every(check => check.ok));
+  }
+});
+
+test('paginated Access lists retain admin routing on every page without routing similarly named Worker paths to Access', async () => {
+  const calls = [];
+  const api = cloudflare('workers-token', async (url, options) => {
+    const parsed = new URL(url);
+    calls.push([parsed.pathname, parsed.searchParams.get('page'), options.headers.Authorization]);
+    return Response.json({success: true, result: [{id: `page-${parsed.searchParams.get('page')}`}], result_info: {total_pages: 2}});
+  }, 'access-token');
+  assert.equal((await api.all(`accounts/${ACCOUNT_ID}/access/apps`)).length, 2);
+  assert.equal((await api.all(`accounts/${ACCOUNT_ID}/workers/domains`)).length, 2);
+  await api(`accounts/${ACCOUNT_ID}/workers/scripts/access/metadata`);
+  assert.deepEqual(calls.map(call => call[2]), ['Bearer access-token', 'Bearer access-token', 'Bearer workers-token', 'Bearer workers-token', 'Bearer workers-token']);
+  assert.deepEqual(calls.slice(0, 2).map(call => call[1]), ['1', '2']);
+});
+
+test('API diagnostics distinguish missing organization, permission and invalid token without retaining raw errors', async () => {
+  const orgPath = `accounts/${ACCOUNT_ID}/access/organizations`;
+  const cases = [
+    {status: 403, path: orgPath, code: 10000, message: 'Authentication error', classification: 'permission'},
+    {status: 403, path: orgPath, code: 9109, message: 'Unauthorized to access requested resource', classification: 'permission'},
+    {status: 403, path: orgPath, code: 9109, message: 'Invalid access token', classification: 'authentication'},
+    {status: 401, path: orgPath, code: 10000, message: 'Authentication error', classification: 'authentication'},
+    {status: 403, path: orgPath, code: 12100, message: 'Access organization does not exist', classification: 'orgNotConfigured'},
+    {status: 403, path: orgPath, code: 12100, message: 'Account has no Zero Trust organization', classification: 'orgNotConfigured'},
+    {status: 404, path: `accounts/${ACCOUNT_ID}/workers/domains`, code: 12100, message: 'Organization does not exist', classification: 'apiFailure'},
+  ];
+  for (const entry of cases) {
+    const api = cloudflare('never-echo-worker', async () => Response.json({success: false, errors: [{code: entry.code, message: `${entry.message}; private-identity@example.com private-credential`}], result: {secret: 'raw-body-secret'}}, {status: entry.status}), 'never-echo-admin');
+    await assert.rejects(api(entry.path), error => {
+      assert.ok(error instanceof CloudflareApiError);
+      assert.equal(error.httpStatus, entry.status);
+      assert.deepEqual(error.apiCodes, [entry.code]);
+      assert.equal(error.classification, entry.classification);
+      for (const secret of ['private-identity@example.com', 'private-credential', 'raw-body-secret', 'never-echo-worker', 'never-echo-admin']) {
+        assert.equal(`${error.message} ${JSON.stringify(error)}`.includes(secret), false);
+      }
+      return true;
+    });
+  }
+});
+
+test('probe publishes only numeric API codes and fixed cause labels, including nested codes', async () => {
+  const checks = await probe({token: 'workers-secret', accessToken: 'access-secret', request: async url => {
+    const organization = new URL(url).pathname.endsWith('/access/organizations');
+    return Response.json({success: false, errors: [{code: 10000, message: organization ? 'Organization not configured: personal@example.com' : 'Authentication error: personal@example.com', error_chain: [{code: 9109, message: 'private upstream credential'}, {code: 'do-not-output'}]}]}, {status: 403});
+  }});
+  for (const check of checks) {
+    if (check.skipped) { assert.equal(check.classification, 'accessScopeUnavailable'); continue; }
+    assert.equal(check.ok, false); assert.equal(check.httpStatus, 403);
+    assert.deepEqual(check.apiCodes, [10000, 9109]);
+    assert.equal(check.classification, check.check === 'organization' ? 'orgNotConfigured' : 'permission');
+  }
+  assert.doesNotMatch(JSON.stringify(checks), /personal@example|private upstream|do-not-output|workers-secret|access-secret/);
+});
+
+test('transport and malformed JSON diagnostics suppress exceptions and response text', async () => {
+  const network = await probe({token: 'test', request: async () => {throw new Error('private transport token');}});
+  assert.ok(network.every(check => check.skipped || (check.classification === 'transport' && check.httpStatus === null)));
+  const malformed = await probe({token: 'test', request: async () => new Response('private non-JSON response', {status: 403})});
+  assert.ok(malformed.every(check => check.skipped || (check.classification === 'invalidResponse' && check.httpStatus === 403)));
+  assert.doesNotMatch(JSON.stringify([...network, ...malformed]), /private transport|private non-JSON/);
+});
+
+test('account permission refusal falls back to the verified zone and uses that Access prefix consistently for all reads and writes', async () => {
+  const fake = fixture(), calls = [];
+  const request = async (url, options) => {
+    const path = new URL(url).pathname.replace('/client/v4/', '');
+    calls.push({path, method: options.method ?? 'GET', authorization: options.headers?.Authorization});
+    if (path === `accounts/${ACCOUNT_ID}/access/organizations`) return Response.json({success: false, errors: [{code: 10000, message: 'Authentication error'}]}, {status: 403});
+    return fake.request(url, options);
+  };
+  const result = await deploy({token: 'worker-token', accessToken: 'admin-token', emails: email, request, sourceConfig: config,
+    save: async () => {}, run: async (_path, token) => assert.equal(token, 'worker-token')});
+  assert.equal(result.accessProtected, true);
+  const accessCalls = calls.filter(call => call.path.includes('/access/'));
+  assert.equal(accessCalls[0].path, `accounts/${ACCOUNT_ID}/access/organizations`);
+  assert.ok(accessCalls.length > 6);
+  for (const call of accessCalls.slice(1)) {
+    assert.ok(call.path.startsWith('zones/zone-id/access/'), call.path);
+    assert.equal(call.authorization, 'Bearer admin-token');
+  }
+  assert.ok(accessCalls.some(call => call.path === 'zones/zone-id/access/apps/app-id/policies'));
+  assert.deepEqual(accessCalls.filter(call => call.method === 'POST').map(call => call.path), ['zones/zone-id/access/identity_providers', 'zones/zone-id/access/apps']);
+  const checks = await probe({token: 'worker-token', accessToken: 'admin-token', request});
+  assert.equal(checks.find(check => check.check === 'organization').scope, 'zone');
+  assert.ok(checks.every(check => check.ok));
+});
+
+test('zone-scoped fallback validates existing policies instead of assuming that failed account listing means no application', async () => {
+  const fake = fixture({providers: [baseProvider()], apps: [baseApp()], policies: [{decision: 'bypass', include: [{everyone: {}}]}]});
+  const request = async (url, options) => new URL(url).pathname.endsWith(`/accounts/${ACCOUNT_ID}/access/organizations`)
+    ? Response.json({success: false, errors: [{code: 10000, message: 'Authentication error'}]}, {status: 403})
+    : fake.request(url, options);
+  await assert.rejects(deploy({token: 'test', accessToken: 'admin', emails: email, request, sourceConfig: config,
+    save: async () => assert.fail('must not save'), run: async () => assert.fail('must not publish')}), /exactly one allow policy/);
+  assert.ok(fake.calls.some(call => call.path === 'zones/zone-id/access/apps/app-id/policies'));
+  assert.ok(fake.calls.every(call => call.method === 'GET'));
+});
+
+test('refusal from both Access scopes is reported as unresolved without identity lists or mutations', async () => {
+  const fake = fixture(), attempts = [];
+  const request = async (url, options) => {
+    const path = new URL(url).pathname.replace('/client/v4/', '');
+    if (path.endsWith('/access/organizations')) {
+      attempts.push(path);
+      return Response.json({success: false, errors: [{code: 10000, message: 'Authentication error private-token personal@example.com'}]}, {status: 403});
+    }
+    return fake.request(url, options);
+  };
+  await assert.rejects(deploy({token: 'original', accessToken: 'admin', emails: email, request, sourceConfig: config,
+    save: async () => assert.fail('must not save'), run: async () => assert.fail('must not publish')}), error => {
+    assert.equal(error.name, 'AccessScopeError'); assert.equal(error.attempts.length, 2);
+    assert.deepEqual(error.attempts.map(attempt => [attempt.scope, attempt.httpStatus, attempt.classification]), [['account', 403, 'permission'], ['zone', 403, 'permission']]);
+    assert.doesNotMatch(`${error.message} ${JSON.stringify(error)}`, /private-token|personal@example/);
+    return true;
+  });
+  assert.deepEqual(attempts, [`accounts/${ACCOUNT_ID}/access/organizations`, 'zones/zone-id/access/organizations']);
+  assert.ok(fake.calls.every(call => call.method === 'GET'));
+  assert.ok(!fake.calls.some(call => /\/access\/(?:apps|identity_providers)/.test(call.path)));
+  const checks = await probe({token: 'original', accessToken: 'admin', request});
+  const organization = checks.find(check => check.check === 'organization');
+  assert.equal(organization.classification, 'accessScopeUnavailable'); assert.equal(organization.attempts.length, 2);
+  assert.ok(checks.filter(check => ['identityProviders', 'accessApplications'].includes(check.check)).every(check => check.skipped));
+});
+
+test('legacy Access scope is never tried for rejected credentials, absent organization, server failure, transport failure or unverified zone', async () => {
+  for (const failure of [
+    () => Response.json({success: false, errors: [{code: 9109, message: 'Invalid access token'}]}, {status: 403}),
+    () => Response.json({success: false, errors: [{code: 12100, message: 'Organization does not exist'}]}, {status: 403}),
+    () => Response.json({success: false, errors: []}, {status: 500}),
+    () => {throw new Error('network private failure');},
+  ]) {
+    const fake = fixture(), paths = [];
+    const request = async (url, options) => {
+      const path = new URL(url).pathname.replace('/client/v4/', ''); paths.push(path);
+      if (path === `accounts/${ACCOUNT_ID}/access/organizations`) return failure();
+      return fake.request(url, options);
+    };
+    await assert.rejects(prepareDeployment({token: 'test', accessToken: 'admin', emails: email, request}));
+    assert.ok(!paths.some(path => path.startsWith('zones/zone-id/access/')));
+    assert.ok(fake.calls.every(call => call.method === 'GET'));
+  }
+  for (const zones of [[], [{id: 'zone-id', name: 'docfis.com', status: 'pending', account: {id: ACCOUNT_ID}}],
+    [{id: 'zone-id', name: 'docfis.com', status: 'active', account: {id: 'other'}}]]) {
+    const fake = fixture({zones}), paths = [];
+    const request = async (url, options) => {
+      const path = new URL(url).pathname.replace('/client/v4/', ''); paths.push(path);
+      if (path === `accounts/${ACCOUNT_ID}/access/organizations`) return Response.json({success: false, errors: [{code: 10000, message: 'Authentication error'}]}, {status: 403});
+      return fake.request(url, options);
+    };
+    await probe({token: 'test', accessToken: 'admin', request});
+    assert.ok(!paths.some(path => path.startsWith('zones/zone-id/access/')));
+  }
+});
+
+test('only official developer documentation URLs are retained, with credentials, queries, fragments and long paths removed', async () => {
+  const links = ['https://developers.cloudflare.com/fundamentals/api/reference/permissions/?token=private-query#private-fragment',
+    'https://private-user:private-password@developers.cloudflare.com/api/', 'http://developers.cloudflare.com/api/',
+    'https://developers.cloudflare.com.evil.example/api/', 'https://developers.cloudflare.com:444/api/',
+    'https://evil.example/api/', 'https://developers.cloudflare.com/'+ 'x'.repeat(513), '/relative'];
+  const api = cloudflare('test', async () => Response.json({success: false, errors: links.map(documentation_url => ({code: 10000, message: 'sensitive message', documentation_url}))}, {status: 403}));
+  await assert.rejects(api(`accounts/${ACCOUNT_ID}/access/organizations`), error => {
+    assert.deepEqual(error.documentationUrls, ['https://developers.cloudflare.com/fundamentals/api/reference/permissions/', 'https://developers.cloudflare.com/api/']);
+    assert.doesNotMatch(`${error.message} ${JSON.stringify(error)}`, /private-query|private-fragment|private-user|private-password|evil\.example|sensitive message/);
+    return true;
+  });
 });

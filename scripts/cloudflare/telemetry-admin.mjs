@@ -13,22 +13,82 @@ export const OTP_NAME = 'DataPyn administrator OTP';
 const serviceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../services/telemetry-admin');
 const accountPath = `accounts/${ACCOUNT_ID}`;
 
-export function cloudflare(token, request = fetch) {
-  if (!token) throw new Error('Configure CLOUDFLARE_API_TOKEN through a private environment variable or GitHub Actions secret.');
-  async function payload(path, options = {}) {
-    const response = await request(`https://api.cloudflare.com/client/v4/${path}`, {
+function credentials(token, accessToken) {
+  const workerToken = token || accessToken;
+  if (!workerToken) throw new Error('Configure CLOUDFLARE_API_TOKEN or CLOUDFLARE_ADMIN_API_TOKEN through private environment variables or GitHub Actions secrets.');
+  return {workerToken, accessToken: accessToken || token};
+}
+
+function failureDetails(status, payload, path) {
+  const errors = Array.isArray(payload?.errors) ? payload.errors.slice(0, 32) : [];
+  const entries = errors.flatMap(error => [error, ...(Array.isArray(error?.error_chain) ? error.error_chain.slice(0, 8) : [])]);
+  const apiCodes = [...new Set(entries.map(error => error?.code).filter(code => Number.isSafeInteger(code) && code >= 0))].slice(0, 32);
+  const documentationUrls = [...new Set(entries.flatMap(error => {
+    if (typeof error?.documentation_url !== 'string') return [];
+    try {
+      const url = new URL(error.documentation_url);
+      return url.origin === 'https://developers.cloudflare.com' && url.pathname.length <= 512 ? [`${url.origin}${url.pathname}`] : [];
+    } catch { return []; }
+  }))].slice(0, 8);
+  // Messages are inspected only to select fixed diagnostic labels. Never retain
+  // or interpolate messages: an API error can contain identities or credentials.
+  const messages = entries.map(error => typeof error?.message === 'string' ? error.message.slice(0, 2048) : '').join(' ');
+  let classification = 'apiFailure';
+  const organizationEndpoint = /^(?:accounts|zones)\/[^/?#]+\/access\/organizations(?:\?|$)/.test(path);
+  if (organizationEndpoint && /(?:\b(?:organi[sz]ation|org)\b.{0,80}\b(?:does not exist|not found|not configured|not initialized|has not been (?:created|configured))\b|\b(?:account|zone)\b.{0,60}\b(?:does not have|has no)\b.{0,40}\b(?:organi[sz]ation|org)\b|\bno (?:access |zero[ -]trust )?organi[sz]ation\b|\borganization_not_(?:found|configured)\b)/i.test(messages)) classification = 'orgNotConfigured';
+  else if (/\b(?:invalid|expired|revoked|unknown) (?:access |api |bearer )?token\b|\btoken (?:is |has )?(?:invalid|expired|revoked)\b|\bvalid (?:user-level )?authentication not found\b/i.test(messages)) classification = 'authentication';
+  else if (/\b(?:insufficient|missing|lacks?|required)\b.{0,50}\b(?:permission|scope)s?\b|\bpermission denied\b|\bunauthorized to access requested resource\b/i.test(messages)) classification = 'permission';
+  else if (status === 403) classification = 'permission';
+  else if (status === 401) classification = 'authentication';
+  return {apiCodes, classification, documentationUrls};
+}
+
+export class CloudflareApiError extends Error {
+  constructor(path, method, httpStatus, apiCodes = [], classification = 'apiFailure', documentationUrls = []) {
+    const status = httpStatus === null ? 'no HTTP response' : `HTTP ${httpStatus}`;
+    super(`Cloudflare ${method} ${path.split('?')[0]} returned ${status}; classification=${classification}; API codes=${apiCodes.length ? apiCodes.join(',') : 'none'}.${documentationUrls.length ? ` Documentation: ${documentationUrls.join(', ')}` : ''}`);
+    this.name = 'CloudflareApiError';
+    this.httpStatus = httpStatus;
+    this.apiCodes = apiCodes;
+    this.classification = classification;
+    this.documentationUrls = documentationUrls;
+  }
+}
+
+async function requestJson(path, token, request, options = {}, requireEnvelope = true) {
+  const method = options.method ?? 'GET';
+  let response;
+  try {
+    response = await request(`https://api.cloudflare.com/client/v4/${path}`, {
       ...options,
       headers: {Authorization: `Bearer ${token}`, 'Content-Type': 'application/json'},
       signal: AbortSignal.timeout(20_000),
     });
-    let payload;
-    try { payload = await response.json(); }
-    catch { throw new Error(`Cloudflare ${options.method ?? 'GET'} ${path.split('?')[0]} returned an invalid API response.`); }
-    if (!response.ok || !payload.success) {
-      // Do not print API bodies: identity-provider configuration can contain credentials.
-      throw new Error(`Cloudflare ${options.method ?? 'GET'} ${path.split('?')[0]} returned HTTP ${response.status}. Check token resource scopes and permissions.`);
-    }
-    return payload;
+  } catch { throw new CloudflareApiError(path, method, null, [], 'transport'); }
+  let value;
+  try { value = await response.json(); }
+  catch { throw new CloudflareApiError(path, method, response.status, [], 'invalidResponse'); }
+  if (!response.ok || value?.success === false) {
+    const {apiCodes, classification, documentationUrls} = failureDetails(response.status, value, path);
+    throw new CloudflareApiError(path, method, response.status, apiCodes, classification, documentationUrls);
+  }
+  if (!value || typeof value !== 'object' || (requireEnvelope && value.success !== true)) {
+    throw new CloudflareApiError(path, method, response.status, [], 'invalidResponse');
+  }
+  return value;
+}
+
+function diagnostic(error) {
+  if (error instanceof CloudflareApiError) return {error: error.message, httpStatus: error.httpStatus, apiCodes: error.apiCodes, classification: error.classification, documentationUrls: error.documentationUrls};
+  if (error instanceof AccessScopeError) return {error: error.message, httpStatus: null, apiCodes: error.apiCodes, classification: 'accessScopeUnavailable', attempts: error.attempts};
+  return {error: 'The Cloudflare diagnostic could not validate this resource.', httpStatus: null, apiCodes: [], classification: 'invalidResponse'};
+}
+
+export function cloudflare(token, request = fetch, accessToken) {
+  const selected = credentials(token, accessToken);
+  async function payload(path, options = {}) {
+    const isAccess = /^(?:accounts|zones)\/[^/?#]+\/access(?:\/|\?|$)/.test(path);
+    return requestJson(path, isAccess ? selected.accessToken : selected.workerToken, request, options);
   }
   const api = async (path, options = {}) => (await payload(path, options)).result;
   api.all = async path => {
@@ -45,6 +105,31 @@ export function cloudflare(token, request = fetch) {
     throw new Error('Cloudflare pagination exceeded its safety limit; deployment stopped.');
   };
   return api;
+}
+
+class AccessScopeError extends Error {
+  constructor(accountError, zoneError) {
+    const attempts = [{scope: 'account', ...diagnostic(accountError)}, {scope: 'zone', ...diagnostic(zoneError)}];
+    const detail = attempts.map(item => `${item.scope}: HTTP ${item.httpStatus ?? 'none'}, ${item.classification}, API codes=${item.apiCodes.join(',') || 'none'}`).join('; ');
+    super(`Neither account nor verified docfis.com zone scope could read the Access organization (${detail}). The cause remains unresolved; no resources were changed.`);
+    this.name = 'AccessScopeError';
+    this.attempts = attempts;
+    this.apiCodes = [...new Set(attempts.flatMap(item => item.apiCodes))];
+  }
+}
+
+async function resolveAccessScope(api, verifiedZoneId) {
+  const path = `${accountPath}/access`;
+  try { return {accessPath: path, scope: 'account', organization: await api(`${path}/organizations`)}; }
+  catch (accountError) {
+    // The legacy zone endpoints are documented by the same Access API. Use
+    // them only after verifying the exact active zone and only for permission
+    // refusals. Never interpret a failed organization read as an empty account.
+    if (!verifiedZoneId || !(accountError instanceof CloudflareApiError) || accountError.httpStatus !== 403 || accountError.classification !== 'permission') throw accountError;
+    const zonePath = `zones/${verifiedZoneId}/access`;
+    try { return {accessPath: zonePath, scope: 'zone', organization: await api(`${zonePath}/organizations`)}; }
+    catch (zoneError) { throw new AccessScopeError(accountError, zoneError); }
+  }
 }
 
 export function parseEmails(value) {
@@ -102,41 +187,51 @@ export function validateApplication(app, policies, provider, emails) {
 }
 
 export async function inspectAnalytics(token, request = fetch) {
-  const response = await request(`https://api.cloudflare.com/client/v4/analytics/sql/introspection?account_tag=${ACCOUNT_ID}&dataset_name=events.analyticsEngine.datapyn_telemetry&include_columns=true`, {
-    headers: {Authorization: `Bearer ${token}`}, signal: AbortSignal.timeout(20_000),
-  });
-  if (!response.ok) throw new Error(`Analytics SQL schema inspection returned HTTP ${response.status}; Account Analytics Read is required for this metadata probe.`);
-  const value = await response.json();
+  const value = await requestJson(`analytics/sql/introspection?account_tag=${ACCOUNT_ID}&dataset_name=events.analyticsEngine.datapyn_telemetry&include_columns=true`, token, request, {}, false);
   const dataset = (value.datasets ?? value.result?.datasets ?? []).find(item => item.name === 'events.analyticsEngine.datapyn_telemetry');
   if (!dataset || !Array.isArray(dataset.columns)) throw new Error('Analytics SQL did not return the expected telemetry dataset schema.');
   const columns = dataset.columns.map(item => item.name).filter(name => typeof name === 'string');
   return {columns, sampleWeightColumn: columns.includes('sampleInterval') ? 'sampleInterval' : columns.includes('_sample_interval') ? '_sample_interval' : null};
 }
 
-export async function probe(token = process.env.CLOUDFLARE_API_TOKEN, request = fetch) {
-  const api = cloudflare(token, request);
+export async function probe(token = process.env.CLOUDFLARE_API_TOKEN, request = fetch, accessToken = process.env.CLOUDFLARE_ADMIN_API_TOKEN) {
+  if (token && typeof token === 'object') ({token = process.env.CLOUDFLARE_API_TOKEN, request = fetch, accessToken = process.env.CLOUDFLARE_ADMIN_API_TOKEN} = token);
+  const selected = credentials(token, accessToken);
+  const api = cloudflare(selected.workerToken, request, selected.accessToken);
+  const results = [];
+  let verifiedZoneId;
+  try {
+    const zones = await api(`zones?name=${ZONE}`);
+    const matching = zones.filter(item => item.name === ZONE);
+    const zone = matching[0];
+    if (matching.length === 1 && zone.status === 'active' && zone.account?.id === ACCOUNT_ID) verifiedZoneId = zone.id;
+    results.push({check: 'zone', ok: true, ...(zone ? {found: true, active: zone.status === 'active', expectedAccount: zone.account?.id === ACCOUNT_ID} : {found: false})});
+  } catch (error) { results.push({check: 'zone', ok: false, ...diagnostic(error)}); }
+  let access;
+  try {
+    access = await resolveAccessScope(api, verifiedZoneId);
+    const configured = !!access.organization?.auth_domain;
+    results.push({check: 'organization', ok: true, scope: access.scope, configured, teamDomain: access.organization?.auth_domain,
+      ...(!configured ? {classification: 'orgNotConfigured'} : {})});
+  } catch (error) { results.push({check: 'organization', ok: false, ...diagnostic(error)}); }
   const checks = [
-    ['zone', `zones?name=${ZONE}`, result => {
-      const zone = result.find(item => item.name === ZONE);
-      return zone ? {found: true, active: zone.status === 'active', expectedAccount: zone.account?.id === ACCOUNT_ID} : {found: false};
-    }],
-    ['organization', `accounts/${ACCOUNT_ID}/access/organizations`, result => ({configured: !!result.auth_domain, teamDomain: result.auth_domain})],
-    ['identityProviders', `accounts/${ACCOUNT_ID}/access/identity_providers`, result => ({types: result.map(item => item.type)})],
-    ['accessApplications', `accounts/${ACCOUNT_ID}/access/apps`, result => ({matchingApplications: result.filter(item => item.domain === HOSTNAME).map(item => ({id: item.id, type: item.type}))})],
-    ['workerDomains', `accounts/${ACCOUNT_ID}/workers/domains`, result => ({matchingDomains: result.filter(item => item.hostname === HOSTNAME).map(item => ({service: item.service}))})],
+    ['identityProviders', access && `${access.accessPath}/identity_providers`, result => ({types: result.map(item => item.type)})],
+    ['accessApplications', access && `${access.accessPath}/apps`, result => ({matchingApplications: result.filter(item => item.domain === HOSTNAME).map(item => ({id: item.id, type: item.type}))})],
+    ['workerDomains', `${accountPath}/workers/domains`, result => ({matchingDomains: result.filter(item => item.hostname === HOSTNAME).map(item => ({service: item.service}))})],
   ];
-  const results = await Promise.all(checks.map(async ([name, path, summarize]) => {
+  results.push(...await Promise.all(checks.map(async ([name, path, summarize]) => {
+    if (!path) return {check: name, ok: false, skipped: true, httpStatus: null, apiCodes: [], classification: 'accessScopeUnavailable', error: 'Skipped because the Access organization scope could not be verified.'};
     try { return {check: name, ok: true, ...summarize(await api(path))}; }
-    catch (error) { return {check: name, ok: false, error: error.message}; }
-  }));
-  try { results.push({check: 'analyticsSchema', ok: true, ...await inspectAnalytics(token, request)}); }
-  catch (error) { results.push({check: 'analyticsSchema', ok: false, error: error.message}); }
+    catch (error) { return {check: name, ok: false, ...diagnostic(error)}; }
+  })));
+  try { results.push({check: 'analyticsSchema', ok: true, ...await inspectAnalytics(selected.workerToken, request)}); }
+  catch (error) { results.push({check: 'analyticsSchema', ok: false, ...diagnostic(error)}); }
   return results;
 }
 
-export async function prepareDeployment({token = process.env.CLOUDFLARE_API_TOKEN, emails = process.env.TELEMETRY_ADMIN_EMAILS, request = fetch} = {}) {
+export async function prepareDeployment({token = process.env.CLOUDFLARE_API_TOKEN, accessToken = process.env.CLOUDFLARE_ADMIN_API_TOKEN, emails = process.env.TELEMETRY_ADMIN_EMAILS, request = fetch} = {}) {
   const authorizedEmails = parseEmails(emails);
-  const api = cloudflare(token, request);
+  const api = cloudflare(token, request, accessToken);
   const zones = await api.all(`zones?name=${ZONE}`);
   const matches = zones.filter(zone => zone.name === ZONE);
   if (matches.length !== 1 || matches[0].status !== 'active' || matches[0].account?.id !== ACCOUNT_ID) {
@@ -145,12 +240,14 @@ export async function prepareDeployment({token = process.env.CLOUDFLARE_API_TOKE
   const zone = matches[0];
   // Read all existing resources before the first mutation. Never replace an
   // unrelated DNS record, custom domain, Worker or Access application.
-  const [domains, records, scripts, organization, providers, applications] = await Promise.all([
+  const [domains, records, scripts, access] = await Promise.all([
     api.all(`${accountPath}/workers/domains`), api.all(`zones/${zone.id}/dns_records?name=${HOSTNAME}`),
-    api.all(`${accountPath}/workers/scripts`), api(`${accountPath}/access/organizations`),
-    api.all(`${accountPath}/access/identity_providers`), api.all(`${accountPath}/access/apps`),
+    api.all(`${accountPath}/workers/scripts`), resolveAccessScope(api, zone.id),
   ]);
-  const issuer = issuerOf(organization);
+  const issuer = issuerOf(access.organization);
+  const [providers, applications] = await Promise.all([
+    api.all(`${access.accessPath}/identity_providers`), api.all(`${access.accessPath}/apps`),
+  ]);
   const domain = domains.find(item => item.hostname === HOSTNAME);
   const script = scripts.find(item => item.id === WORKER);
   if (domain && (domain.service !== WORKER || (domain.zone_id && domain.zone_id !== zone.id))) {
@@ -169,23 +266,23 @@ export async function prepareDeployment({token = process.env.CLOUDFLARE_API_TOKE
   let provider;
   if (application) {
     provider = providers.find(item => application.allowed_idps?.length === 1 && item.id === application.allowed_idps[0]);
-    const policies = await api.all(`${accountPath}/access/apps/${application.id}/policies`);
+    const policies = await api.all(`${access.accessPath}/apps/${application.id}/policies`);
     validateApplication(application, policies, provider, authorizedEmails);
   } else {
     const namedProvider = providers.find(item => item.name === OTP_NAME);
     if (namedProvider && namedProvider.type !== 'onetimepin') throw new Error('The managed OTP name belongs to another identity provider; deployment stopped.');
     provider = namedProvider ?? providers.find(item => item.type === 'onetimepin');
   }
-  return {api, token, authorizedEmails, zoneId: zone.id, issuer, provider, application};
+  return {api, authorizedEmails, zoneId: zone.id, issuer, provider, application, accessPath: access.accessPath};
 }
 
 export async function ensureAccess(target) {
-  const {api, authorizedEmails} = target;
+  const {api, authorizedEmails, accessPath} = target;
   let provider = target.provider;
   let app = target.application;
-  if (!provider) provider = await api(`${accountPath}/access/identity_providers`, {method: 'POST', body: JSON.stringify({name: OTP_NAME, type: 'onetimepin', config: {}})});
+  if (!provider) provider = await api(`${accessPath}/identity_providers`, {method: 'POST', body: JSON.stringify({name: OTP_NAME, type: 'onetimepin', config: {}})});
   if (provider?.type !== 'onetimepin' || !provider.id) throw new Error('Cloudflare did not return a valid OTP identity provider.');
-  if (!app) app = await api(`${accountPath}/access/apps`, {method: 'POST', body: JSON.stringify({
+  if (!app) app = await api(`${accessPath}/apps`, {method: 'POST', body: JSON.stringify({
     name: APP_NAME, domain: HOSTNAME, type: 'self_hosted', session_duration: '8h',
     allowed_idps: [provider.id], auto_redirect_to_identity: true, http_only_cookie_attribute: true,
     options_preflight_bypass: false, allow_authenticate_via_warp: false,
@@ -194,8 +291,8 @@ export async function ensureAccess(target) {
   if (!app?.id) throw new Error('Cloudflare did not return an Access application identifier.');
   // Re-read persisted authorization, not just the creation response.
   const [savedApp, savedPolicies, savedProvider] = await Promise.all([
-    api(`${accountPath}/access/apps/${app.id}`), api.all(`${accountPath}/access/apps/${app.id}/policies`),
-    api(`${accountPath}/access/identity_providers/${provider.id}`),
+    api(`${accessPath}/apps/${app.id}`), api.all(`${accessPath}/apps/${app.id}/policies`),
+    api(`${accessPath}/identity_providers/${provider.id}`),
   ]);
   validateApplication(savedApp, savedPolicies, savedProvider, authorizedEmails);
   return {issuer: target.issuer, audience: savedApp.aud};
@@ -259,28 +356,31 @@ export async function verifyProtection(issuer, request = fetch, {
 
 async function runWrangler(configPath, token) {
   const executable = resolve(serviceRoot, 'node_modules/wrangler/bin/wrangler.js');
+  const environment = {...process.env};
+  delete environment.CLOUDFLARE_ADMIN_API_TOKEN;
   const code = await new Promise((done, fail) => {
     const child = spawn(process.execPath, [executable, 'deploy', '--config', configPath], {
       cwd: serviceRoot, shell: false, stdio: 'inherit',
-      env: {...process.env, CLOUDFLARE_API_TOKEN: token, CLOUDFLARE_ACCOUNT_ID: ACCOUNT_ID, WRANGLER_SEND_METRICS: 'false', CI: 'true'},
+      env: {...environment, CLOUDFLARE_API_TOKEN: token, CLOUDFLARE_ACCOUNT_ID: ACCOUNT_ID, WRANGLER_SEND_METRICS: 'false', CI: 'true'},
     });
     child.once('error', fail); child.once('close', done);
   });
   if (code !== 0) throw new Error('Cloudflare dashboard deployment failed.');
 }
 
-export async function deploy({token = process.env.CLOUDFLARE_API_TOKEN, emails = process.env.TELEMETRY_ADMIN_EMAILS,
+export async function deploy({token = process.env.CLOUDFLARE_API_TOKEN, accessToken = process.env.CLOUDFLARE_ADMIN_API_TOKEN, emails = process.env.TELEMETRY_ADMIN_EMAILS,
   request = fetch, run = runWrangler, save = async (path, config) => {
     await mkdir(dirname(path), {recursive: true}); await writeFile(path, JSON.stringify(config, null, 2));
   }, sourceConfig} = {}) {
-  const target = await prepareDeployment({token, emails, request});
+  const selected = credentials(token, accessToken);
+  const target = await prepareDeployment({token: selected.workerToken, accessToken: selected.accessToken, emails, request});
   const config = sourceConfig ?? JSON.parse(await readFile(resolve(serviceRoot, 'wrangler.jsonc'), 'utf8'));
   // Validate local configuration before creating even the Access application.
   const configPath = resolve(serviceRoot, '.wrangler/admin-production.json');
   productionConfig(config, {issuer: target.issuer, audience: '0'.repeat(64)}, configPath);
   const access = await ensureAccess(target);
   await save(configPath, productionConfig(config, access, configPath));
-  await run(configPath, token);
+  await run(configPath, selected.workerToken);
   const settings = await target.api(`${accountPath}/workers/scripts/${WORKER}/subdomain`);
   if (settings?.enabled !== false || settings?.previews_enabled !== false) throw new Error('workers.dev or preview URLs are still enabled; deployment is not considered protected.');
   await verifyProtection(access.issuer, request);

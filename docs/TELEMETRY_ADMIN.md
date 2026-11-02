@@ -63,14 +63,16 @@ arquivos estáticos também passem pela verificação.
    script para se a zona estiver ausente, inacessível, inativa ou em outra conta.
 2. Conclua a configuração da organização Zero Trust no plano gratuito. O deploy
    não contrata planos nem cria uma organização com parâmetros presumidos.
-3. Configure um token restrito em **GitHub → natharuc/datapyn → Settings → Secrets
-   and variables → Actions**, preferencialmente como `CLOUDFLARE_ADMIN_API_TOKEN`.
-   O workflow aceita o secret existente `CLOUDFLARE_API_TOKEN` como alternativa;
-   se o atualizar, preserve as permissões do coletor em `datapyn.com`.
-4. Permissões necessárias: Workers Scripts Edit na conta, Workers Routes Edit e
-   DNS Edit na zona `docfis.com`, Zone Read; Access: Apps and Policies Edit;
-   Access: Organizations, Identity Providers, and Groups Edit na conta. Inclua
-   Account Analytics Read para a inspeção opcional do schema no diagnóstico.
+3. Configure as credenciais em **GitHub → natharuc/datapyn → Settings → Secrets
+   and variables → Actions**. `CLOUDFLARE_API_TOKEN` fornece o acesso a Workers,
+   DNS e Analytics. `CLOUDFLARE_ADMIN_API_TOKEN` fornece o acesso ao Access.
+   Se apenas uma credencial estiver cadastrada, ela precisa reunir as permissões
+   das duas funções. Preserve as permissões do coletor em `datapyn.com`.
+4. Permissões da credencial de infraestrutura: Workers Scripts Edit na conta,
+   Workers Routes Edit e DNS Edit na zona `docfis.com`, Zone Read e Account
+   Analytics Read para o diagnóstico das consultas. Permissões da credencial
+   de Access: Access: Apps and Policies Edit; Access: Organizations, Identity
+   Providers, and Groups Edit na conta.
    Consulte os nomes atuais na [lista oficial de permissões](https://developers.cloudflare.com/fundamentals/api/reference/permissions/).
    Nenhum token de consulta é necessário ao Worker com o binding atual.
 5. Configure o secret `TELEMETRY_ADMIN_EMAILS` com e-mails separados por vírgula.
@@ -96,6 +98,10 @@ qualquer escrita. O arquivo de produção com audience/issuer descobertos é ger
 em `.wrangler/`, ignorado pelo Git. Depois da publicação, verifica os bloqueios
 sem autenticação e o desligamento de `workers.dev`/preview. O login interativo e
 a consulta ao dataset real devem ser conferidos com o e-mail autorizado.
+As credenciais de infraestrutura e Access são usadas separadamente. Se a leitura
+da organização Access da conta for negada por permissão, o deploy também verifica
+o escopo legado da zona `docfis.com`; só prossegue se a organização puder ser lida,
+mantendo o mesmo escopo nas operações de IdP, aplicativo e política.
 
 Se a criação do Worker funcionar e a associação do Custom Domain falhar, o
 próximo deploy recusará adotar um Worker sem domínio apenas pelo nome. Confira
