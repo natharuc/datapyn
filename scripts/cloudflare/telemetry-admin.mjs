@@ -4,8 +4,10 @@ import {mkdir, readFile, writeFile} from 'node:fs/promises';
 import {spawn} from 'node:child_process';
 
 export const ACCOUNT_ID = '10d97e9bda1dd76cde34ad2f54c8c37e';
-export const ZONE = 'docfis.com';
-export const HOSTNAME = 'painel.docfis.com';
+export const ZONE = 'datapyn.com';
+export const HOSTNAME = 'painel.datapyn.com';
+export const LEGACY_ZONE = 'docfis.com';
+export const LEGACY_HOSTNAME = 'painel.docfis.com';
 export const WORKER = 'datapyn-telemetry-admin';
 export const APP_NAME = 'DataPyn telemetry admin';
 export const POLICY_NAME = 'DataPyn administrators';
@@ -111,7 +113,7 @@ class AccessScopeError extends Error {
   constructor(accountError, zoneError) {
     const attempts = [{scope: 'account', ...diagnostic(accountError)}, {scope: 'zone', ...diagnostic(zoneError)}];
     const detail = attempts.map(item => `${item.scope}: HTTP ${item.httpStatus ?? 'none'}, ${item.classification}, API codes=${item.apiCodes.join(',') || 'none'}`).join('; ');
-    super(`Neither account nor verified docfis.com zone scope could read the Access organization (${detail}). The cause remains unresolved; no resources were changed.`);
+    super(`Neither account nor verified ${ZONE} zone scope could read the Access organization (${detail}). The cause remains unresolved; no resources were changed.`);
     this.name = 'AccessScopeError';
     this.attempts = attempts;
     this.apiCodes = [...new Set(attempts.flatMap(item => item.apiCodes))];
@@ -150,10 +152,10 @@ function domainsOf(app) {
     .filter(item => typeof item === 'string').map(item => item.replace(/^https?:\/\//, '').toLowerCase());
 }
 
-function overlapsTarget(app) {
+function overlapsTarget(app, hostname = HOSTNAME) {
   return domainsOf(app).some(domain => {
     const host = domain.split('/')[0];
-    return host === HOSTNAME || (host.startsWith('*.') && HOSTNAME.endsWith(host.slice(1)));
+    return host === hostname || (host.startsWith('*.') && hostname.endsWith(host.slice(1)));
   });
 }
 
@@ -165,10 +167,11 @@ function issuerOf(organization) {
   return `https://${domain}`;
 }
 
-export function validateApplication(app, policies, provider, emails) {
-  if (app?.name !== APP_NAME || app?.domain !== HOSTNAME || app?.type !== 'self_hosted'
-      || !/^[a-f0-9]{64}$/.test(app.aud ?? '') || domainsOf(app).some(domain => domain !== HOSTNAME)
-      || (app.destinations ?? []).some(item => item.type !== 'public' || item.uri !== HOSTNAME)
+export function validateApplication(app, policies, provider, emails, expectedHostname = HOSTNAME) {
+  if (![HOSTNAME, LEGACY_HOSTNAME].includes(expectedHostname)
+      || app?.name !== APP_NAME || app?.domain !== expectedHostname || app?.type !== 'self_hosted'
+      || !/^[a-f0-9]{64}$/.test(app.aud ?? '') || domainsOf(app).some(domain => domain !== expectedHostname)
+      || (app.destinations ?? []).some(item => item.type !== 'public' || item.uri !== expectedHostname)
       || app.allow_authenticate_via_warp === true || app.options_preflight_bypass === true
       || app.allowed_idps?.length !== 1 || app.allowed_idps[0] !== provider?.id || provider?.type !== 'onetimepin') {
     throw new Error('Existing Access application differs from the exact protected hostname, OTP provider, or security settings; deployment stopped without changing it.');
@@ -235,7 +238,7 @@ export async function prepareDeployment({token = process.env.CLOUDFLARE_API_TOKE
   const zones = await api.all(`zones?name=${ZONE}`);
   const matches = zones.filter(zone => zone.name === ZONE);
   if (matches.length !== 1 || matches[0].status !== 'active' || matches[0].account?.id !== ACCOUNT_ID) {
-    throw new Error('The token must resolve exactly the active docfis.com zone in the telemetry dataset account. No alternative domain will be deployed.');
+    throw new Error(`The token must resolve exactly the active ${ZONE} zone in the telemetry dataset account. No alternative domain will be deployed.`);
   }
   const zone = matches[0];
   // Read all existing resources before the first mutation. Never replace an
@@ -249,31 +252,76 @@ export async function prepareDeployment({token = process.env.CLOUDFLARE_API_TOKE
     api.all(`${access.accessPath}/identity_providers`), api.all(`${access.accessPath}/apps`),
   ]);
   const domain = domains.find(item => item.hostname === HOSTNAME);
+  const legacyAtHost = domains.find(item => item.hostname === LEGACY_HOSTNAME);
+  const legacyDomain = legacyAtHost?.service === WORKER ? legacyAtHost : undefined;
+  const migrationIndicated = !!legacyDomain || applications.some(item => item.name === APP_NAME && overlapsTarget(item, LEGACY_HOSTNAME));
   const script = scripts.find(item => item.id === WORKER);
   if (domain && (domain.service !== WORKER || (domain.zone_id && domain.zone_id !== zone.id))) {
-    throw new Error('painel.docfis.com belongs to another Worker or zone; deployment stopped.');
+    throw new Error(`${HOSTNAME} belongs to another Worker or zone; deployment stopped.`);
   }
-  if ((!domain && records.length) || (script && !domain)
-      || domains.some(item => item.service === WORKER && item.hostname !== HOSTNAME)
-      || (domain && !script)) throw new Error('Existing DNS or Worker ownership is ambiguous; deployment stopped to preserve existing services.');
-  const overlapping = applications.filter(overlapsTarget);
-  const namedElsewhere = applications.some(item => item.name === APP_NAME && !overlapsTarget(item));
-  if (overlapping.length > 1 || namedElsewhere || (overlapping.length &&
-      (overlapping[0].domain !== HOSTNAME || overlapping[0].name !== APP_NAME || overlapping[0].type !== 'self_hosted'))) {
+  if ((!domain && records.length) || (script && !domain && !legacyDomain)
+      || domains.some(item => item.service === WORKER && ![HOSTNAME, LEGACY_HOSTNAME].includes(item.hostname))
+      || ((domain || legacyDomain) && !script)
+      || domains.filter(item => item.hostname === HOSTNAME).length > 1
+      || (migrationIndicated && domains.filter(item => item.hostname === LEGACY_HOSTNAME).length > 1)) throw new Error('Existing DNS or Worker ownership is ambiguous; deployment stopped to preserve existing services.');
+  const overlapping = applications.filter(item => overlapsTarget(item));
+  const legacyApplications = migrationIndicated ? applications.filter(item => overlapsTarget(item, LEGACY_HOSTNAME)) : [];
+  const namedElsewhere = applications.some(item => item.name === APP_NAME && !overlapsTarget(item) && !overlapsTarget(item, LEGACY_HOSTNAME));
+  if (overlapping.length > 1 || legacyApplications.length > 1 || namedElsewhere || (overlapping.length && legacyApplications.length)
+      || [...overlapping, ...legacyApplications].some(item => ![HOSTNAME, LEGACY_HOSTNAME].includes(item.domain) || item.name !== APP_NAME || item.type !== 'self_hosted')) {
     throw new Error('An unrelated or overlapping Access application already covers the dashboard; deployment stopped.');
   }
-  let application = overlapping[0];
+  let application = overlapping[0] ?? legacyApplications[0];
   let provider;
+  let applicationPolicies;
   if (application) {
     provider = providers.find(item => application.allowed_idps?.length === 1 && item.id === application.allowed_idps[0]);
-    const policies = await api.all(`${access.accessPath}/apps/${application.id}/policies`);
-    validateApplication(application, policies, provider, authorizedEmails);
+    applicationPolicies = await api.all(`${access.accessPath}/apps/${application.id}/policies`);
+    validateApplication(application, applicationPolicies, provider, authorizedEmails, application.domain);
+    if (application.domain === LEGACY_HOSTNAME && !applicationPolicies[0]?.id) throw new Error('The legacy Access policy identifier is required to preserve authorization during migration.');
   } else {
     const namedProvider = providers.find(item => item.name === OTP_NAME);
     if (namedProvider && namedProvider.type !== 'onetimepin') throw new Error('The managed OTP name belongs to another identity provider; deployment stopped.');
     provider = namedProvider ?? providers.find(item => item.type === 'onetimepin');
   }
-  return {api, authorizedEmails, zoneId: zone.id, issuer, provider, application, accessPath: access.accessPath};
+  let legacy;
+  let legacyCleanupStatus = 'notApplicable';
+  if (legacyDomain || legacyApplications.length) {
+    if (!legacyDomain || !application || !legacyDomain.id) throw new Error('The legacy dashboard cannot be migrated without verified Worker domain and Access ownership.');
+    const oldZones = await api.all(`zones?name=${LEGACY_ZONE}`);
+    const matchingOldZones = oldZones.filter(item => item.name === LEGACY_ZONE);
+    const oldZone = matchingOldZones[0];
+    if (matchingOldZones.length !== 1 || oldZone.status !== 'active' || oldZone.account?.id !== ACCOUNT_ID || legacyDomain.zone_id !== oldZone.id
+        || (legacyDomain.environment !== undefined && legacyDomain.environment !== 'production')) {
+      throw new Error('The legacy dashboard zone and Worker domain must belong to the telemetry account before any migration or cleanup.');
+    }
+    const oldRecords = await api.all(`zones/${oldZone.id}/dns_records?name=${LEGACY_HOSTNAME}`);
+    legacy = {domain: legacyDomain, zoneId: oldZone.id, records: oldRecords.filter(record => record.name === LEGACY_HOSTNAME && ['A', 'AAAA', 'CNAME'].includes(record.type))};
+    if (legacy.records.some(record => !record.id || typeof record.content !== 'string')) throw new Error('Legacy DNS ownership snapshot is incomplete; migration stopped.');
+    // Workers custom domains use a proxied discard-address origin. Never
+    // adopt a real A/AAAA/CNAME origin solely because it shares the hostname.
+    if (legacy.records.some(record => record.type !== 'AAAA' || record.content !== '100::' || record.proxied !== true)) {
+      throw new Error('Legacy DNS has address records without a verified Worker-managed origin; migration stopped before any write.');
+    }
+  } else if (domain && application?.domain === HOSTNAME && !legacyAtHost && !applications.some(item => overlapsTarget(item, LEGACY_HOSTNAME))) {
+    // A previous process may have detached the old domain before it could clean
+    // DNS. No cross-run ownership snapshot exists, so detect but never delete
+    // such remnants. Unrelated services and unavailable legacy scopes do not
+    // become permanent dependencies of normal deployments to datapyn.com.
+    legacyCleanupStatus = 'unverified';
+    try {
+      const oldZones = await api.all(`zones?name=${LEGACY_ZONE}`);
+      const candidates = oldZones.filter(item => item.name === LEGACY_ZONE && item.status === 'active' && item.account?.id === ACCOUNT_ID);
+      if (candidates.length === 1) {
+        const remnants = await api.all(`zones/${candidates[0].id}/dns_records?name=${LEGACY_HOSTNAME}`);
+        if (remnants.some(item => item.name === LEGACY_HOSTNAME && ['A','AAAA','CNAME'].includes(item.type))) {
+          throw new Error('Legacy dashboard address records remain without a current Worker ownership snapshot; the new dashboard is protected, but cleanup is pending explicit DNS ownership review.');
+        }
+        legacyCleanupStatus = 'verifiedAbsent';
+      }
+    } catch (error) { if (!(error instanceof CloudflareApiError)) throw error; }
+  }
+  return {api, authorizedEmails, zoneId: zone.id, issuer, provider, application, applicationPolicies, legacy, legacyCleanupStatus, accessPath: access.accessPath};
 }
 
 export async function ensureAccess(target) {
@@ -288,6 +336,18 @@ export async function ensureAccess(target) {
     options_preflight_bypass: false, allow_authenticate_via_warp: false,
     policies: [{name: POLICY_NAME, decision: 'allow', include: authorizedEmails.map(email => ({email: {email}})), require: [], exclude: []}],
   })});
+  else if (app.domain === LEGACY_HOSTNAME) {
+    // Move the validated application rather than creating a second allowlist.
+    // Keep its policy identifier, email selectors and identity provider intact.
+    await api(`${accessPath}/apps/${app.id}`, {method: 'PUT', body: JSON.stringify({
+      name: APP_NAME, domain: HOSTNAME, type: 'self_hosted', session_duration: app.session_duration ?? '8h',
+      allowed_idps: [provider.id], auto_redirect_to_identity: true, http_only_cookie_attribute: true,
+      options_preflight_bypass: false, allow_authenticate_via_warp: false,
+      ...(app.destinations?.length ? {destinations: app.destinations.map(item => ({...item, uri: HOSTNAME}))} : {}),
+      ...(app.self_hosted_domains?.length ? {self_hosted_domains: [HOSTNAME]} : {}),
+      policies: target.applicationPolicies.map(policy => ({id: policy.id, precedence: Number.isInteger(policy.precedence) ? policy.precedence : 1})),
+    })});
+  }
   if (!app?.id) throw new Error('Cloudflare did not return an Access application identifier.');
   // Re-read persisted authorization, not just the creation response.
   const [savedApp, savedPolicies, savedProvider] = await Promise.all([
@@ -295,7 +355,47 @@ export async function ensureAccess(target) {
     api(`${accessPath}/identity_providers/${provider.id}`),
   ]);
   validateApplication(savedApp, savedPolicies, savedProvider, authorizedEmails);
+  if (app.domain === LEGACY_HOSTNAME && (savedApp.aud !== app.aud || savedPolicies[0]?.id !== target.applicationPolicies[0].id)) {
+    throw new Error('The migrated Access application changed its audience or policy identity; deployment stopped.');
+  }
   return {issuer: target.issuer, audience: savedApp.aud};
+}
+
+function dnsIdentity(record) {
+  return JSON.stringify([record.id, record.name, record.type, record.content, record.proxied ?? null, record.ttl ?? null]);
+}
+
+export async function cleanupLegacy(target) {
+  if (!target.legacy) return {legacyCleaned: false, legacyCleanupStatus: target.legacyCleanupStatus};
+  const {api, legacy} = target;
+  const domains = await api.all(`${accountPath}/workers/domains`);
+  const destination = domains.find(item => item.hostname === HOSTNAME);
+  if (!destination || destination.service !== WORKER || destination.zone_id !== target.zoneId
+      || (destination.environment !== undefined && destination.environment !== 'production')) {
+    throw new Error('The destination custom domain must belong to the telemetry Worker before legacy cleanup.');
+  }
+  const previous = domains.find(item => item.hostname === LEGACY_HOSTNAME);
+  if (previous && (previous.id !== legacy.domain.id || previous.service !== WORKER || previous.zone_id !== legacy.zoneId
+      || (previous.environment !== undefined && previous.environment !== 'production'))) {
+    throw new Error('The legacy custom domain changed ownership after preflight; cleanup stopped.');
+  }
+  // Wrangler may already detach the old domain while replacing custom routes.
+  // The pre-deploy snapshot still proves ownership for this invocation only.
+  if (previous) await api(`${accountPath}/workers/domains/${encodeURIComponent(previous.id)}`, {method: 'DELETE'});
+  const remainingDomains = await api.all(`${accountPath}/workers/domains`);
+  if (remainingDomains.some(item => item.hostname === LEGACY_HOSTNAME)) throw new Error('The legacy custom domain is still attached; DNS cleanup stopped.');
+  const current = await api.all(`zones/${legacy.zoneId}/dns_records?name=${LEGACY_HOSTNAME}`);
+  const addressRecords = current.filter(record => record.name === LEGACY_HOSTNAME && ['A', 'AAAA', 'CNAME'].includes(record.type));
+  const snapshots = new Map(legacy.records.map(record => [record.id, dnsIdentity(record)]));
+  if (addressRecords.some(record => snapshots.get(record.id) !== dnsIdentity(record))) {
+    throw new Error('Legacy DNS changed after the ownership snapshot; no remaining DNS records were deleted.');
+  }
+  for (const record of addressRecords) await api(`zones/${legacy.zoneId}/dns_records/${encodeURIComponent(record.id)}`, {method: 'DELETE'});
+  const remainingRecords = await api.all(`zones/${legacy.zoneId}/dns_records?name=${LEGACY_HOSTNAME}`);
+  if (remainingRecords.some(record => record.name === LEGACY_HOSTNAME && ['A', 'AAAA', 'CNAME'].includes(record.type))) {
+    throw new Error('Legacy address records remain after cleanup; the new dashboard is protected but cleanup needs review.');
+  }
+  return {legacyCleaned: true, legacyCleanupStatus: 'completed'};
 }
 
 export function productionConfig(config, access, configPath) {
@@ -384,7 +484,8 @@ export async function deploy({token = process.env.CLOUDFLARE_API_TOKEN, accessTo
   const settings = await target.api(`${accountPath}/workers/scripts/${WORKER}/subdomain`);
   if (settings?.enabled !== false || settings?.previews_enabled !== false) throw new Error('workers.dev or preview URLs are still enabled; deployment is not considered protected.');
   await verifyProtection(access.issuer, request);
-  return {hostname: HOSTNAME, worker: WORKER, accessProtected: true, workersDevDisabled: true};
+  const cleanup = await cleanupLegacy(target);
+  return {hostname: HOSTNAME, worker: WORKER, accessProtected: true, workersDevDisabled: true, ...cleanup};
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

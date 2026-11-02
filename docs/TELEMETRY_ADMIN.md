@@ -1,6 +1,6 @@
 # Painel administrativo de telemetria
 
-O serviço `services/telemetry-admin` publica o painel em **painel.docfis.com**.
+O serviço `services/telemetry-admin` publica o painel em **painel.datapyn.com**.
 Interface e API são protegidas pelo mesmo aplicativo Cloudflare Access. O
 coletor `telemetry.datapyn.com/v1/events` continua público e independente.
 Não é necessário publicar outra versão desktop.
@@ -51,13 +51,13 @@ audience e expiração de `Cf-Access-Jwt-Assertion` antes de servir qualquer HTM
 asset, health ou consulta. Configuração ausente bloqueia o acesso.
 
 `workers_dev` e URLs de preview ficam desativados, e o Worker também recusa
-qualquer hostname diferente de `painel.docfis.com`, impedindo contorno pelo
+qualquer hostname diferente de `painel.datapyn.com`, impedindo contorno pelo
 endereço alternativo. O binding de assets usa `run_worker_first: true` para que
 arquivos estáticos também passem pela verificação.
 
 ## Preparação e publicação
 
-1. Confirme que **docfis.com** está ativa na conta da telemetria
+1. Confirme que **datapyn.com** está ativa na conta da telemetria
    `10d97e9bda1dd76cde34ad2f54c8c37e`. Custom Domains precisam de uma zona acessível
    na conta do Worker, e o binding de Analytics consulta a conta do Worker. O
    script para se a zona estiver ausente, inacessível, inativa ou em outra conta.
@@ -69,7 +69,7 @@ arquivos estáticos também passem pela verificação.
    Se apenas uma credencial estiver cadastrada, ela precisa reunir as permissões
    das duas funções. Preserve as permissões do coletor em `datapyn.com`.
 4. Permissões da credencial de infraestrutura: Workers Scripts Edit na conta,
-   Workers Routes Edit e DNS Edit na zona `docfis.com`, Zone Read e Account
+   Workers Routes Edit e DNS Edit na zona `datapyn.com`, Zone Read e Account
    Analytics Read para o diagnóstico das consultas. Permissões da credencial
    de Access: Access: Apps and Policies Edit; Access: Organizations, Identity
    Providers, and Groups Edit na conta.
@@ -100,14 +100,14 @@ sem autenticação e o desligamento de `workers.dev`/preview. O login interativo
 a consulta ao dataset real devem ser conferidos com o e-mail autorizado.
 As credenciais de infraestrutura e Access são usadas separadamente. Se a leitura
 da organização Access da conta for negada por permissão, o deploy também verifica
-o escopo legado da zona `docfis.com`; só prossegue se a organização puder ser lida,
+o escopo legado da zona `datapyn.com`; só prossegue se a organização puder ser lida,
 mantendo o mesmo escopo nas operações de IdP, aplicativo e política.
 
 Se a criação do Worker funcionar e a associação do Custom Domain falhar, o
 próximo deploy recusará adotar um Worker sem domínio apenas pelo nome. Confira
 no dashboard a origem e a configuração desse Worker antes de associar o domínio
-ou remover somente a publicação incompleta. O script não exclui recursos
-automaticamente e não repete escritas de Access depois de uma resposta ambígua.
+ou remover somente a publicação incompleta. O script não adota recursos de
+propriedade desconhecida e não repete escritas de Access depois de uma resposta ambígua.
 Falhas temporárias de DNS/TLS na verificação final têm tentativas limitadas;
 uma resposta pública com HTTP 200 interrompe a verificação imediatamente.
 
@@ -132,16 +132,20 @@ o funcionamento do binding na conta deve ser validado no primeiro deploy.
 Não há contratação automática de plano pago neste serviço. Os limites são
 compartilhados pela conta, e o cache reduz consultas repetidas.
 
-O [diagnóstico inicial](https://github.com/natharuc/datapyn/actions/runs/40696733588)
-com o secret existente não encontrou a zona `docfis.com` e recebeu HTTP 403 na
-organização Access. Isso comprova falta de acesso com essa credencial, sem
-concluir se a zona ou a organização existem em outra conta. O domínio não foi
-substituído por `datapyn.com`.
+## Correção do domínio
 
-Em **02/11/2026**, o painel foi publicado em
-[https://painel.docfis.com](https://painel.docfis.com), com o
-[workflow de publicação concluído](https://github.com/natharuc/datapyn/actions/runs/41428254678).
-As credenciais de infraestrutura e Access estão separadas. Foram confirmados
-redirecionamentos de autenticação em `/` e `/api/dashboard`, alternativas
-`workers.dev`/preview desativadas e health HTTP 200 do coletor independente.
-O login interativo deve usar um dos e-mails explicitamente autorizados.
+O primeiro rollout em 02/11/2026 usou `painel.docfis.com`, conforme o
+encaminhamento inicial. O usuário corrigiu o destino para
+**[painel.datapyn.com](https://painel.datapyn.com)** e autorizou a transferência
+e a retirada das configurações desse painel do DocFis.
+
+A migração reconhece somente o hostname antigo exato, o Worker conhecido e seu
+aplicativo Access com as políticas já validadas. Publica o destino protegido e,
+após verificá-lo, conclui a retirada da associação antiga e dos registros de
+endereço que forem comprovadamente desse painel. Registros e serviços de terceiros são
+preservados. O Worker recusa requisições no domínio antigo, inclusive com um
+JWT válido. A ingestão em `telemetry.datapyn.com` continua independente.
+
+O login interativo usa um dos e-mails explicitamente autorizados. Interface e
+API devem redirecionar para Access sem autenticação; `workers.dev` e previews
+permanecem desativados.

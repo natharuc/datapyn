@@ -19,7 +19,7 @@ async function signed(payload={},options={}) {
   return new SignJWT({iss:settings.ACCESS_TEAM_DOMAIN,aud:settings.ACCESS_AUD,sub:"test-user",iat:Math.floor(now/1000),exp:Math.floor(now/1000)+300,...payload})
     .setProtectedHeader({alg:"RS256",kid:"test-key",...options}).sign(privateKey);
 }
-const req = (path,assertion,origin="https://painel.docfis.com") => new Request(origin+path,{headers:assertion?{"Cf-Access-Jwt-Assertion":assertion}:{}});
+const req = (path,assertion,origin="https://painel.datapyn.com") => new Request(origin+path,{headers:assertion?{"Cf-Access-Jwt-Assertion":assertion}:{}});
 const ctx = {waitUntil(){throw new Error("must not write cache");}};
 
 test("requires strict configured Access issuer/audience, never accepts a placeholder",()=>{
@@ -53,9 +53,23 @@ test("denies unauthenticated UI, static assets, health and API before touching a
 });
 test("workers.dev, version URLs, alternate hosts, plaintext and non-default ports cannot bypass Access",async()=>{
   const app=createHandler({resolver}),assertion=await token();
-  for(const host of ["https://datapyn-telemetry-admin.account.workers.dev","https://abc-datapyn-telemetry-admin.account.workers.dev","https://other.docfis.com","http://painel.docfis.com","https://painel.docfis.com:8443"]){
+  for(const host of ["https://datapyn-telemetry-admin.account.workers.dev","https://abc-datapyn-telemetry-admin.account.workers.dev","https://other.docfis.com","https://other.datapyn.com","https://painel.datapyn.com.attacker.example","http://painel.datapyn.com","https://painel.datapyn.com:8443"]){
     assert.equal((await app.fetch(req("/api/dashboard",assertion,host),settings,ctx)).status,403);
   }
+});
+
+test("rejects the former painel.docfis.com host even with a valid JWT before touching assets, queries or cache",async()=>{
+  let touches=0;
+  const assertion=await token();
+  await verifyAccess(req("/",assertion),settings,resolver);
+  const app=createHandler({resolver,cache:{match(){touches++;throw Error();}}});
+  const env={...settings,ASSETS:{fetch(){touches++;throw Error();}},ANALYTICS_SQL:{query(){touches++;throw Error();}}};
+  for(const path of ["/","/app.js","/health","/api/dashboard"]){
+    const response=await app.fetch(req(path,assertion,"https://painel.docfis.com"),env,ctx);
+    assert.equal(response.status,403);
+    assert.equal((await response.json()).error,"access_denied");
+  }
+  assert.equal(touches,0);
 });
 test("missing Access config fails closed and exposes no UI",async()=>{
   const response=await createHandler().fetch(req("/"),{ACCESS_TEAM_DOMAIN:"",ACCESS_AUD:""},ctx);
@@ -83,7 +97,7 @@ test("rejects arbitrary SQL, duplicate/unknown parameters, dev and invalid dates
 });
 test("methods and unregistered API paths do not execute queries",async()=>{
   const app=createHandler({resolver}),assertion=await token();
-  assert.equal((await app.fetch(new Request("https://painel.docfis.com/api/dashboard",{method:"POST",headers:{"Cf-Access-Jwt-Assertion":assertion}}),settings,ctx)).status,405);
+  assert.equal((await app.fetch(new Request("https://painel.datapyn.com/api/dashboard",{method:"POST",headers:{"Cf-Access-Jwt-Assertion":assertion}}),settings,ctx)).status,405);
   assert.equal((await app.fetch(req("/api/sql",assertion),settings,ctx)).status,404);
   assert.equal((await app.fetch(req("/__internal/dashboard",assertion),settings,ctx)).status,404);
 });
@@ -96,6 +110,7 @@ test("authorized API runs the bounded binding queries, stores internal cache and
   assert.equal(response.status,200);assert.equal(queries.length,4);assert.equal(stored.length,1);
   const data=await response.json();assert.equal(data.summary.executions,0);assert.equal(data.meta.sampled,true);
   assert.equal(data.series.length,24);assert.equal(response.headers.get("Cache-Control"),"no-store");
+  assert.equal(new URL(stored[0][0].url).origin,"https://painel.datapyn.com");
   assert.match(stored[0][0].url,/\/__internal\/dashboard\?/);assert.equal(stored[0][2],"public, max-age=60");
   assert.equal(JSON.stringify(data).includes("test-user"),false);assert.equal(JSON.stringify(data).includes("ANALYTICS_SQL"),false);
 });

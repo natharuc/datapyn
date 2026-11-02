@@ -29,7 +29,7 @@ export function createHandler(dependencies: Dependencies = {}) {
       try {
         const url = new URL(request.url);
         // Deny alternate origins even if workers.dev or preview URLs are re-enabled.
-        if (url.protocol !== "https:" || url.host !== "painel.docfis.com") return secure(error("access_denied","Acesso negado.",403),request.method);
+        if (url.protocol !== "https:" || url.host !== "painel.datapyn.com") return secure(error("access_denied","Acesso negado.",403),request.method);
         await verifyAccess(request,env,dependencies.resolver);
         if (!["GET","HEAD"].includes(request.method)) {
           response = error("method_not_allowed","Método não permitido.",405);
@@ -39,7 +39,7 @@ export function createHandler(dependencies: Dependencies = {}) {
           const filters = parseFilters(url.searchParams,now);
           const cache = dependencies.cache ?? (typeof caches === "undefined" ? undefined : await caches.open("telemetry-admin-v1"));
           // This key contains only approved filters. Lookup always follows JWT verification.
-          const cacheKey = new Request(`https://painel.docfis.com/__internal/dashboard?v=1&${new URLSearchParams({...filters})}`);
+          const cacheKey = new Request(`https://painel.datapyn.com/__internal/dashboard?v=1&${new URLSearchParams({...filters})}`);
           const cached = await cache?.match(cacheKey);
           if (cached) response = cached;
           else {
