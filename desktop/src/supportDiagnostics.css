@@ -1,1 +1,44 @@
-.about-content{gap:16px!important}.about-identity{display:flex;gap:18px;align-items:center}.about-identity img{width:64px;height:64px}.about-identity h2{font-size:24px;font-weight:500;letter-spacing:-.5px;margin:0}.about-identity p{font:13px "Ubuntu Mono",monospace;margin:5px 0 7px;color:var(--blue,#80a3ff)}.about-identity span{font-size:12px;color:var(--muted,#8998b3)}.about-platform{display:grid;grid-template-columns:1fr 1fr;gap:20px}.about-platform h3{font-size:12px;font-weight:500;margin:0 0 7px}.about-platform p{font-size:12px;line-height:1.8;margin:0}.about-platform small{font-size:10px;color:var(--muted,#8998b3)}.about-license{font-size:12px;margin:0}.about-links{display:flex;gap:8px;flex-wrap:wrap}.about-links button{display:flex;align-items:center;gap:5px;font-size:11px}.about-runtime{border-top:1px solid var(--border,#2b3547);padding-top:12px;font-size:12px}.about-runtime summary{cursor:pointer;color:var(--muted,#8998b3)}.about-runtime dl{font-size:11px;margin:10px 0}.about-runtime dl>div{display:flex;gap:12px;margin-top:4px}.about-runtime dt{width:75px;color:var(--muted,#8998b3)}.about-runtime dd{margin:0}.about-runtime table{width:100%;border-collapse:collapse;font-size:11px}.about-runtime td,.about-runtime th{padding:5px 7px;border-bottom:1px solid var(--border,#2b3547);text-align:left}.about-runtime td:nth-child(2){font-family:"Ubuntu Mono",monospace}.about-diagnostic-note{font-size:11px;line-height:1.7;color:var(--muted,#8998b3);margin:0}.app-crash-screen{display:grid;place-items:center;min-height:100vh;padding:32px;background:var(--background,#101725);color:var(--text,#d6dce8);font-family:Ubuntu,sans-serif}.app-crash-screen>div{max-width:590px}.app-crash-label{font-size:13px;color:var(--blue,#80a3ff)}.app-crash-screen h1{font-size:26px;font-weight:500;margin:15px 0}.app-crash-screen p{font-size:14px;line-height:1.7}.app-crash-note{color:var(--muted,#8998b3)}.app-crash-actions{display:flex;gap:10px;margin-top:24px;flex-wrap:wrap}.app-crash-actions button{padding:9px 13px;border:1px solid var(--border,#2b3547);background:var(--panel,#151e2e);color:inherit;border-radius:4px;cursor:pointer;font:12px Ubuntu,sans-serif}.app-crash-actions .primary-button{background:var(--blue,#80a3ff);color:var(--on-accent)}.app-crash-message{font-size:12px!important;color:var(--muted,#8998b3)}
+.data-form.about-content {
+  gap: 22px;
+  padding: 24px;
+  min-height: 0;
+}
+.about-content > * { flex-shrink: 0; }
+.about-identity { display: flex; gap: 20px; align-items: center; min-width: 0; }
+.about-identity img { width: 56px; height: 56px; flex: 0 0 56px; object-fit: contain; }
+.about-identity > div { min-width: 0; }
+.about-identity h2 { font-size: 24px; font-weight: 500; line-height: 1.25; letter-spacing: -.5px; margin: 0; }
+.about-identity p { font: 12px/1.5 "Ubuntu Mono", monospace; margin: 5px 0 7px; color: var(--muted); }
+.about-identity span { display: block; font-size: 12px; line-height: 1.6; color: var(--muted); }
+.about-platform { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.about-platform section { min-width: 0; }
+.about-platform h3 { font-size: 12px; font-weight: 500; margin: 0 0 8px; line-height: 1.5; }
+.about-platform p { font-size: 12px; line-height: 1.7; margin: 0; }
+.about-platform small { display: block; margin-top: 8px; font-size: 11px; line-height: 1.6; color: var(--muted); }
+.about-project { display: flex; flex-direction: column; gap: 10px; }
+.about-license { font-size: 12px; line-height: 1.6; margin: 0; }
+.about-links { display: flex; gap: 8px 20px; flex-wrap: wrap; }
+.about-links button { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; line-height: 1.5; padding: 2px 0; min-width: 0; overflow-wrap: anywhere; text-align: left; }
+.about-links svg { flex-shrink: 0; }
+.about-runtime { border-top: 1px solid var(--border); padding-top: 16px; font-size: 12px; min-width: 0; }
+.about-runtime summary { cursor: pointer; color: var(--muted); line-height: 1.6; width: fit-content; }
+.about-runtime summary:hover { color: var(--text); }
+.about-runtime summary:focus-visible { outline: 2px solid var(--blue-light); outline-offset: 4px; }
+.about-runtime-content { margin-top: 16px; }
+.about-runtime dl { display: grid; gap: 8px; font-size: 11px; margin: 0 0 16px; }
+.about-runtime dl > div { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 12px; line-height: 1.6; }
+.about-runtime dt { color: var(--muted); }
+.about-runtime dd { margin: 0; overflow-wrap: anywhere; }
+.about-runtime table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.about-runtime td, .about-runtime th { padding: 8px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+.about-runtime th { font-weight: 500; color: var(--muted); }
+.about-runtime td:nth-child(2) { font-family: "Ubuntu Mono", monospace; }
+.about-diagnostic-note { font-size: 11px; line-height: 1.7; color: var(--muted); margin: 0; }
+@media (max-width: 640px) {
+  .data-form.about-content { gap: 20px; padding: 20px; }
+  .about-platform { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  .about-identity { align-items: flex-start; gap: 16px; }
+  .about-identity img { width: 48px; height: 48px; flex-basis: 48px; }
+}
+
+.app-crash-screen{display:grid;place-items:center;min-height:100vh;padding:32px;background:var(--background,#101725);color:var(--text,#d6dce8);font-family:Ubuntu,sans-serif}.app-crash-screen>div{max-width:590px}.app-crash-label{font-size:13px;color:var(--blue,#80a3ff)}.app-crash-screen h1{font-size:26px;font-weight:500;margin:15px 0}.app-crash-screen p{font-size:14px;line-height:1.7}.app-crash-note{color:var(--muted,#8998b3)}.app-crash-actions{display:flex;gap:10px;margin-top:24px;flex-wrap:wrap}.app-crash-actions button{padding:9px 13px;border:1px solid var(--border,#2b3547);background:var(--panel,#151e2e);color:inherit;border-radius:4px;cursor:pointer;font:12px Ubuntu,sans-serif}.app-crash-actions .primary-button{background:var(--blue,#80a3ff);color:var(--on-accent)}.app-crash-message{font-size:12px!important;color:var(--muted,#8998b3)}
