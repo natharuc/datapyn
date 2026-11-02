@@ -137,3 +137,11 @@ com o secret existente não encontrou a zona `docfis.com` e recebeu HTTP 403 na
 organização Access. Isso comprova falta de acesso com essa credencial, sem
 concluir se a zona ou a organização existem em outra conta. O domínio não foi
 substituído por `datapyn.com`.
+
+Em **02/11/2026**, o painel foi publicado em
+[https://painel.docfis.com](https://painel.docfis.com), com o
+[workflow de publicação concluído](https://github.com/natharuc/datapyn/actions/runs/41428254678).
+As credenciais de infraestrutura e Access estão separadas. Foram confirmados
+redirecionamentos de autenticação em `/` e `/api/dashboard`, alternativas
+`workers.dev`/preview desativadas e health HTTP 200 do coletor independente.
+O login interativo deve usar um dos e-mails explicitamente autorizados.
