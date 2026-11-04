@@ -271,6 +271,15 @@ fn disable_browser_actions(window: &tauri::WebviewWindow) -> Result<(), String> 
     }
 }
 
+fn local_window_paths(label: &str) -> &'static [&'static str] {
+    match label {
+        // Linux release loads the main window at `tauri://localhost`, whose path is empty.
+        "main" => &["", "/", "/index.html"],
+        "splash" => &["/splash.html"],
+        _ => &[],
+    }
+}
+
 fn require_local_window(window: &tauri::WebviewWindow, labels: &[&str]) -> Result<(), String> {
     if !labels.contains(&window.label()) {
         return Err("This window cannot use this command".into());
@@ -281,12 +290,10 @@ fn require_local_window(window: &tauri::WebviewWindow, labels: &[&str]) -> Resul
     } else {
         None
     };
-    let paths: &[&str] = match window.label() {
-        "main" => &["/", "/index.html"],
-        "splash" => &["/splash.html"],
-        _ => &[],
-    };
-    if paths.iter().any(|path| local_asset(&url, path, origin)) {
+    if local_window_paths(window.label())
+        .iter()
+        .any(|path| local_asset(&url, path, origin))
+    {
         Ok(())
     } else {
         Err("Only the local DataPyn interface can use this command".into())
@@ -738,8 +745,8 @@ mod update_tests {
     use super::updater_channel;
     use super::{
         buffer_startup_files, collect_files, collect_opened_files, local_asset, local_popout,
-        logical_popout_layout, native_popout_label, popout_outer_position, update_status,
-        SplashPhase, SplashSnapshot,
+        local_window_paths, logical_popout_layout, native_popout_label, popout_outer_position,
+        update_status, SplashPhase, SplashSnapshot,
     };
     use serde_json::json;
     use std::sync::{Arc, Barrier, Mutex};
@@ -977,6 +984,34 @@ mod update_tests {
                 "/splash.html",
                 Some(&origin)
             ));
+        }
+    }
+
+    #[test]
+    fn main_window_accepts_its_local_entrypoint_on_every_platform() {
+        let origin = "http://127.0.0.1:1420".parse().unwrap();
+        let accepts = |address: &str| {
+            local_window_paths("main")
+                .iter()
+                .any(|path| local_asset(&address.parse().unwrap(), path, Some(&origin)))
+        };
+        for address in [
+            "tauri://localhost",
+            "tauri://localhost/",
+            "tauri://localhost/index.html",
+            "http://tauri.localhost/",
+            "http://127.0.0.1:1420/",
+        ] {
+            assert!(accepts(address), "{address}");
+        }
+        for address in [
+            "tauri://evil",
+            "tauri://localhost/splash.html",
+            "https://example.com/",
+            "http://tauri.localhost:8080/",
+            "file:///index.html",
+        ] {
+            assert!(!accepts(address), "{address}");
         }
     }
 
