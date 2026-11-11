@@ -2,6 +2,7 @@
 
 import hashlib
 import importlib.util
+import io
 import json
 from pathlib import Path
 import struct
@@ -136,13 +137,20 @@ def test_bottle_checksum_must_match_before_installation(tmp_path):
     prerequisites.verify_bottle(bottle, hashlib.sha256(b"wrong archive").hexdigest())
 
 
-def test_runner_fetches_pinned_bottles_before_replacing_only_ci_dependencies(tmp_path, monkeypatch):
+def test_runner_downloads_pinned_bottles_before_replacing_only_ci_dependencies(tmp_path, monkeypatch):
     calls = []
     bottles = {}
     monkeypatch.setattr(prerequisites, "require_disposable_runner", lambda: None)
     monkeypatch.setattr(prerequisites.shutil, "which", lambda _: "/opt/homebrew/bin/brew")
-    monkeypatch.setattr(prerequisites, "verify_bottle", lambda path, digest: None)
     monkeypatch.setattr(prerequisites, "check_file", lambda path, **kwargs: 1)
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+
+    def download(formula, directory):
+        bottles[formula] = str(directory / f"{formula}.bottle.tar.gz")
+        calls.append(["download", formula])
+        return Path(bottles[formula])
+
+    monkeypatch.setattr(prerequisites, "download_bottle", download)
 
     def run(command, **kwargs):
         args = command[1:]
@@ -151,26 +159,48 @@ def test_runner_fetches_pinned_bottles_before_replacing_only_ci_dependencies(tmp
         assert kwargs["env"]["HOMEBREW_NO_AUTO_UPDATE"] == "1"
         if args == ["--prefix"]:
             output = "/opt/homebrew"
-        elif args[0] == "--cache":
-            bottles[args[-1]] = str(tmp_path / f"{args[-1]}.bottle.tar.gz")
-            output = bottles[args[-1]]
         elif args[0] == "info":
             output = json.dumps({"formulae": [{"name": name, "installed": [{"version": "new"}]} for name in prerequisites.BOTTLES]})
         else:
             output = ""
-        return SimpleNamespace(stdout=output)
+        return SimpleNamespace(stdout=output, stderr="")
 
     monkeypatch.setattr(prerequisites.subprocess, "run", run)
     prerequisites.prepare()
-    assert calls[1:5] == [
-        ["fetch", "--force", "--bottle-tag=arm64_sonoma", "libtool"],
-        ["--cache", "--bottle-tag=arm64_sonoma", "libtool"],
-        ["fetch", "--force", "--bottle-tag=arm64_sonoma", "unixodbc"],
-        ["--cache", "--bottle-tag=arm64_sonoma", "unixodbc"],
-    ]
+    assert calls[1:3] == [["download", "libtool"], ["download", "unixodbc"]]
+    assert not any(command[0] in {"fetch", "--cache"} for command in calls)
     assert calls[-4:] == [
         ["uninstall", "--ignore-dependencies", "unixodbc"],
         ["uninstall", "--ignore-dependencies", "libtool"],
         ["install", "--force-bottle", bottles["libtool"]],
         ["install", "--force-bottle", bottles["unixodbc"]],
     ]
+
+
+def test_download_uses_public_pinned_blob_and_checks_actual_bytes(tmp_path, monkeypatch):
+    payload = b"public bottle fixture"
+    digest = hashlib.sha256(payload).hexdigest()
+    monkeypatch.setattr(prerequisites, "BOTTLES", {"libtool": ("2.6.2", digest)})
+    requests = []
+
+    def open_url(request, **kwargs):
+        requests.append(request)
+        assert kwargs["timeout"] == 30
+        if isinstance(request, str):
+            return io.BytesIO(b'{"token":"anonymous-public-pull"}')
+        assert request.get_header("Authorization") == "Bearer anonymous-public-pull"
+        return io.BytesIO(payload)
+
+    monkeypatch.setattr(prerequisites, "urlopen", open_url)
+    path = prerequisites.download_bottle("libtool", tmp_path)
+    assert path.name == "libtool--2.6.2.arm64_sonoma.bottle.tar.gz"
+    assert path.read_bytes() == payload
+    assert requests[1].full_url == f"https://ghcr.io/v2/homebrew/core/libtool/blobs/sha256:{digest}"
+
+
+def test_corrupted_download_cannot_proceed_to_installation(tmp_path, monkeypatch):
+    monkeypatch.setattr(prerequisites, "urlopen", lambda request, **kwargs: io.BytesIO(
+        b'{"token":"anonymous"}' if isinstance(request, str) else b"corrupted bottle"
+    ))
+    with pytest.raises(RuntimeError, match="checksum mismatch"):
+        prerequisites.download_bottle("libtool", tmp_path)

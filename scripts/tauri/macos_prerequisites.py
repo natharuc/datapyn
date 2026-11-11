@@ -10,6 +10,7 @@ import platform
 import shutil
 import subprocess
 import sys
+from urllib.request import Request, urlopen
 
 from macos_compatibility import check_file
 
@@ -41,6 +42,25 @@ def verify_bottle(path: Path, expected_sha256: str) -> None:
         raise RuntimeError(f"Bottle checksum mismatch for {path.name}; update the reviewed Sonoma bottle pin")
 
 
+def download_bottle(formula: str, directory: Path) -> Path:
+    version, digest = BOTTLES[formula]
+    path = directory / f"{formula}--{version}.{BOTTLE_TAG}.bottle.tar.gz"
+    # These are public Homebrew artifacts. Obtain an anonymous pull grant;
+    # never use the repository's GitHub token or depend on the latest formula.
+    token_url = f"https://ghcr.io/token?service=ghcr.io&scope=repository:homebrew/core/{formula}:pull"
+    with urlopen(token_url, timeout=30) as response:
+        token = json.load(response)["token"]
+    request = Request(
+        f"https://ghcr.io/v2/homebrew/core/{formula}/blobs/sha256:{digest}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    with urlopen(request, timeout=30) as response, path.open("wb") as destination:
+        shutil.copyfileobj(response, destination)
+    verify_bottle(path, digest)
+    print(f"Downloaded and verified {formula} {version} ({BOTTLE_TAG})")
+    return path
+
+
 def prepare() -> None:
     require_disposable_runner()
     brew = shutil.which("brew")
@@ -59,16 +79,19 @@ def prepare() -> None:
         except subprocess.CalledProcessError as error:
             detail = "\n".join(part for part in (error.stdout, error.stderr) if part)
             raise RuntimeError(f"Homebrew {' '.join(arguments)} failed:\n{detail[-6000:]}") from error
+        if arguments[0] in {"install", "uninstall"}:
+            detail = "\n".join(part for part in (result.stdout, result.stderr) if part)
+            print(f"Homebrew {' '.join(arguments)}:\n{detail[-6000:]}")
         return result.stdout.strip()
 
     if run("--prefix") != "/opt/homebrew":
         raise RuntimeError("Expected the native GitHub runner Homebrew prefix /opt/homebrew")
-    cached = {}
-    for formula, (_, digest) in BOTTLES.items():
-        run("fetch", "--force", f"--bottle-tag={BOTTLE_TAG}", formula)
-        path = Path(run("--cache", f"--bottle-tag={BOTTLE_TAG}", formula))
-        verify_bottle(path, digest)
-        cached[formula] = path
+    runner_temp = Path(os.environ.get("RUNNER_TEMP", ""))
+    if not runner_temp.is_absolute() or not runner_temp.is_dir():
+        raise RuntimeError("RUNNER_TEMP must name the disposable runner's existing absolute temporary directory")
+    bottle_directory = runner_temp / "datapyn-sonoma-bottles"
+    bottle_directory.mkdir(exist_ok=True)
+    cached = {formula: download_bottle(formula, bottle_directory) for formula in BOTTLES}
 
     # Validate every download before replacing any preinstalled formula. This
     # uninstall is deliberately restricted to the two named CI dependencies.
