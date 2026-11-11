@@ -157,23 +157,29 @@ def test_runner_downloads_pinned_bottles_before_replacing_only_ci_dependencies(t
         calls.append(args)
         assert kwargs["check"] is True
         assert kwargs["env"]["HOMEBREW_NO_AUTO_UPDATE"] == "1"
-        if args == ["--prefix"]:
+        if args == ["--version"]:
+            output = "Homebrew 7"
+        elif args == ["--prefix"]:
             output = "/opt/homebrew"
         elif args[0] == "info":
             output = json.dumps({"formulae": [{"name": name, "installed": [{"version": "new"}]} for name in prerequisites.BOTTLES]})
         else:
             output = ""
+        if args[0] == "install":
+            assert args[-1].startswith("./")
+            assert kwargs["cwd"] == tmp_path / "datapyn-sonoma-bottles"
+            assert (kwargs["cwd"] / args[-1]) in map(Path, bottles.values())
         return SimpleNamespace(stdout=output, stderr="")
 
     monkeypatch.setattr(prerequisites.subprocess, "run", run)
     prerequisites.prepare()
-    assert calls[1:3] == [["download", "libtool"], ["download", "unixodbc"]]
+    assert calls[2:4] == [["download", "libtool"], ["download", "unixodbc"]]
     assert not any(command[0] in {"fetch", "--cache"} for command in calls)
     assert calls[-4:] == [
         ["uninstall", "--ignore-dependencies", "unixodbc"],
         ["uninstall", "--ignore-dependencies", "libtool"],
-        ["install", "--force-bottle", bottles["libtool"]],
-        ["install", "--force-bottle", bottles["unixodbc"]],
+        ["install", "--force-bottle", "--no-ask", "./libtool.bottle.tar.gz"],
+        ["install", "--force-bottle", "--no-ask", "./unixodbc.bottle.tar.gz"],
     ]
 
 

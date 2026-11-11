@@ -73,9 +73,9 @@ def prepare() -> None:
         "HOMEBREW_NO_ANALYTICS": "1",
     }
 
-    def run(*arguments: str) -> str:
+    def run(*arguments: str, cwd: Path | None = None) -> str:
         try:
-            result = subprocess.run([brew, *arguments], check=True, text=True, capture_output=True, env=env)
+            result = subprocess.run([brew, *arguments], check=True, text=True, capture_output=True, env=env, cwd=cwd)
         except subprocess.CalledProcessError as error:
             detail = "\n".join(part for part in (error.stdout, error.stderr) if part)
             raise RuntimeError(f"Homebrew {' '.join(arguments)} failed:\n{detail[-6000:]}") from error
@@ -84,6 +84,7 @@ def prepare() -> None:
             print(f"Homebrew {' '.join(arguments)}:\n{detail[-6000:]}")
         return result.stdout.strip()
 
+    print(run("--version"))
     if run("--prefix") != "/opt/homebrew":
         raise RuntimeError("Expected the native GitHub runner Homebrew prefix /opt/homebrew")
     runner_temp = Path(os.environ.get("RUNNER_TEMP", ""))
@@ -101,7 +102,10 @@ def prepare() -> None:
         if formula in existing:
             run("uninstall", "--ignore-dependencies", formula)
     for formula in BOTTLES:
-        run("install", "--force-bottle", str(cached[formula]))
+        # Homebrew's tap preflight interprets an absolute /Users/... path as
+        # a tap before selecting the bottle loader. Explicit ./ paths bypass
+        # tap parsing while preserving its supported local-bottle handling.
+        run("install", "--force-bottle", "--no-ask", f"./{cached[formula].name}", cwd=bottle_directory)
 
     for library in (
         Path("/opt/homebrew/opt/libtool/lib/libltdl.7.dylib"),
