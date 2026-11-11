@@ -15,8 +15,9 @@ Base analisada: `847d356` (Tauri 1.0.15). Nenhum banco real foi acessado.
 - Nesta entrega, os novos adaptadores são de consulta. Escrita documental,
   DDL, transações manuais e tabelas temporárias não serão anunciadas como
   suportadas. Os bancos relacionais mantêm seus recursos atuais.
-- Não publicar versão ou alterar a identidade/feed do aplicativo nesta demanda.
-  O trabalho será validado na branch antes de qualquer integração/publicação.
+- Publicação não fazia parte do escopo inicial. Depois da implementação e dos
+  testes, o usuário autorizou commit, integração direta na main e a versão 1.1.0.
+  A identidade, a chave e o endereço do feed do aplicativo permanecem os mesmos.
 
 ## Evidências e decisões
 
@@ -252,5 +253,6 @@ Implementação iniciada somente depois desse fechamento, na mesma branch.
   de empacotamento foram preparados, sem declarar execução nativa neste Windows.
 - Publicar as allowlists do coletor/painel antes de uma versão que emita os novos
   tipos. Nenhuma configuração ou autenticação Cloudflare foi alterada nesta demanda.
-- A branch não altera versão, identidade do aplicativo, chave/feed de atualização
-  ou a versão histórica PyQt. O guia funcional é [DOCUMENT_DATABASES.md](DOCUMENT_DATABASES.md).
+- A publicação autorizada prepara os cinco manifests/lockfiles para Tauri 1.1.0,
+  preservando identidade, chave/endereço do feed e versão histórica PyQt.
+  O guia funcional é [DOCUMENT_DATABASES.md](DOCUMENT_DATABASES.md).
