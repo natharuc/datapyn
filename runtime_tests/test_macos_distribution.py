@@ -157,6 +157,7 @@ def test_runner_downloads_pinned_bottles_before_replacing_only_ci_dependencies(t
         calls.append(args)
         assert kwargs["check"] is True
         assert kwargs["env"]["HOMEBREW_NO_AUTO_UPDATE"] == "1"
+        assert kwargs["env"]["HOMEBREW_DEVELOPER"] == "1"
         if args == ["--version"]:
             output = "Homebrew 7"
         elif args == ["--prefix"]:

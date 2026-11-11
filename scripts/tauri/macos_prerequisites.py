@@ -71,6 +71,9 @@ def prepare() -> None:
         "HOMEBREW_NO_AUTO_UPDATE": "1",
         "HOMEBREW_NO_INSTALL_CLEANUP": "1",
         "HOMEBREW_NO_ANALYTICS": "1",
+        # Homebrew 7.0.x only loads local bottles in developer mode. Limit
+        # that opt-out to this guarded CI process and SHA-verified artifacts.
+        "HOMEBREW_DEVELOPER": "1",
     }
 
     def run(*arguments: str, cwd: Path | None = None) -> str:
