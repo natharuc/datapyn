@@ -117,6 +117,18 @@ conectar informando a senha, mas o runtime deve recusar persistência insegura.
 
 ### macOS arm64
 
+O build Tauri usa um runner macOS 15, mantendo o mínimo macOS 14 do aplicativo.
+`MACOSX_DEPLOYMENT_TARGET=14.0` controla o código compilado, mas não altera o
+mínimo de bibliotecas prontas: a CI instala bottles Sonoma arm64 de unixODBC
+e libtool com SHA256 fixado. Os wheels Kerberos usam GSS/Heimdal do macOS,
+sem carregar o Kerberos de uma bottle mais recente. Antes da publicação,
+`scripts/tauri/macos_compatibility.py` verifica o mínimo real dos binários
+Mach-O do aplicativo e das bibliotecas dentro do runtime PyInstaller; qualquer
+dependência arm64 que exija macOS posterior a 14 interrompe o build.
+Essa verificação de artefato não substitui testes de execução em macOS 14.
+Consulte [bottles Homebrew](https://docs.brew.sh/Bottles) e a
+[retirada do runner macOS 14](https://github.blog/changelog/2026-10-01-github-actions-macos-14-runner-image-retirement/).
+
 Para SQL Server, instale o ODBC arm64 e unixODBC pelo Homebrew nativo. Evite
 misturar um terminal Intel/Rosetta e um aplicativo arm64. O driver Microsoft
 suporta Apple Silicon desde 17.8 e usa unixODBC, não iODBC.

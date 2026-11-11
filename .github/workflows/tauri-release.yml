@@ -73,7 +73,7 @@ jobs:
             platform: linux-x86_64
             target: x86_64-unknown-linux-gnu
             bundles: appimage
-          - os: macos-14
+          - os: macos-15
             platform: darwin-aarch64
             target: aarch64-apple-darwin
             bundles: app,dmg
@@ -122,8 +122,8 @@ jobs:
       - name: macOS database prerequisites
         if: runner.os == 'macOS'
         run: |
-          brew install unixodbc krb5
-          echo "$(brew --prefix krb5)/bin" >> "$GITHUB_PATH"
+          echo "MACOSX_DEPLOYMENT_TARGET=14.0" >> "$GITHUB_ENV"
+          python scripts/tauri/macos_prerequisites.py
       - name: Install dependencies
         run: |
           uv sync --dev --frozen
@@ -151,6 +151,11 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.DATAPYN_TAURI_APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ vars.DATAPYN_TAURI_APPLE_TEAM_ID }}
         run: npm run desktop:build -- --signed --ci --target "$TARGET" --bundles "$BUNDLES"
+      - name: Verify macOS 14 deployment compatibility
+        if: runner.os == 'macOS'
+        run: |
+          DATAPYN_APP_BUNDLE="desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/DataPyn Tauri.app"
+          uv run python scripts/tauri/macos_compatibility.py --maximum 14.0 --runtime "$DATAPYN_APP_BUNDLE/Contents/MacOS/datapyn-runtime" --bundle "$DATAPYN_APP_BUNDLE"
       - name: Smoke macOS sidecar after hardened-runtime signing
         if: runner.os == 'macOS'
         run: |

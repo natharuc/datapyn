@@ -3,6 +3,9 @@
     "features": ["tauri/custom-protocol"]
   },
   "bundle": {
-    "externalBin": ["binaries/datapyn-runtime"]
+    "externalBin": ["binaries/datapyn-runtime"],
+    "macOS": {
+      "minimumSystemVersion": "14.0"
+    }
   }
 }
