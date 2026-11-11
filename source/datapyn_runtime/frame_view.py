@@ -167,6 +167,13 @@ def _specs(params):
     return filters, text, sort
 
 
+def _text_values(series, frame):
+    if frame.attrs.get("datapyn_document_result"):
+        from .values import scalar
+        return series.map(scalar, na_action="ignore").astype("string")
+    return series.astype("string")
+
+
 def pandas_positions(frame, params):
     """Filter/sort only positional indices and one key, never all data columns."""
     import numpy as np
@@ -176,14 +183,14 @@ def pandas_positions(frame, params):
     if text:
         mask = np.zeros(len(frame), dtype=bool)
         for index in range(len(frame.columns)):
-            mask |= frame.iloc[:, index].astype("string").str.contains(text, case=False, regex=False, na=False).to_numpy(dtype=bool, na_value=False)
+            mask |= _text_values(frame.iloc[:, index], frame).str.contains(text, case=False, regex=False, na=False).to_numpy(dtype=bool, na_value=False)
     for item in filters:
         series = frame[column_label(frame, item.get("column"))]
         operator, value = item.get("operator", "contains"), item.get("value")
         if operator in {"is_null", "not_null"}:
             part = series.isna() if operator == "is_null" else series.notna()
         elif operator in {"contains", "starts_with", "ends_with"} or operator == "equals" and value is not None and column_kind(series, pd) == "text":
-            values, token = series.astype("string").str.upper(), str("" if value is None else value).upper()
+            values, token = _text_values(series, frame).str.upper(), str("" if value is None else value).upper()
             part = values.str.contains(token, regex=False, na=False) if operator == "contains" else values.eq(token) if operator == "equals" else getattr(values.str, "startswith" if operator == "starts_with" else "endswith")(token, na=False)
         elif operator == "between":
             lower, upper, exclusive = _range_bounds(series, item, pd)
@@ -215,7 +222,16 @@ def pandas_positions(frame, params):
         label = column_label(frame, sort.get("column"))
         keys = frame[label].iloc[positions]
         narrow = pd.DataFrame({"key": keys.array, "position": positions})
-        positions = narrow.sort_values("key", ascending=sort.get("direction", "asc") == "asc", kind="mergesort", na_position="last")["position"].to_numpy(copy=True)
+        try:
+            ordered = narrow.sort_values("key", ascending=sort.get("direction", "asc") == "asc", kind="mergesort", na_position="last")
+        except TypeError:
+            if not frame.attrs.get("datapyn_document_result"):
+                raise
+            # Document/heterogeneous cells have no native total scalar order.
+            # Sort their displayed JSON text, retaining the actual frame values.
+            narrow["key"] = _text_values(keys, frame).array
+            ordered = narrow.sort_values("key", ascending=sort.get("direction", "asc") == "asc", kind="mergesort", na_position="last")
+        positions = ordered["position"].to_numpy(copy=True)
     return positions
 
 

@@ -32,7 +32,7 @@ export function AboutDialog({onClose,onMessage}:{onClose:()=>void;onMessage?:(me
         </section>
         <section>
           <h3>{t("Bancos")}</h3>
-          <p>{t("SQL Server · PostgreSQL · MySQL · MariaDB · SQLite · Databricks")}</p>
+          <p>{t("SQL Server · PostgreSQL · MySQL · MariaDB · SQLite · Databricks · Elasticsearch · Azure Cosmos DB · MongoDB")}</p>
         </section>
       </div>
       <div className="about-project">

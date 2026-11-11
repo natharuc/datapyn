@@ -6,6 +6,9 @@
 .database-icon[data-database=mariadb] { --database-icon-source: url("./assets/databases/mariadb.svg"); }
 .database-icon[data-database=databricks] { --database-icon-source: url("./assets/databases/databricks.svg"); }
 .database-icon[data-database=sqlite] { --database-icon-source: url("./assets/databases/sqlite.svg"); }
+.database-icon[data-database=elasticsearch] { --database-icon-source: url("./assets/databases/elasticsearch.svg"); }
+.database-icon[data-database=cosmosdb] { --database-icon-source: url("./assets/databases/cosmosdb.svg"); }
+.database-icon[data-database=mongodb] { --database-icon-source: url("./assets/databases/mongodb.svg"); }
 .database-icon-mask { display: block; width: 100%; height: 100%; background-color: currentColor; mask-image: var(--database-icon-source); mask-repeat: no-repeat; mask-position: center; mask-size: contain; mask-mode: alpha; -webkit-mask-image: var(--database-icon-source); -webkit-mask-repeat: no-repeat; -webkit-mask-position: center; -webkit-mask-size: contain; }
 .database-icon .database-icon-light { display: none; }
 :root[data-theme=light] .database-icon .database-icon-dark { display: none; }

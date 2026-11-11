@@ -299,7 +299,15 @@ def _sql_complete(code, line, column, schema):
                         parts = service._split_identifier_parts(label)
                 # Identifier quoting also covers dialect-specific reserved
                 # words that are absent from a portable keyword suggestion list.
-                insertion = quote("sqlserver" if db_type == "mssql" else db_type, *parts)
+                if kind == "column" and db_type in {"mongodb", "cosmosdb"}:
+                    # These are property paths, not one literal SQL column whose
+                    # name contains dots. Mongo's subset rejects quoted dotted
+                    # keys rather than silently selecting a different document.
+                    path = [part for component in parts for part in component.split(".")]
+                    insertion = ".".join(part if re.fullmatch(r"[^\W\d]\w*", part, re.UNICODE)
+                                         else quote(db_type, part) for part in path)
+                else:
+                    insertion = quote("sqlserver" if db_type == "mssql" else db_type, *parts)
             result.append({"label": label, "kind": kind, "detail": detail, "category": kind, "insert_text": insertion})
         return result
 

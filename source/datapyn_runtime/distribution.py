@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import importlib
 import importlib.metadata
+from datetime import datetime, timezone
+from decimal import Decimal
 import os
 from pathlib import Path
 import shutil
@@ -21,7 +23,7 @@ import sys
 PACKAGED_DISTRIBUTIONS = (
     "SQLAlchemy", "pyodbc", "pymssql", "psycopg2-binary", "PyMySQL",
     "mysql-connector-python", "databricks-sql-connector", "databricks-sqlalchemy",
-    "azure-identity", "azure-core", "msal", "msal-extensions", "cryptography",
+    "azure-identity", "azure-core", "azure-cosmos", "pymongo", "dnspython", "msal", "msal-extensions", "cryptography",
     "keyring", "paramiko", "bcrypt", "PyNaCl", "requests", "certifi", "pandas", "numpy", "polars", "pyarrow",
     "openpyxl", "fastexcel", "matplotlib", "plotly", "jedi", "sqlparse", "sqlglot", "jinja2",
     "python-tds", "sqlalchemy-pytds", "pyspnego", "pyOpenSSL",
@@ -30,7 +32,7 @@ PACKAGED_DISTRIBUTIONS = (
 DRIVER_IMPORTS = (
     "pyodbc", "pymssql", "psycopg2", "pymysql", "mysql.connector",
     "databricks.sql", "databricks.sqlalchemy", "databricks.sql.experimental.oauth_persistence",
-    "azure.identity", "msal", "msal_extensions", "keyring", "paramiko",
+    "azure.identity", "azure.cosmos", "pymongo", "bson", "dns.resolver", "msal", "msal_extensions", "keyring", "paramiko",
     "pytds", "sqlalchemy_pytds", "spnego", "OpenSSL",
 ) + (("sspilib",) if sys.platform == "win32" else ("gssapi", "krb5"))
 
@@ -43,14 +45,58 @@ DATABASE_AUTH_MODES = {
     "sqlserver": ["sql", *(["windows"] if sys.platform == "win32" else []), "ntlm", "kerberos", "entra_mfa"],
     "mysql": ["password"], "mariadb": ["password"], "postgresql": ["password"],
     "databricks": ["pat", "oauth"], "sqlite": ["local"],
+    "elasticsearch": ["basic", "api_key"], "cosmosdb": ["key", "entra", "password"],
+    "mongodb": ["password"],
 }
+
+
+def _document_clients() -> dict:
+    """Exercise bundled HTTP/BSON/DNS code without credentials or network I/O."""
+    import requests
+    from azure.cosmos import ContainerProxy, CosmosClient, DatabaseProxy
+    from bson import BSON, Decimal128, ObjectId
+    from bson.codec_options import CodecOptions
+    import dns.name
+    import dns.rdata
+    from pymongo import MongoClient
+
+    with requests.Session() as session:
+        assert callable(session.post)
+    # CosmosClient construction fetches the account properties. Check its
+    # public query interfaces without instantiating a client or asking Azure
+    # Identity to resolve credentials in the build user's environment.
+    assert all(callable(method) for method in (
+        CosmosClient.get_database_client, CosmosClient.list_databases,
+        DatabaseProxy.get_container_client, DatabaseProxy.list_containers,
+        ContainerProxy.query_items,
+    ))
+    sample = {"_id": ObjectId("000000000000000000000001"), "amount": Decimal128(Decimal("123.40")),
+              "at": datetime(2026, 1, 1, tzinfo=timezone.utc), "payload": b"\x00\xff"}
+    assert BSON(BSON.encode(sample)).decode(codec_options=CodecOptions(tz_aware=True)) == sample
+    assert dns.name.from_text("_mongodb._tcp.offline.example.").to_text() == "_mongodb._tcp.offline.example."
+    srv = dns.rdata.from_text("IN", "SRV", "0 0 27017 node.offline.example.")
+    txt = dns.rdata.from_text("IN", "TXT", '"authSource=admin"')
+    assert srv.port == 27017 and srv.target.to_text() == "node.offline.example."
+    assert txt.strings == (b"authSource=admin",)
+    # A normal (not +srv) URI plus connect=False prevents both DNS discovery
+    # and socket/monitor startup. This still validates PyMongo's option parser
+    # and database/collection proxy initialization in the frozen artifact.
+    with MongoClient("mongodb://offline.example:27017", connect=False, retryReads=False, retryWrites=False) as client:
+        assert client["distribution"]["sample"].full_name == "distribution.sample"
+    return {
+        "elasticsearch": {"client": "requests.Session", "authentication": list(DATABASE_AUTH_MODES["elasticsearch"])},
+        "cosmosdb": {"client": "azure.cosmos.CosmosClient", "authentication": list(DATABASE_AUTH_MODES["cosmosdb"]),
+                     "api_clients": {"nosql": "azure.cosmos.CosmosClient", "mongodb": "pymongo.MongoClient"}},
+        "mongodb": {"client": "pymongo.MongoClient", "authentication": list(DATABASE_AUTH_MODES["mongodb"]),
+                    "dns_srv": True, "bson_types": True},
+    }
 
 
 def verify_runtime_distribution() -> dict:
     """Fail on absent bundled integrations; report system prerequisites separately.
 
-    This intentionally imports every supported driver and loads its SQLAlchemy
-    dialect/DBAPI without opening an engine connection or authenticating.
+    Imports every supported integration, loads relational dialects/DBAPIs and
+    verifies document SDKs without opening connections or authenticating.
     """
     errors = []
     versions = {}
@@ -88,6 +134,11 @@ def verify_runtime_distribution() -> dict:
                                "authentication": list(DATABASE_AUTH_MODES[name])}
         except Exception as error:
             errors.append(f"{name} dialect/DBAPI: {error}")
+
+    try:
+        databases.update(_document_clients())
+    except Exception as error:
+        errors.append(f"Document database clients: {error}")
 
     network_authentication = {}
     for mode in ("ntlm", "kerberos"):

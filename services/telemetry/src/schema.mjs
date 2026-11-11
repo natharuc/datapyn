@@ -1,6 +1,6 @@
 export const EVENTS = new Set(["app_start", "execution_finished", "connection_recovery", "runtime_error", "ui_error"]);
 export const PLATFORMS = new Set(["windows", "macos", "linux", "other"]);
-export const DATABASES = new Set(["sqlserver", "postgresql", "mysql", "mariadb", "databricks", "sqlite", "none"]);
+export const DATABASES = new Set(["sqlserver", "postgresql", "mysql", "mariadb", "databricks", "sqlite", "elasticsearch", "cosmosdb", "mongodb", "none"]);
 export const STATUSES = new Set(["started", "succeeded", "failed", "cancelled", "recovering", "ready", "error", "blocked"]);
 export const ERRORS = new Set(["none", "transport", "timeout", "authentication", "syntax", "cancelled", "unknown"]);
 export const ROW_BUCKETS = new Set(["none", "0", "1-100", "101-10000", "10001-1000000", "1000000+"]);

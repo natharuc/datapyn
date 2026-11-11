@@ -2,15 +2,16 @@ import { translate as t, useLocale } from "./i18n";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Braces, ChevronDown, ChevronRight, ChevronsRight, Code2, Copy, Database, FileCode2, Folder, KeyRound, LoaderCircle, RefreshCw, Search, Table2 } from "lucide-react";
 import { runtime, errorText } from "./runtime";
-import { ExplorerController, explorerRows, quoteIdentifier, quoteIdentifierPart,reloadExpanded, type ExplorerNode, type ExplorerContext, type ExplorerDetails } from "./explorer";
+import { ExplorerController, explorerRows, quoteIdentifier, quoteIdentifierPart,documentFieldReference,reloadExpanded, type ExplorerNode, type ExplorerContext, type ExplorerDetails } from "./explorer";
 import { Modal } from "./PanelControls";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import type { MenuPoint } from "./contextMenuModel";
 import "./explorer.css";
+import { databaseCapabilities, type DatabaseCapabilities } from "./databaseCapabilities";
 
 export interface ObjectExplorerProps {
-  sessionId: string; blockId?: string; scopeInherited?: boolean; automaticTransactions?: boolean; connectionId?: string; database?: string; schema?: string; dbType?: string; connected?: boolean; refresh?: number;
-  onInsert: (code: string, language?: "sql" | "python", newBlock?: boolean) => void;
+  sessionId: string; blockId?: string; scopeInherited?: boolean; automaticTransactions?: boolean; connectionId?: string; database?: string; schema?: string; container?:string; capabilities?:DatabaseCapabilities; dbType?: string; connected?: boolean; refresh?: number;
+  onInsert: (code: string, language?: "sql" | "python", newBlock?: boolean, context?:ExplorerContext) => void;
   onContextChange?: (context: ExplorerContext) => Promise<void> | void;
   onError?: (message: string) => void; disabled?: boolean;
 }
@@ -24,8 +25,10 @@ function NodeIcon({ node }: { node: ExplorerNode }) {
   return <Folder size={14} />;
 }
 
-export function ObjectExplorer({ sessionId, blockId, scopeInherited, automaticTransactions, connectionId, database, schema, dbType = "sqlserver", connected = true, refresh = 0, onInsert, onContextChange, onError, disabled = false }: ObjectExplorerProps) {
+export function ObjectExplorer({ sessionId, blockId, scopeInherited, automaticTransactions, connectionId, database, schema, container, capabilities, dbType = "sqlserver", connected = true, refresh = 0, onInsert, onContextChange, onError, disabled = false }: ObjectExplorerProps) {
   useLocale();
+  const features=capabilities ?? databaseCapabilities(dbType);
+  const cosmos=features.context_levels.includes("container");
   const controller = useRef(new ExplorerController());
   const [roots, setRoots] = useState<ExplorerNode[]>([]), [children, setChildren] = useState<Record<string, ExplorerNode[]>>({}), [expanded, setExpanded] = useState(new Set<string>()), [loading, setLoading] = useState(new Set<string>());
   const [error, setError] = useState(""), [query, setQuery] = useState(""), [selected, setSelected] = useState<string>(), [menu, setMenu] = useState<ExplorerMenu>();
@@ -43,11 +46,11 @@ export function ObjectExplorer({ sessionId, blockId, scopeInherited, automaticTr
   }, []);
   useEffect(() => {
     previousRefresh.current=refresh;
-    ++generation.current; controller.current.setScope({ session_id: sessionId, block_id: blockId, ...(blockId || scopeInherited!==undefined?{scope_inherited:Boolean(scopeInherited)}:{}), ...(automaticTransactions!==undefined?{automatic_transactions:automaticTransactions}:{}), connection_id: connectionId, database, schema }); controller.current.clear();
+    ++generation.current; controller.current.setScope({ session_id: sessionId, block_id: blockId, ...(blockId || scopeInherited!==undefined?{scope_inherited:Boolean(scopeInherited)}:{}), ...(automaticTransactions!==undefined?{automatic_transactions:automaticTransactions}:{}), connection_id: connectionId, database, schema, ...(container!==undefined?{container}:{}) }); controller.current.clear();
     setRoots([]); setChildren({}); setExpanded(new Set()); setSelected(undefined); setMenu(undefined); setDetails(undefined); setLoading(new Set()); setError("");
     if (connected) void load();
     return () => { ++generation.current; };
-  }, [sessionId, blockId, scopeInherited, automaticTransactions, connectionId, database, schema, connected, load]);
+  }, [sessionId, blockId, scopeInherited, automaticTransactions, connectionId, database, schema, container, connected, load]);
   async function refreshTree(){const revision=++generation.current;setLoading(new Set(["$root"]));setError("");setMenu(undefined);setDetails(undefined);
     try{const fresh=await reloadExpanded(controller.current,expanded,()=>revision===generation.current);if(fresh){setRoots(fresh.roots);setChildren(fresh.children);setExpanded(fresh.expanded);}}
     catch(failure){if(revision===generation.current)setError(errorText(failure));}
@@ -65,7 +68,7 @@ export function ObjectExplorer({ sessionId, blockId, scopeInherited, automaticTr
     if (opening && !children[node.id]) void load(node);
   }
   const qualified = (node: ExplorerNode) => node.qualified_name || (node.schema && objectKinds.has(node.kind) ? `${node.schema}.${node.name}` : node.name);
-  const quoted = (node: ExplorerNode) => node.qualified_name ? quoteIdentifier(node.qualified_name, dbType) : objectKinds.has(node.kind)&&node.schema?`${quoteIdentifierPart(node.schema,dbType)}.${quoteIdentifierPart(node.name,dbType)}`:quoteIdentifierPart(node.name, dbType);
+  const quoted = (node: ExplorerNode) => node.kind === "column" && features.read_only ? documentFieldReference(node.name,features.sql_dialect) : node.qualified_name ? quoteIdentifier(node.qualified_name, dbType) : objectKinds.has(node.kind)&&node.schema?`${quoteIdentifierPart(node.schema,dbType)}.${quoteIdentifierPart(node.name,dbType)}`:quoteIdentifierPart(node.name, dbType);
   const insert = (node: ExplorerNode) => onInsert(quoted(node));
   async function action(task: () => Promise<unknown> | unknown) {
     const revision = generation.current;
@@ -73,7 +76,7 @@ export function ObjectExplorer({ sessionId, blockId, scopeInherited, automaticTr
     try { await task(); }
     catch (failure) { if (revision === generation.current) { const message = errorText(failure); setError(message); onError?.(message); } }
   }
-  const nodeParams = (node: ExplorerNode) => ({ session_id: sessionId, block_id: blockId, ...(blockId || scopeInherited!==undefined?{scope_inherited:Boolean(scopeInherited)}:{}), ...(automaticTransactions!==undefined?{automatic_transactions:automaticTransactions}:{}),connection_id: connectionId, database: node.database || database, schema: node.schema || schema, name: node.name, kind: node.kind });
+  const nodeParams = (node: ExplorerNode) => ({ session_id: sessionId, block_id: blockId, ...(blockId || scopeInherited!==undefined?{scope_inherited:Boolean(scopeInherited)}:{}), ...(automaticTransactions!==undefined?{automatic_transactions:automaticTransactions}:{}),connection_id: connectionId, database: node.database || database, schema: node.schema || schema, ...(cosmos?{container:node.kind === "table" ? node.name : container}:{}), name: node.name, kind: node.kind });
   async function showDetails(node: ExplorerNode) {
     const revision = generation.current; setDetails({ node });
     try { const data = await runtime.request<ExplorerDetails>("explorer.details", nodeParams(node)); if (revision === generation.current) setDetails((prior) => prior?.node.id === node.id ? { node, data } : prior); }
@@ -82,8 +85,8 @@ export function ObjectExplorer({ sessionId, blockId, scopeInherited, automaticTr
   async function copy(text: string) { await navigator.clipboard.writeText(text); }
   async function selectQuery(node: ExplorerNode) {
     const revision = generation.current;
-    const { code } = await runtime.request<{ code: string }>("explorer.query", { ...nodeParams(node), limit: 1000 });
-    if (revision === generation.current) onInsert(code, "sql", true);
+    const query = await runtime.request<{ code: string; database?:string;container?:string }>("explorer.query", { ...nodeParams(node), limit: 1000 });
+    if (revision === generation.current) onInsert(query.code, "sql", true, cosmos ? {database:query.database ?? node.database ?? database,container:query.container ?? node.name} : undefined);
   }
   async function allColumns(node: ExplorerNode) {
     const revision = generation.current;
@@ -123,17 +126,17 @@ export function ObjectExplorer({ sessionId, blockId, scopeInherited, automaticTr
     if (node.qualified_name) add("copy-qualified", t("Copiar nome qualificado"), () => copy(node.qualified_name!), <Copy size={14} />);
     if (objectKinds.has(node.kind)) {
       add("details", t("Detalhes, colunas e índices"), () => showDetails(node), <Braces size={14} />, { separator: true });
-      add("definition", t("Definição / CREATE"), () => definition(node), <Code2 size={14} />, { disabled });
+      if(!features.read_only)add("definition", t("Definição / CREATE"), () => definition(node), <Code2 size={14} />, { disabled });
     }
     if (["table", "view"].includes(node.kind)) {
       add("select", t("SELECT primeiras 1000 linhas"), () => selectQuery(node), <Table2 size={14} />, { separator: true, disabled });
-      add("select-columns", t("SELECT com todas as colunas"), () => allColumns(node), <Table2 size={14} />, { disabled });
-      add("count", "COUNT(*)", () => onInsert(`SELECT COUNT(*) FROM ${quoted(node)};`, "sql", true), <Table2 size={14} />, { disabled });
-      if (node.kind === "table") add("drop-create", t("Script DROP e CREATE"), () => definition(node, true), <Code2 size={14} />, { disabled });
+      if(!features.read_only)add("select-columns", t("SELECT com todas as colunas"), () => allColumns(node), <Table2 size={14} />, { disabled });
+      if(!features.read_only)add("count", "COUNT(*)", () => onInsert(`SELECT COUNT(*) FROM ${quoted(node)};`, "sql", true), <Table2 size={14} />, { disabled });
+      if (node.kind === "table" && !features.read_only) add("drop-create", t("Script DROP e CREATE"), () => definition(node, true), <Code2 size={14} />, { disabled });
     }
     if (node.kind === "column") {
       if (columnTable) add("copy-column", `${t("Copiar como")} ${columnTable.name}.${node.name}`, () => copy(`${columnTable.name}.${node.name}`), <Copy size={14} />);
-      for (const clause of ["WHERE", "GROUP BY", "ORDER BY"]) add(clause, clause, () => onInsert(`${clause} ${quoteIdentifierPart(node.name, dbType)}${clause === "WHERE" ? " = " : ""}`), <Code2 size={14} />, { separator: clause === "WHERE", disabled });
+      for (const clause of (features.read_only ? ["WHERE", "ORDER BY"] : ["WHERE", "GROUP BY", "ORDER BY"])) add(clause, clause, () => onInsert(`${clause} ${quoted(node)}${clause === "WHERE" ? " = " : ""}`), <Code2 size={14} />, { separator: clause === "WHERE", disabled });
     }
     if (["database", "catalog", "schema"].includes(node.kind)) add("use-context", `${t("Usar")} ${node.kind === "schema" ? "schema" : t("banco / catálogo")} ${t("no bloco")}`, () => useContext(node), <Database size={14} />, { separator: true, disabled });
     if (node.has_children) add("refresh", t("Atualizar este grupo"), () => load(node, true), <RefreshCw size={14} />, { separator: true, disabled: loading.has(node.id) || loading.has("$root") });

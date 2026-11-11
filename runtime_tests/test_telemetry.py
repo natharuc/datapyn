@@ -103,6 +103,17 @@ def test_dimensions_are_fixed_categories_and_numbers_are_bounded():
     assert "private" not in json.dumps(event)
 
 
+@pytest.mark.parametrize("db_type", ["elasticsearch", "cosmosdb", "mongodb"])
+def test_document_database_dimensions_preserve_only_provider_category(db_type):
+    event = safe_event({"event": "execution_finished", "status": "succeeded", "db_type": db_type,
+                        "endpoint": "https://private.documents.azure.com", "mongodb_uri": "mongodb://secret@private",
+                        "container": "private", "collection": "private", "api_key": "private",
+                        "document": {"salary": "private"}, "cosmos_api": "nosql"})
+    assert event["db_type"] == db_type
+    assert "private" not in json.dumps(event)
+    assert not {"endpoint", "mongodb_uri", "container", "collection", "api_key", "document", "cosmos_api"} & event.keys()
+
+
 def test_observation_extracts_only_aggregate_execution_fields(service):
     enable(service)
     service.observe({"event": "execution.finished", "payload": {"session_id": "private-id", "status": "failed", "connection_lost": True,

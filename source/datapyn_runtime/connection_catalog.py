@@ -14,9 +14,9 @@ import uuid
 from .paths import workspace_root
 
 SECRET_KEYS = {"password", "token", "access_token", "client_secret", "passphrase", "private_key",
-               "sslpassword", "ssl_key_password"}
+               "sslpassword", "ssl_key_password", "api_key", "account_key", "connection_string"}
 SSH_SECRET_KEYS = {"password", "passphrase"}
-DATABASE_TYPES = {"sqlite", "sqlserver", "postgresql", "mysql", "mariadb", "databricks"}
+DATABASE_TYPES = {"sqlite", "sqlserver", "postgresql", "mysql", "mariadb", "databricks", "elasticsearch", "cosmosdb", "mongodb"}
 
 
 class CredentialStore:
@@ -355,10 +355,18 @@ class ConnectionCatalog:
                 raise ValueError("A connection with this name already exists in this group")
             config = deepcopy(existing["config"]) if existing else {}
             config.update(deepcopy(connection["config"]))
+            if any(str(key).lower() in SECRET_KEYS and key not in SECRET_KEYS for key in config):
+                raise ValueError("Credential fields must use their documented lowercase names")
             db_type = str(config.get("db_type", "")).lower()
             if db_type not in DATABASE_TYPES:
                 raise ValueError("Unsupported database type")
             config["db_type"] = db_type
+            from .document_config import normalize_document_config
+            config = normalize_document_config(config)
+            from .database import database_credential_identity
+            from .database_capabilities import DOCUMENT_DATABASES
+            changed_document_identity = bool(existing and db_type in DOCUMENT_DATABASES and
+                                             database_credential_identity(config) != database_credential_identity(existing["config"]))
             config.pop("workspace_path", None)  # A saved profile cannot redirect application storage.
             config.pop("_ssh_trust_path", None)
             config.pop("_ssh_catalog_path", None)
@@ -368,6 +376,8 @@ class ConnectionCatalog:
                 config.pop("ssh", None)
                 config["ssh_tunnel_id"] = config.get("ssh_tunnel_id") or None
             secrets = {key: str(config.pop(key)) for key in SECRET_KEYS if config.get(key) is not None}
+            if db_type in DOCUMENT_DATABASES:
+                secrets = {key: value for key, value in secrets.items() if value != ""}
             for key in SECRET_KEYS:
                 config.pop(key, None)
             if password is not None:
@@ -402,6 +412,7 @@ class ConnectionCatalog:
                                    or old_has_ssh and (save_ssh_credentials is False or not same_identity))
                 if ssh_secrets:
                     ssh_secrets["_identity"] = list(ssh_identity(config))
+            config = without_secrets(config)
             item = without_secrets({**(existing or {}), **connection})
             item.update({
                 "id": identifier, "name": name, "group_id": group_id,
@@ -412,6 +423,8 @@ class ConnectionCatalog:
                 "created_at": connection.get("created_at", existing.get("created_at", _now()) if existing else _now()),
                 "last_used": connection.get("last_used", existing.get("last_used") if existing else None),
             })
+            if changed_document_identity:
+                item["has_password"] = False
             credential_updates = []
             if "ssh" in config and not self._defer_save:
                 if ssh_changes:
@@ -422,8 +435,10 @@ class ConnectionCatalog:
                     item["has_ssh_password"] = bool(existing.get("has_ssh_password"))
                     item["has_ssh_passphrase"] = bool(existing.get("has_ssh_passphrase"))
             if save_password is True and secrets:
-                credential_updates.append((identifier, secrets, item["has_password"]))
+                credential_updates.append((identifier, secrets, bool(existing and existing.get("has_password"))))
                 item["has_password"] = True
+            elif changed_document_identity and existing.get("has_password"):
+                credential_updates.append((identifier, {}, True))
             elif save_password is False:
                 if item["has_password"]:
                     credential_updates.append((identifier, {}, True))

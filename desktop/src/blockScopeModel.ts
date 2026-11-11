@@ -1,7 +1,7 @@
 import { runtime, type RuntimeTransport } from "./runtime";
 import type { ExplorerContext, ExplorerNode, ExplorerResult } from "./explorer";
 
-export type ScopeField = "database" | "schema";
+export type ScopeField = "database" | "schema" | "container";
 export interface BlockScope extends ExplorerContext {
   session_id: string;
   block_id?: string;
@@ -22,7 +22,7 @@ export const hasSchemaScope = (dbType?: string) => ["postgres", "postgresql", "d
 const nameOrder = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
 export function scopeOptionList(nodes: ExplorerNode[], field: ScopeField): ScopeOption[] {
-  const kinds = field === "database" ? new Set(["database", "catalog"]) : new Set(["schema"]);
+  const kinds = field === "database" ? new Set(["database", "catalog"]) : field === "container" ? new Set(["container", "table"]) : new Set(["schema"]);
   const names = new Set<string>();
   for (const node of nodes) if (kinds.has(node.kind) && node.name) names.add(node.name);
   return [...names].sort(nameOrder.compare)
@@ -60,7 +60,7 @@ export class ScopeOptionsClient {
   clear() { ++this.epoch; this.cache.clear(); this.pending.clear(); this.revisions.clear(); }
 
   async list(scope: BlockScope, field: ScopeField, refresh = false): Promise<ScopeOptions> {
-    const key = JSON.stringify([scope.session_id, scope.block_id ?? "", Boolean(scope.scope_inherited),scope.automatic_transactions !== false,scope.connection_id ?? "", scope.db_type ?? "", scope.database ?? "", scope.schema ?? "", scope.revision ?? 0, field]);
+    const key = JSON.stringify([scope.session_id, scope.block_id ?? "", Boolean(scope.scope_inherited),scope.automatic_transactions !== false,scope.connection_id ?? "", scope.db_type ?? "", scope.database ?? "", scope.schema ?? "", scope.revision ?? 0, scope.container ?? "", field]);
     const cached = this.cache.get(key);
     if (!refresh && cached && cached.expires > this.now()) {
       this.cache.delete(key); this.cache.set(key, cached); return cached.value;
@@ -70,7 +70,7 @@ export class ScopeOptionsClient {
     this.revisions.set(key, generation);
     // A database node resolves its own schema list. Do not send the old schema
     // when selecting a different database (especially for PostgreSQL catalogs).
-    const node = field === "schema" ? {
+    const node = field !== "database" ? {
       id: `scope:${scope.database ?? ""}`, kind: "database",
       name: scope.database ?? "", database: scope.database, has_children: true,
     } : undefined;
@@ -78,7 +78,7 @@ export class ScopeOptionsClient {
       session_id: scope.session_id, ...(scope.block_id ? {block_id:scope.block_id} : {}), connection_id: scope.connection_id,
       ...(scope.block_id || scope.scope_inherited!==undefined?{scope_inherited:Boolean(scope.scope_inherited)}:{}),
       ...(scope.automatic_transactions!==undefined?{automatic_transactions:scope.automatic_transactions}:{}),
-      database: scope.database, ...(field === "database" ? { schema: scope.schema } : {}), node, refresh,
+      database: scope.database, ...(field === "database" ? { schema: scope.schema } : {}), ...(scope.container!==undefined?{container:scope.container}:{}), node, refresh,
     };
     const request = this.transport.request<ExplorerResult>("explorer.list", params).then(result => {
       const value = { options: scopeOptionList(result.nodes ?? [], field), context: result.context };

@@ -57,7 +57,8 @@ def _service(context, expired):
 
 class SchemaWarnings:
     def __init__(self, context, document, locale, expired, maximum):
-        self.enabled = bool(context.get("schema_complete") and context.get("schema"))
+        self.enabled = bool(context.get("schema_complete") and context.get("schema")
+                            and not (context.get("schema") or {}).get("metadata_partial"))
         self.service = _service(context, expired) if self.enabled else None
         self.partial = self.enabled and self.service is None
         self.document, self.locale, self.expired, self.maximum = document, locale, expired, maximum

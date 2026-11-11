@@ -24,7 +24,8 @@ from .paths import state_root
 
 DEFAULT_ENDPOINT = "https://telemetry.datapyn.com/v1/events"
 EVENTS = {"app_start", "execution_finished", "connection_recovery", "runtime_error", "ui_error"}
-DATABASES = {"sqlserver", "postgresql", "mysql", "mariadb", "databricks", "sqlite", "none"}
+DATABASES = {"sqlserver", "postgresql", "mysql", "mariadb", "databricks", "sqlite",
+             "elasticsearch", "cosmosdb", "mongodb", "none"}
 STATUSES = {"started", "succeeded", "failed", "cancelled", "recovering", "ready", "error", "blocked"}
 ERRORS = {"none", "transport", "timeout", "authentication", "syntax", "cancelled", "unknown"}
 ROW_BUCKETS = {"none", "0", "1-100", "101-10000", "10001-1000000", "1000000+"}

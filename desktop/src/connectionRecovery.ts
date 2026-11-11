@@ -6,12 +6,12 @@ const equal=(left:string|null|undefined,right:string|null|undefined)=>(left??"")
 /** A recovery belongs to a physical SQL lane, never to whichever editor has focus. */
 export function recoveryMatches(session:SessionDocument,block:Block|undefined,recovery:ConnectionRecoveryState,automaticTransactions=true):boolean {
   if(recovery.session_id!==session.id || recovery.block_id!==block?.id)return false;
-  const scope=block?completionConnectionScope(session,block):{connectionId:session.savedConnectionId,database:session.database,schema:session.schema};
+  const scope=block?completionConnectionScope(session,block):{connectionId:session.savedConnectionId,database:session.database,schema:session.schema,container:session.container};
   return recovery.automatic_transactions===(automaticTransactions && block?.disable_automatic_transactions!==true)
     && (recovery.scope_inherited===undefined || recovery.scope_inherited===(block?inheritsSessionScope(block):false))
     && equal(recovery.requested_scope.connection_id,scope.connectionId)
     && equal(recovery.requested_scope.database,scope.database)
-    && equal(recovery.requested_scope.schema,scope.schema);
+    && equal(recovery.requested_scope.schema,scope.schema) && equal(recovery.requested_scope.container,scope.container);
 }
 
 export function activeConnectionRecovery(session:SessionDocument,block:Block|undefined,automaticTransactions=true):ConnectionRecoveryState|undefined {
@@ -38,7 +38,7 @@ export function applyConnectionRecovery(session:SessionDocument,recovery:Connect
   return {...next,blocks:next.blocks.map(peer=>{
     const old=peer.connectionRecovery;
     if(peer.id===block?.id || !affected.has(peer.id) || !old || !["blocked","error"].includes(old.phase) || !old.automatic_transactions)return peer;
-    if(!equal(old.requested_scope.connection_id,recovery.requested_scope.connection_id)||!equal(old.requested_scope.database,recovery.requested_scope.database)||!equal(old.requested_scope.schema,recovery.requested_scope.schema))return peer;
+    if(!equal(old.requested_scope.connection_id,recovery.requested_scope.connection_id)||!equal(old.requested_scope.database,recovery.requested_scope.database)||!equal(old.requested_scope.schema,recovery.requested_scope.schema)||!equal(old.requested_scope.container,recovery.requested_scope.container))return peer;
     const ready={...recovery,block_id:peer.id,scope_inherited:old.scope_inherited};
     return recoveryMatches(next,peer,ready,automaticTransactions)?{...peer,...recoveredState,connectionRecovery:ready}:peer;
   })};

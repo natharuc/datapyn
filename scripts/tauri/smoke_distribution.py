@@ -75,7 +75,12 @@ if getattr(sys, 'frozen', False):
 pd.DataFrame({'report': [json.dumps(report)]})"""
             finished = client.execute("distribution", "drivers", "python", code)
             report = json.loads(result_page(client, "distribution", finished)["rows"][0][0])
-            assert set(report["databases"]) == {"sqlserver", "mysql", "mariadb", "postgresql", "databricks", "sqlite"}
+            assert set(report["databases"]) == {"sqlserver", "mysql", "mariadb", "postgresql", "databricks", "sqlite",
+                                                "elasticsearch", "cosmosdb", "mongodb"}
+            assert report["databases"]["cosmosdb"]["api_clients"] == {
+                "nosql": "azure.cosmos.CosmosClient", "mongodb": "pymongo.MongoClient"}
+            assert report["databases"]["mongodb"]["dns_srv"] is True
+            assert report["databases"]["mongodb"]["bson_types"] is True
             assert set(report["ssh_key_formats"]) == {"ssh-rsa", "ssh-ed25519", "ecdsa-sha2-nistp256"}
             if executable:
                 assert report["frozen"] is True

@@ -10,6 +10,9 @@ import mariadbDark from "./assets/databases/mariadb-dark.svg";
 import databricks from "./assets/databases/databricks.svg";
 import sqlite from "./assets/databases/sqlite.svg";
 import sqliteDark from "./assets/databases/sqlite-dark.svg";
+import elasticsearch from "./assets/databases/elasticsearch.svg";
+import cosmosdb from "./assets/databases/cosmosdb.svg";
+import mongodb from "./assets/databases/mongodb.svg";
 import "./databaseIcon.css";
 
 export const databaseIconAssets = {
@@ -19,6 +22,9 @@ export const databaseIconAssets = {
   mariadb: { light: mariadb, dark: mariadbDark },
   databricks: { light: databricks, dark: databricks },
   sqlite: { light: sqlite, dark: sqliteDark },
+  elasticsearch: {light:elasticsearch,dark:elasticsearch},
+  cosmosdb: {light:cosmosdb,dark:cosmosdb},
+  mongodb: {light:mongodb,dark:mongodb},
 } as const;
 type DatabaseType = keyof typeof databaseIconAssets;
 const aliases: Record<string, DatabaseType> = {
@@ -26,6 +32,7 @@ const aliases: Record<string, DatabaseType> = {
   postgresql: "postgresql", postgres: "postgresql", pgsql: "postgresql",
   mysql: "mysql", mariadb: "mariadb", databricks: "databricks", databrickssql: "databricks",
   sqlite: "sqlite", sqlite3: "sqlite",
+  elasticsearch:"elasticsearch",elastic:"elasticsearch",cosmosdb:"cosmosdb",azurecosmosdb:"cosmosdb",mongodb:"mongodb",mongo:"mongodb",
 };
 
 export function databaseIconType(dbType?: string | null): DatabaseType | undefined {

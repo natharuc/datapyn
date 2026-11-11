@@ -223,11 +223,30 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
     connection_labels = {}
     snapshot_dirty = False
 
+    def requested_scope(params):
+        return {field: params.get(field) for field in ("connection_id", "database", "schema", "container")
+                if field != "container" or "container" in params}
+
+    def publish_connection_namespace(target, resolved=None):
+        resolved = resolved or {"database": target.connection_params.get("database", ""),
+                                "schema": target.connection_params.get("schema", ""),
+                                "container": target.connection_params.get("container", "")}
+        namespace.update(db_type=target.db_type, db_database=resolved["database"], db_schema=resolved["schema"],
+                         db_host=target.connection_params.get("host", ""), db_username=target.connection_params.get("username", ""))
+        if getattr(target, "engine", None) is None:
+            namespace.pop("db_engine", None)
+        else:
+            namespace["db_engine"] = target.engine
+        if "container" in resolved:
+            namespace["db_container"] = resolved["container"]
+        else:
+            namespace.pop("db_container", None)
+
     def recovery_event(outcome, params):
         config = params.get("_connection_config") or params.get("config") or pool.default_config or {}
         event = {"session_id": session_id, **outcome,
                  "automatic_transactions": context_automatic_transactions(params),
-                 "requested_scope": {field: params.get(field) for field in ("connection_id", "database", "schema")}}
+                 "requested_scope": requested_scope(params)}
         if params.get("block_id"):
             event["block_id"] = params["block_id"]
         if params.get("scope_inherited") is True:
@@ -242,7 +261,8 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                   "automatic_transactions": context_automatic_transactions(params),
                   "db_type": config.get("db_type", ""), "database": params.get("database") or config.get("database", ""),
                   "schema_name": params.get("schema") if params.get("schema") is not None else config.get("schema", ""),
-                  "requested_scope": {field: params.get(field) for field in ("connection_id", "database", "schema")},
+                  **({"container": params.get("container", config.get("container", ""))} if config.get("db_type") == "cosmosdb" else {}),
+                  "requested_scope": requested_scope(params),
                   "schema": {}, "metadata_invalidated": True,
                   "metadata_invalidation_scope": "connection" if context_automatic_transactions(params) else "block"}})
 
@@ -291,13 +311,7 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
         # It identifies the fallback target even if a later metadata read fails.
         publish_safety_context()
         resolved = pool.explorer().context()
-        namespace.update({
-            "db_engine": connector.engine, "db_type": connector.db_type,
-            "db_database": resolved["database"],
-            "db_host": connector.connection_params.get("host", ""),
-            "db_username": connector.connection_params.get("username", ""),
-            "db_schema": resolved["schema"],
-        })
+        publish_connection_namespace(connector, resolved)
         return connector
 
     def publish_context(params=None, *, metadata=False, invalidated=False, invalidation_scope="connection", namespace_only=False):
@@ -316,7 +330,11 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
             context["automatic_transactions"] = getattr(connector, "automatic_transactions", True)
             resolved = pool.explorer().context()
             context.update(db_type=resolved["db_type"], database=resolved["database"], schema_name=resolved["schema"],
-                           requested_scope={field: params.get(field) for field in ("connection_id", "database", "schema")})
+                           requested_scope=requested_scope(params))
+            from .database_capabilities import capabilities_for
+            context["capabilities"] = capabilities_for(connector.db_type, getattr(connector, "config", {}))
+            if "container" in resolved:
+                context["container"] = resolved["container"]
         if invalidated:
             context.update({"schema": {}, "metadata_invalidated": True, "metadata_invalidation_scope": invalidation_scope})
         if metadata and connector is not None:
@@ -324,7 +342,7 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
             context.update({"schema": schema, "database": schema.get("database", ""),
                             "schema_name": schema.get("current_schema", ""),
                             "metadata_state": "ready", "schema_error": None,
-                            "requested_scope": {field: (params or {}).get(field) for field in ("connection_id", "database", "schema")},
+                            "requested_scope": requested_scope(params or {}),
                             "schema_complete": bool((params or {}).get("code")),
                             "version": time.monotonic_ns()})
         send({"language_context": context})
@@ -588,7 +606,7 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                                     connection_labels[replacement_key] = connection_labels.pop(affected)
                                 if connector is executing_connector:
                                     connector = replacement
-                                    namespace["db_engine"] = replacement.engine
+                                    publish_connection_namespace(replacement)
                                     publish_safety_context()
                         except Exception:
                             pass
@@ -630,17 +648,18 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                         payload["context_change"] = {
                             "previous": previous_context, "current": current_context,
                             "connection_id": None if identifier == "transient" else identifier,
-                            "requested_scope": {field: params.get(field) for field in ("connection_id", "database", "schema")},
+                            "requested_scope": requested_scope(params),
                         }
                     if sql_scope_changed:
                         old_key = pool.active_key
                         pool.reindex_active(current_context, params)
                         if old_key in connection_labels:
                             connection_labels[pool.active_key] = connection_labels.pop(old_key)
-                        namespace.update(db_database=current_context["database"], db_schema=current_context["schema"])
+                        publish_connection_namespace(connector, current_context)
                         identifier = pool.active_key[0] if pool.active_key else pool.default_id
                         context_key = editor_context_key({**params, "connection_id": None if identifier == "transient" else identifier,
-                                                          "database": current_context["database"], "schema": current_context["schema"]})
+                                                          "database": current_context["database"], "schema": current_context["schema"],
+                                                          **({"container": current_context["container"]} if "container" in current_context else {})})
                 # A failed block may have partially changed a frame in place.
                 # Keep the previous durable generation until a later success.
                 snapshot_dirty = error is None
@@ -683,7 +702,9 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                     from .connection_catalog import without_secrets
                     resolved = pool.explorer().context()
                     safe_config = without_secrets({**(pool.default_config or {}), **resolved})
-                    result = {"status": "connected", "connection_id": params.get("connection_id"), "config": safe_config, **resolved}
+                    from .database_capabilities import capabilities_for
+                    result = {"status": "connected", "connection_id": params.get("connection_id"), "config": safe_config,
+                              "capabilities": capabilities_for(connector.db_type, getattr(connector, "config", {})), **resolved}
                     publish_context()
                 elif method == "connection.recover":
                     outcome = pool.recover(params)
@@ -695,10 +716,7 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                         if name:
                             connection_labels[pool.active_key] = str(name)
                         resolved = pool.explorer().context()
-                        namespace.update(db_engine=connector.engine, db_type=connector.db_type,
-                                         db_database=resolved["database"], db_schema=resolved["schema"],
-                                         db_host=connector.connection_params.get("host", ""),
-                                         db_username=connector.connection_params.get("username", ""))
+                        publish_connection_namespace(connector, resolved)
                         publish_context(params, invalidated=True, invalidation_scope="block")
                         from .connection_catalog import without_secrets
                         result = {**outcome, **resolved, "config": without_secrets({**(pool.configs.get(pool.active_key) or {}), **resolved})}
@@ -709,7 +727,7 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                     connector = pool.active
                     publish_safety_context()
                     if connector is None:
-                        for name in ("db_engine", "db_type", "db_database", "db_host", "db_username", "db_schema"):
+                        for name in ("db_engine", "db_type", "db_database", "db_host", "db_username", "db_schema", "db_container"):
                             namespace.pop(name, None)
                     result = {"status": "disconnected", "connection_id": params.get("connection_id")}
                 elif method == "connection.idle_timeout":
@@ -738,11 +756,12 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                         affinity = pool.block_affinity.get(str(params.get("block_id") or ""))
                         owner = pool.items.get(affinity)
                         if owner is not None and database.pending_transaction(owner):
-                            from .explorer import ObjectExplorer
-                            current = ObjectExplorer(owner).context()
+                            from .document_explorer import explorer_for
+                            current = explorer_for(owner).context()
                             changed = (routed.get("connection_id") not in {None, affinity[0]}
                                        or routed.get("database") not in {None, "", current["database"]}
-                                       or routed.get("schema") not in {None, current["schema"]})
+                                       or routed.get("schema") not in {None, current["schema"]}
+                                       or routed.get("container") not in {None, current.get("container", "")})
                             if changed:
                                 raise database.PendingTransactionError()
                     else:
@@ -769,8 +788,9 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                               "connection_id": params.get("connection_id") or pool.default_id,
                               "database": params.get("database") or config.get("database", ""),
                               "schema_name": params.get("schema") or config.get("schema") or config.get("postgresql_schema") or config.get("databricks_schema") or "",
+                              **({"container": params.get("container", config.get("container", ""))} if config.get("db_type") == "cosmosdb" else {}),
                               "schema": {}, "schema_complete": False, "metadata_state": "error",
-                              "requested_scope": {field: params.get(field) for field in ("connection_id", "database", "schema")},
+                              "requested_scope": requested_scope(params),
                               "block_id": params.get("block_id"),
                               "scope_inherited": params.get("scope_inherited") is True,
                               "automatic_transactions": context_automatic_transactions(params),
@@ -788,7 +808,7 @@ def kernel_main(session_id: str, commands, events, idle_timeout=300, export_canc
                         require_kernel_review(method, params, safety_config.get("db_type", ""))
                         previous_connector, previous_key, previous_context = connector, pool.active_key, context_key
                         previous_context_params = context_params
-                        connection_names = ("db_engine", "db_type", "db_database", "db_host", "db_username", "db_schema")
+                        connection_names = ("db_engine", "db_type", "db_database", "db_host", "db_username", "db_schema", "db_container")
                         previous_variables = {name: namespace[name] for name in connection_names if name in namespace}
                         destination_activated = False
                         try:

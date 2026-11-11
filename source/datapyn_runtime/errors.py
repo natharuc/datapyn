@@ -15,6 +15,7 @@ _TITLES = {
     "permission": "Acesso negado", "authentication": "Falha de autenticação",
     "not_found": "Objeto não encontrado", "syntax": "Erro de sintaxe",
     "timeout": "Tempo limite excedido", "network": "Conexão interrompida",
+    "throttling": "Limite de requisições atingido",
     "cancelled": "Operação cancelada", "python": "Erro no Python",
     "constraint": "Restrição dos dados", "data": "Dados inválidos",
     "file": "Erro de arquivo", "internal": "Não foi possível concluir a operação",
@@ -24,10 +25,10 @@ _WRAPPER = re.compile(r"^(?:Error (?:executing|streaming|changing|connecting)[^:
 _PROVIDER_PREFIX = re.compile(r"^(?:\[[^\]\r\n]{1,140}\]\s*)+")
 _SENSITIVE = re.compile(
     r"\b(?:password|pwd|access[_ -]?token|refresh[_ -]?token|client[_ -]?secret|"
-    r"authorization|connection[_ -]?string)[\"']?\s*[:=]\s*"
+    r"api[_ -]?key|account[_ -]?key|authorization|connection[_ -]?string)[\"']?\s*[:=]\s*"
     r"(?:\{[^}]*\}|\"[^\"]*\"|'[^']*'|[^;\s,]+)", re.I)
 _INTERNAL_LOGGERS = ("src.", "datapyn_runtime", "sqlalchemy", "databricks", "pyodbc", "pytds",
-                     "pymysql", "psycopg", "paramiko", "azure", "urllib3", "requests")
+                     "pymysql", "pymongo", "psycopg", "paramiko", "azure", "urllib3", "requests")
 
 
 def safe_exception_attribute(error, name, default=None):
@@ -129,6 +130,8 @@ def _category(error, primary, message, language):
         return "file"
     context = safe_exception_attribute(primary, "context")
     http_status = str(context.get("http-code", "")) if isinstance(context, dict) else str(safe_exception_attribute(primary, "status_code", ""))
+    if http_status == "429" or safe_exception_attribute(primary, "provider_code") in {16500, "16500"}:
+        return "throttling"
     if (numbers & {229, 230, 916, 4060, 4064, 1044, 1142, 1143, 1227} or "42501" in states or http_status == "403"
             or any(value in text for value in ("permission denied", "permission was denied", "access is denied",
                                                "cannot open database", "not authorized", "insufficient privileges"))
@@ -137,7 +140,7 @@ def _category(error, primary, message, language):
     if (any(value.startswith("28") for value in states) or numbers & {18456, 18452, 1045} or http_status == "401"
             or code == "ssh_auth_failed" or any(value in text for value in ("login failed", "authentication failed", "authentication rejected", "password authentication failed"))):
         return "authentication"
-    if (states & {"42S02", "42S22", "42P01", "42703", "3D000", "3F000"} or numbers & {207, 208, 1146}
+    if (http_status == "404" or states & {"42S02", "42S22", "42P01", "42703", "3D000", "3F000"} or numbers & {207, 208, 1146}
             or any(value in text for value in ("invalid object name", "invalid column name", "table or view not found", "schema_not_found", "table_or_view_not_found", "no such table", "no such column"))
             or any(value in provider_code for value in ("[table_or_view_not_found]", "[schema_not_found]", "[catalog_not_found]"))):
         return "not_found"
@@ -145,9 +148,9 @@ def _category(error, primary, message, language):
         return "constraint"
     if any(value.startswith("22") for value in states) or numbers & {245, 8114, 8115}:
         return "data"
-    if isinstance(primary, TimeoutError) or states & {"HYT00", "HYT01"} or any(value in text for value in ("query timeout", "statement timeout", "time limit exceeded")):
+    if http_status in {"408", "504"} or isinstance(primary, TimeoutError) or states & {"HYT00", "HYT01"} or any(value in text for value in ("query timeout", "statement timeout", "time limit exceeded")):
         return "timeout"
-    if isinstance(primary, SyntaxError) or states & {"42601", "42000"} or "syntax error" in text or "incorrect syntax" in text:
+    if http_status == "400" or isinstance(primary, SyntaxError) or states & {"42601", "42000"} or "syntax error" in text or "incorrect syntax" in text:
         return "syntax"
     if code in {"connection_lost", "connection_unavailable", "ssh_connection_lost"}:
         return "network"

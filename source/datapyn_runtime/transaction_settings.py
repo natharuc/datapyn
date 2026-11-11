@@ -55,6 +55,8 @@ def context_automatic_transactions(params):
 
 def editor_context_key(params):
     key = "|".join(str(params.get(name) or "") for name in ("connection_id", "database", "schema")) or "default"
+    if params.get("container"):
+        key += "|container:" + str(params["container"])
     if params.get("block_id"):
         key += "|block:" + str(params["block_id"])
     if params.get("scope_inherited") is True:

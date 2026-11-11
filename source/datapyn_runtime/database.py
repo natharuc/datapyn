@@ -204,6 +204,10 @@ def connect(config: dict):
     config = current_tunnel_config(config)
     os.environ.setdefault("DATAPYN_SHARED_PARAMETER_DELIMITER", "{{name}}")
     db_type = str(config.get("db_type", "")).lower()
+    from .database_capabilities import DOCUMENT_DATABASES
+    if db_type in DOCUMENT_DATABASES:
+        from .document_connector import connect_document
+        return connect_document(config)
     if db_type == "databricks" and config.get("databricks_auth_mode") == "oauth":
         config = {**config, "password": ""}
     if db_type == "sqlite":
@@ -253,6 +257,12 @@ def schema(connector):
         raise ConnectionError("Connect this session to a database first")
     if isinstance(connector, SQLiteConnector):
         return connector.schema()
+    from .database_capabilities import DOCUMENT_DATABASES
+    if connector.db_type in DOCUMENT_DATABASES:
+        from .document_explorer import DocumentExplorer
+        snapshot = DocumentExplorer(connector).completion_schema()
+        return {**snapshot, "tables": [{**table, "columns": snapshot["columns"].get(table["key"], [])}
+                                        for table in snapshot["tables"]]}
     from .explorer import ObjectExplorer
 
     tables = []
@@ -369,13 +379,14 @@ class ConnectorPool:
     def _recover_key(self, key, params, *, acknowledge=False, force=False):
         """Replace only a dead lane, never replay the job that detected it."""
         import uuid
+        from .connection_catalog import SECRET_KEYS
         started = time.perf_counter()
         from src.database.connection_recovery import ConnectionLostError, classify_connection_error
         previous = self.items[key]
         config = dict(self.configs[key])
         fresh = params.get("_connection_config") or params.get("config")
         if isinstance(fresh, dict) and database_credential_identity(fresh) == database_credential_identity(config):
-            for field in ("password", "sslpassword", "ssl_key_password"):
+            for field in SECRET_KEYS:
                 if field in fresh:
                     config[field] = fresh[field]
         state = self.recovery_state(previous, config) or {"required": True, "session_state_lost": True,
@@ -435,7 +446,7 @@ class ConnectorPool:
         if self.default_active_key == key:
             self.default_active_key = new_key
             if self.default_config is not None:
-                self.default_config.update({field: config[field] for field in ("password", "sslpassword", "ssl_key_password") if field in config})
+                self.default_config.update({field: config[field] for field in SECRET_KEYS if field in config})
         self._recovery_cooldowns.pop(key, None)
         self._blocked_recoveries.pop(key, None)
         try:
@@ -458,12 +469,13 @@ class ConnectorPool:
         key = self.block_affinity.get(block)
         identifier = params.get("connection_id")
         def matches(candidate):
-            from .explorer import ObjectExplorer
+            from .document_explorer import explorer_for
             item = self.items[candidate]
-            current = ObjectExplorer(item).context()
+            current = explorer_for(item).context()
             return not ((identifier is not None and candidate[0] != identifier)
                         or (params.get("database") is not None and str(params["database"]) != current["database"])
                         or (params.get("schema") is not None and str(params["schema"]) != current["schema"])
+                        or (params.get("container") is not None and str(params["container"]) != current.get("container", ""))
                         or context_mode_changed(params, item))
         if key in self.items and not matches(key):
             return {"recovery_id": __import__("uuid").uuid4().hex, "phase": "error", "acknowledgement_required": False,
@@ -531,6 +543,11 @@ class ConnectorPool:
     def _normalized_config(config):
         config = dict(config)
         engine = str(config.get("db_type") or "").lower()
+        from .database_capabilities import DOCUMENT_DATABASES
+        if engine in DOCUMENT_DATABASES:
+            config["schema"] = ""
+            if engine != "cosmosdb" or config.get("cosmos_api", "nosql") == "mongodb":
+                config.pop("container", None)
         explicit_schema = "schema" in config and config["schema"] is not None
         schema = config.get("schema") if explicit_schema else config.get("postgresql_schema") or config.get("databricks_schema")
         if engine in {"mysql", "mariadb"}:
@@ -584,6 +601,8 @@ class ConnectorPool:
             return
         config = dict(self.configs[old_key])
         config.update(database=context["database"], schema=context["schema"])
+        if "container" in context:
+            config["container"] = context["container"]
         if "postgresql_search_path" in self.active.connection_params:
             config["postgresql_search_path"] = self.active.connection_params["postgresql_search_path"]
         for field in ("postgresql_schema", "databricks_schema", "databricks_catalog"):
@@ -619,7 +638,7 @@ class ConnectorPool:
                 self.namespace_settings.popitem(last=False)
         if block_id:
             self.block_affinity[str(block_id)] = new_key
-        inherits = params.get("scope_inherited") is True or ("scope_inherited" not in params and not params.get("database") and not params.get("schema"))
+        inherits = params.get("scope_inherited") is True or ("scope_inherited" not in params and not params.get("database") and not params.get("schema") and not params.get("container"))
         if inherits and old_key[0] == (self.default_id or "transient"):
             self.default_config = {field: value for field, value in config.items()
                                    if field not in {"automatic_transactions", "_execution_scope_id"}}
@@ -636,7 +655,7 @@ class ConnectorPool:
             config = self.default_config
             identifier = self.default_id
         if config is None:
-            if self.active_key is not None and not params.get("database") and not params.get("schema"):
+            if self.active_key is not None and not params.get("database") and not params.get("schema") and not params.get("container"):
                 current = self.items[self.active_key]
                 active_config = self.configs.get(self.active_key, {})
                 if not validate and not params.get("_execution_scope_id") and not params.get("_metadata_scope") and not active_config.get("ssh_tunnel_id") and not self.recovery_state(current, active_config):
@@ -673,6 +692,8 @@ class ConnectorPool:
                 desired["database"] = str(params["database"])
             if params.get("schema") is not None and desired.get("db_type") != "sqlite":
                 desired["schema"] = str(params["schema"])
+            if params.get("container") is not None:
+                desired["container"] = str(params["container"])
             current = self.configs[affinity]
             if self._key(identifier, desired) != self._key(affinity[0], current):
                 raise PendingTransactionError()
@@ -725,13 +746,17 @@ class ConnectorPool:
                 # schema from the previous database can be absent in the new one.
                 for field in ("schema", "postgresql_schema", "databricks_schema"):
                     config.pop(field, None)
+                if config.get("db_type") == "cosmosdb":
+                    config.pop("container", None)
             config["database"] = str(database_override)
         if schema_override is not None and config.get("db_type") != "sqlite":
             config["schema"] = str(schema_override)
+        if params.get("container") is not None:
+            config["container"] = str(params["container"])
         if retired_default and retired_default[0] == (identifier or "transient"):
             previous_scope = self._normalized_config(retired_default[1])
             next_scope = self._normalized_config(config)
-            was_default = all(previous_scope.get(field) == next_scope.get(field) for field in ("database", "schema"))
+            was_default = all(previous_scope.get(field) == next_scope.get(field) for field in ("database", "schema", "container"))
         key = self._key(identifier, config)
         affinity = self.block_affinity.get(str(scope_id or params.get("block_id") or ""))
         owner_scope = False
@@ -819,11 +844,11 @@ class ConnectorPool:
         return self.items.get(self.active_key)
 
     def explorer(self):
-        from .explorer import ObjectExplorer
+        from .document_explorer import explorer_for
         if self.active is None:
             raise ConnectionError("Connect this session to a database first")
         if self.active_key not in self.explorers:
-            self.explorers[self.active_key] = ObjectExplorer(self.active)
+            self.explorers[self.active_key] = explorer_for(self.active)
         return self.explorers[self.active_key]
 
     def disconnect(self, identifier=None):
@@ -881,6 +906,12 @@ class ConnectorPool:
 def database_credential_identity(config):
     """An authentication endpoint remains stable when changing database/schema focus."""
     from .connection_catalog import ssh_identity
+    from .database_capabilities import DOCUMENT_DATABASES
+    if config.get("db_type") in DOCUMENT_DATABASES:
+        return (config["db_type"], config.get("cosmos_api", ""),
+                str(config.get("endpoint") or config.get("mongodb_uri") or "").rstrip("/"),
+                str(config.get("username") or ""), str(config.get("auth_mode") or ""),
+                str(config.get("tenant_id") or ""), str(config.get("auth_source") or ""))
 
     ssh = config.get("ssh") or {}
     tunnel = (True, *ssh_identity(config)) if ssh.get("enabled") else (False, config.get("ssh_tunnel_id") or None)

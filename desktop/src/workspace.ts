@@ -1,3 +1,4 @@
+import { publicMongoUri } from "./documentConnectionStrings";
 import { errorText, isConnectionRecoveryOutcome, isConnectionRecoveryState, isRuntimeEvent, RuntimeRequestError, type ConnectionRecoveryState, type ExecutionContextChange, type ExecutionFinished, type Language, type ResultRef, type RuntimeEvent, type RuntimeInfo, type RuntimeTransport, type Variable,type RichOutput, type SqlCommandResult, type TransactionState, type RuntimeErrorInfo } from "./runtime";
 import {errorInfoFor} from "./errorPresentation";
 import {activeConnectionRecovery,applyConnectionRecovery,recoveryMatches} from "./connectionRecovery";
@@ -14,7 +15,7 @@ export type BlockStatus = "idle" | "queued" | "running" | "cancelling" | "succee
 export interface Block {
   id: string; block_name: string; language: Language; code: string; is_active: boolean;
   status: BlockStatus; duration_ms?: number; executionStartedAt?: number; error?: string; errorInfo?: RuntimeErrorInfo; height?: number;
-  connection_id?: string; database_name?: string; schema?: string; collapsed?: boolean;
+  connection_id?: string; database_name?: string; schema?: string; container?: string; collapsed?: boolean;
   sql_parameters?: Record<string, unknown>[]; sql_parameters_enabled?: boolean;
   disable_automatic_transactions?: boolean;
   transactionState?: TransactionState;
@@ -24,11 +25,15 @@ export interface Block {
   [key: string]: unknown;
 }
 export interface ConnectionConfig {
-  db_type: "sqlserver" | "postgresql" | "mysql" | "mariadb" | "sqlite" | "databricks";
+  db_type: "sqlserver" | "postgresql" | "mysql" | "mariadb" | "sqlite" | "databricks" | "elasticsearch" | "cosmosdb" | "mongodb";
   name?: string; host: string; port: number; database: string; username: string; password?: string;
   schema?: string; http_path?: string; sqlserver_auth_mode?: string;
   use_windows_auth?: boolean; trust_server_certificate?: boolean;
   databricks_auth_mode?:"oauth"|"token";
+  endpoint?: string; auth_mode?: "basic" | "api_key" | "key" | "entra"; tenant_id?:string;
+  api_key?: string; account_key?: string; client_secret?: string;
+  cosmos_api?: "nosql" | "mongodb"; mongodb_uri?: string;
+  container?: string; partition_key?: string;
   ssh?: SshConnectionOptions;
   ssh_tunnel_id?: string | null;
   sslmode?: "disable" | "allow" | "prefer" | "require" | "verify-ca" | "verify-full";
@@ -43,7 +48,8 @@ export interface SshConnectionOptions {
 
 /** Live credentials belong to transient connection state, never session metadata. */
 export function connectionMetadata(config: ConnectionConfig): ConnectionConfig {
-  const { password: _password, ...metadata } = config;
+  const { password: _password, api_key: _apiKey, account_key: _accountKey, client_secret: _clientSecret, ...metadata } = config;
+  if(metadata.mongodb_uri)metadata.mongodb_uri=publicMongoUri(metadata.mongodb_uri);
   if (!metadata.ssh) return metadata;
   const { password: _sshPassword, passphrase: _passphrase, ...ssh } = metadata.ssh;
   return { ...metadata, ssh };
@@ -52,9 +58,9 @@ export interface LogLine { id: string; time: string; stream: string; text: strin
 export interface SessionConnectionState {
   phase: "preparing" | "connecting" | "ready" | "error";
   name?: string; connectionId?: string; error?: string; errorInfo?: RuntimeErrorInfo;
-  scope?: {database?:string;schema?:string};
+  scope?: {database?:string;schema?:string;container?:string};
 }
-interface ConnectionResponse { connection?: ConnectionConfig; config?: ConnectionConfig; database?: string; schema?: string }
+interface ConnectionResponse { connection?: ConnectionConfig; config?: ConnectionConfig; database?: string; schema?: string; container?: string }
 export interface CommandExecution {
   executionId: string; blockId?: string; blockName: string;
   commands: SqlCommandResult[]; status: ExecutionFinished["status"];
@@ -69,7 +75,7 @@ export interface SessionDocument {
   executionOutput?: ExecutionOutput;
   logs: LogLine[]; busy: boolean; currentExecutionId?: string; currentBlockId?: string; resultRevision: number;
   connection?: ConnectionConfig; filePath?: string; modified: boolean;
-  savedConnectionId?: string; database?: string; schema?: string; maximizedBlockId?: string;
+  savedConnectionId?: string; database?: string; schema?: string; container?: string; maximizedBlockId?: string;
   periodicSeconds?: number; executionStartedAt?: number; lastDurationMs?: number;
   notice?: string; runtimeError?: string; extras: Record<string, unknown>;
   connectionState?: SessionConnectionState;
@@ -171,13 +177,14 @@ export function decodeDocument(input: unknown, title = "Análise importada", res
   session.savedConnectionId = typeof desktop?.connection_id === "string" ? desktop.connection_id : undefined;
   session.database = typeof document.database_context === "string" ? document.database_context : undefined;
   session.schema = typeof desktop?.schema === "string" ? desktop.schema : undefined;
+  session.container = typeof desktop?.container === "string" ? desktop.container : undefined;
   session.focusedBlockId = session.blocks.find(b => b.block_key === desktop?.focused_block_key)?.id ?? session.blocks[0].id;
   return session;
 }
 
 export function encodeDocument(session: SessionDocument): Record<string, unknown> {
   return { ...encodeCharts(session.extras), version: "1.0", database_context: session.database ?? session.extras.database_context,
-    desktop: { ...(session.extras.desktop as object ?? {}), session_id:session.id, connection_id: session.savedConnectionId, schema: session.schema,
+    desktop: { ...(session.extras.desktop as object ?? {}), session_id:session.id, connection_id: session.savedConnectionId, schema: session.schema, container:session.container,
       focused_block_key: session.blocks.find(b => b.id === session.focusedBlockId)?.block_key ?? session.focusedBlockId },
     blocks: session.blocks.map(({ id, status, duration_ms, executionStartedAt, transactionState, connectionRecovery, error, errorInfo, results, ...block }) => ({ ...block, block_key: block.block_key ?? id })) };
 }
@@ -206,23 +213,23 @@ export function applyExecutionContextChange(session: SessionDocument, blockId: s
   const block = session.blocks.find(item => item.id === blockId);
   if (!block || block.language !== "sql" || !change?.current || !change.previous || !change.requested_scope) return session;
   const { previous, current, requested_scope: requested } = change;
-  if (previous.database === current.database && previous.schema === current.schema) return session;
+  if (previous.database === current.database && previous.schema === current.schema && previous.container === current.container) return session;
   const active = completionConnectionScope(session, block);
   // Focus and selection can move while a request is running. Its captured scope
   // must still own this block before a terminal event may change the document.
   if ((requested.connection_id ?? undefined) !== active.connectionId
     || (requested.database ?? undefined) !== active.database
-    || (requested.schema ?? undefined) !== active.schema) return session;
-  const context = { database: current.database ?? undefined, schema: current.schema ?? undefined };
+    || (requested.schema ?? undefined) !== active.schema || (requested.container ?? undefined) !== active.container) return session;
+  const context = { database: current.database ?? undefined, schema: current.schema ?? undefined, container:current.container ?? undefined };
   const inherits = inheritsSessionScope(block);
-  if (!inherits) return { ...session, modified: true, blocks: session.blocks.map(item => item.id === block.id ? { ...item, database_name: context.database, schema: context.schema } : item) };
+  if (!inherits) return { ...session, modified: true, blocks: session.blocks.map(item => item.id === block.id ? { ...item, database_name: context.database, schema: context.schema, container:context.container } : item) };
   const next = { ...session, ...context, modified: true,
     connectionState: session.connectionState ? { ...session.connectionState, scope: context } : undefined };
   next.blocks = session.blocks.map(item => {
     if (inheritsSessionScope(item)) return item;
     const before = completionConnectionScope(session, item), after = completionConnectionScope(next, item);
-    return before.database !== after.database || before.schema !== after.schema
-      ? { ...item, database_name: before.database ?? previous.database ?? undefined, schema: before.schema } : item;
+    return before.database !== after.database || before.schema !== after.schema || before.container !== after.container
+      ? { ...item, database_name: before.database ?? previous.database ?? undefined, schema: before.schema, container:before.container } : item;
   });
   return next;
 }
@@ -263,11 +270,11 @@ export function applyRuntimeEvent(session: SessionDocument, event: RuntimeEvent,
   const errorInfo=payload.error_info??(payload.error?errorInfoFor(payload.error):undefined);
   if(payload.connection_recovery){
     const blockId=payload.block_id??session.currentBlockId,block=session.blocks.find(item=>item.id===blockId);
-    const scope=block?completionConnectionScope(session,block):{connectionId:session.savedConnectionId,database:session.database,schema:session.schema};
+    const scope=block?completionConnectionScope(session,block):{connectionId:session.savedConnectionId,database:session.database,schema:session.schema,container:session.container};
     session=applyConnectionRecovery(session,{...payload.connection_recovery,session_id:session.id,block_id:blockId,
       automatic_transactions:payload.automatic_transactions??(automaticTransactions&&block?.disable_automatic_transactions!==true),
       scope_inherited:payload.scope_inherited??(block?inheritsSessionScope(block):false),
-      requested_scope:{connection_id:scope.connectionId,database:scope.database,schema:scope.schema}},automaticTransactions);
+      requested_scope:{connection_id:scope.connectionId,database:scope.database,schema:scope.schema,...(scope.container!==undefined?{container:scope.container}:{})}},automaticTransactions);
   }
   session = applyExecutionContextChange(session, session.currentBlockId, payload.context_change);
   const resultRefs = payload.results ?? [];
@@ -307,11 +314,11 @@ export interface NewSessionOptions {inheritConnection?:boolean;sourceSessionId?:
 
 function portableChanged(next:SessionDocument,previous:SessionDocument):boolean {
   if(next===previous)return false;
-  if(next.extras!==previous.extras||next.savedConnectionId!==previous.savedConnectionId||next.database!==previous.database||next.schema!==previous.schema||next.blocks.length!==previous.blocks.length)return true;
+  if(next.extras!==previous.extras||next.savedConnectionId!==previous.savedConnectionId||next.database!==previous.database||next.schema!==previous.schema||next.container!==previous.container||next.blocks.length!==previous.blocks.length)return true;
   if(next.blocks===previous.blocks)return false;
   return next.blocks.some((block,index)=>{
     const before=previous.blocks[index];if(block===before)return false;
-    return !before||block.id!==before.id||block.code!==before.code||block.block_name!==before.block_name||block.language!==before.language||block.is_active!==before.is_active||block.height!==before.height||block.collapsed!==before.collapsed||block.connection_id!==before.connection_id||block.database_name!==before.database_name||block.schema!==before.schema||block.sql_parameters!==before.sql_parameters||block.sql_parameters_enabled!==before.sql_parameters_enabled||block.disable_automatic_transactions!==before.disable_automatic_transactions||block.cell_type!==before.cell_type||block.block_key!==before.block_key;
+    return !before||block.id!==before.id||block.code!==before.code||block.block_name!==before.block_name||block.language!==before.language||block.is_active!==before.is_active||block.height!==before.height||block.collapsed!==before.collapsed||block.connection_id!==before.connection_id||block.database_name!==before.database_name||block.schema!==before.schema||block.container!==before.container||block.sql_parameters!==before.sql_parameters||block.sql_parameters_enabled!==before.sql_parameters_enabled||block.disable_automatic_transactions!==before.disable_automatic_transactions||block.cell_type!==before.cell_type||block.block_key!==before.block_key;
   });
 }
 function headerChanged(next:SessionDocument,previous:SessionDocument):boolean {
@@ -492,7 +499,7 @@ export class WorkspaceController {
   activate(id: string) { if (this.session(id)) this.setState({ ...this.state, activeId: id }); }
   focusBlock(sessionId: string, blockId: string) { this.patchSession(sessionId, (session) => session.focusedBlockId === blockId ? session : { ...session, focusedBlockId: blockId }); }
   updateBlock(sessionId: string, id: string, update: Partial<Block>) {
-    const scopeChanged=["connection_id","database_name","schema","disable_automatic_transactions"].some(key=>Object.hasOwn(update,key));
+    const scopeChanged=["connection_id","database_name","schema","container","disable_automatic_transactions"].some(key=>Object.hasOwn(update,key));
     this.patchSession(sessionId, (session) => ({ ...session, modified: true, blocks: session.blocks.map((block) => block.id === id ? { ...block, ...update,...(scopeChanged?{connectionRecovery:undefined}:{}) } : block) }));
   }
   renameSession(id: string, title: string) { if (title.trim()) this.patchSession(id, (session) => ({ ...session, title: title.trim(), modified: true })); }
@@ -503,7 +510,7 @@ export class WorkspaceController {
   }
   private inheritConnection(session:SessionDocument,source:SessionDocument,useFocusedBlock=true,preserveDocumentContext=false):SessionDocument {
     const block=useFocusedBlock?source.blocks.find(item=>item.id===source.focusedBlockId):undefined;
-    const scope=block?completionConnectionScope(source,block):{connectionId:source.savedConnectionId,database:source.database,schema:source.schema};
+    const scope=block?completionConnectionScope(source,block):{connectionId:source.savedConnectionId,database:source.database,schema:source.schema,container:source.container};
     const pending=source.connectionState;
     const intended=pending && pending.phase!=="ready" && (pending.connectionId || this.directConnectionTargets.has(source.id));
     const routed=block?.connection_id!==undefined && block.connection_id!==(intended?pending?.connectionId:source.savedConnectionId);
@@ -514,20 +521,22 @@ export class WorkspaceController {
     if(!connectionId && !config)return session;
     const inheritedDatabase=directTarget?changing?.scope?.database??directTarget.database:changing?.connectionId?changing.scope?.database:scope.database;
     const inheritedSchema=directTarget?changing?.scope?.schema??directTarget.schema:changing?.connectionId?changing.scope?.schema:scope.schema;
+    const inheritedContainer=directTarget?changing?.scope?.container??directTarget.container:changing?.connectionId?changing.scope?.container:scope.container;
+    const container=preserveDocumentContext?session.container??(session.database===undefined || session.database===inheritedDatabase?inheritedContainer:undefined):inheritedContainer;
     const database=preserveDocumentContext?session.database??inheritedDatabase:inheritedDatabase;
     const schema=preserveDocumentContext?session.schema??(session.database===undefined || session.database===inheritedDatabase?inheritedSchema:undefined):inheritedSchema;
     const sameConnection=!directTarget && connectionId===source.savedConnectionId;
     const name=changing?.name ?? (sameConnection?String(source.extras.connection_name ?? source.connection?.name ?? pending?.name ?? ""):(typeof block?.connection_name==="string"?block.connection_name:undefined));
     if(config){
-      this.transientConnections.set(session.id,{...config,database:database??config.database,schema:schema??config.schema});
+      this.transientConnections.set(session.id,{...config,database:database??config.database,schema:schema??config.schema,container:container??config.container});
       const credentialId=this.transientCredentialIds.get(source.id);
       if(credentialId)this.transientCredentialIds.set(session.id,credentialId);
     }
-    return {...session,savedConnectionId:connectionId,database,schema,connectionState:{phase:"preparing",connectionId,name,scope:{database,schema}},
+    return {...session,savedConnectionId:connectionId,database,schema,container,connectionState:{phase:"preparing",connectionId,name,scope:{database,schema,...(container!==undefined?{container}:{})}},
       extras:{...session.extras,connection_name:name,...(sameConnection?{connection_group:source.extras.connection_group}:{})}};
   }
   private prepareNewSessionConnection(session:SessionDocument) {
-    const task=session.savedConnectionId?this.connectSaved(session.id,session.savedConnectionId,String(session.extras.connection_name??""),{database:session.database,schema:session.schema})
+    const task=session.savedConnectionId?this.connectSaved(session.id,session.savedConnectionId,String(session.extras.connection_name??""),{database:session.database,schema:session.schema,container:session.container})
       :this.transientConnections.has(session.id)?this.connect(session.id,this.transientConnections.get(session.id)!,this.transientCredentialIds.get(session.id)?.id,this.transientCredentialIds.get(session.id)?.resolveDatabasePassword):undefined;
     if(task)void task.catch(()=>{/* The target tab retains its authentication error and retry controls. */});
   }
@@ -662,6 +671,7 @@ export class WorkspaceController {
       const document=encodeDocument(intended||directTarget?{...current,savedConnectionId:intended,
         database:pending?.scope?.database??directConfig?.database??(intended===current.savedConnectionId?current.database:undefined),
         schema:pending?.scope?.schema??directConfig?.schema??(intended===current.savedConnectionId?current.schema:undefined),
+        container:pending?.scope?.container??directConfig?.container??(intended===current.savedConnectionId?current.container:undefined),
         extras:{...current.extras,connection_name:pending?.name??(intended===current.savedConnectionId?current.extras.connection_name:undefined),
           connection_group:!directTarget&&intended===current.savedConnectionId?current.extras.connection_group:undefined}}:current);
       const record:NativeDocumentRecord={title:current.title,filePath:current.filePath,modified:current.modified,document,
@@ -731,8 +741,8 @@ export class WorkspaceController {
     return copy;
   }
   maximizeBlock(sessionId: string, blockId?: string) { this.patchSession(sessionId, s => ({ ...s, maximizedBlockId: s.maximizedBlockId === blockId ? undefined : blockId })); }
-  connectSaved(sessionId: string, connectionId: string, name?: string,scope:{database?:string;schema?:string}={}) {
-    return this.establishConnection(sessionId, {key:connectionId,name,connectionId}, {connection_id:connectionId,...(scope.database!==undefined?{database:scope.database}:{}),...(scope.schema!==undefined?{schema:scope.schema}:{})});
+  connectSaved(sessionId: string, connectionId: string, name?: string,scope:{database?:string;schema?:string;container?:string}={}) {
+    return this.establishConnection(sessionId, {key:connectionId,name,connectionId}, {connection_id:connectionId,...(scope.database!==undefined?{database:scope.database}:{}),...(scope.schema!==undefined?{schema:scope.schema}:{}),...(scope.container!==undefined?{container:scope.container}:{})});
   }
   /** Recover one physical connection without replacing the tab's Python kernel. */
   recoverConnection(sessionId:string,blockId?:string,acknowledgeStateLoss=false,expectedRecoveryId?:string):Promise<void> {
@@ -740,13 +750,13 @@ export class WorkspaceController {
     if(!session || blockId && !block)return Promise.reject(new Error("Aba ou bloco encerrado."));
     if(this.editingLocked || session.busy || this.importingSessions.has(sessionId) || this.closingSessions.has(sessionId))return Promise.reject(new Error("Aguarde a operação atual antes de reconectar."));
     if(acknowledgeStateLoss&&expectedRecoveryId&&activeConnectionRecovery(session,block,this.automaticTransactions)?.recovery_id!==expectedRecoveryId)return Promise.reject(new Error("A conexão mudou. Revise novamente antes de reconectar."));
-    const scope=block?completionConnectionScope(session,block):{connectionId:session.savedConnectionId,database:session.database,schema:session.schema};
+    const scope=block?completionConnectionScope(session,block):{connectionId:session.savedConnectionId,database:session.database,schema:session.schema,container:session.container};
     const params={session_id:sessionId,block_id:blockId,scope_inherited:block?inheritsSessionScope(block):false,
       automatic_transactions:this.automaticTransactions && block?.disable_automatic_transactions!==true,
-      connection_id:scope.connectionId,database:scope.database,schema:scope.schema,acknowledge_state_loss:acknowledgeStateLoss};
+      connection_id:scope.connectionId,database:scope.database,schema:scope.schema,...(scope.container!==undefined?{container:scope.container}:{}),acknowledge_state_loss:acknowledgeStateLoss};
     const fingerprint=JSON.stringify(params),pending=this.recoveringConnections.get(fingerprint);if(pending)return pending;
     const generation=this.runtimeGeneration,identity=this.workspaceIdentity,historyGeneration=this.closedHistoryGeneration;
-    const fallback:ConnectionRecoveryState={...params,requested_scope:{connection_id:scope.connectionId,database:scope.database,schema:scope.schema},phase:"recovering",recovery_id:newId()};
+    const fallback:ConnectionRecoveryState={...params,requested_scope:{connection_id:scope.connectionId,database:scope.database,schema:scope.schema,...(scope.container!==undefined?{container:scope.container}:{})},phase:"recovering",recovery_id:newId()};
     const current=()=>{
       const owner=this.session(sessionId),target=blockId?owner?.blocks.find(item=>item.id===blockId):undefined;
       return generation===this.runtimeGeneration&&identity===this.workspaceIdentity&&historyGeneration===this.closedHistoryGeneration&&!this.closingSessions.has(sessionId)&&owner&&(!blockId||target)&&recoveryMatches(owner,target,fallback,this.automaticTransactions)?owner:undefined;
@@ -790,7 +800,7 @@ export class WorkspaceController {
       else this.transientCredentialIds.delete(sessionId);
     }
     const scopeParams=target.connectionId?params:{...fallback,...params};
-    const scope={...(typeof scopeParams.database==="string"?{database:scopeParams.database}:{}),...(typeof scopeParams.schema==="string"?{schema:scopeParams.schema}:{})};
+    const scope={...(typeof scopeParams.database==="string"?{database:scopeParams.database}:{}),...(typeof scopeParams.schema==="string"?{schema:scopeParams.schema}:{}),...(typeof scopeParams.container==="string"?{container:scopeParams.container}:{})};
     const targetState={name:target.name,connectionId:target.connectionId,...(Object.keys(scope).length?{scope}:{})};
     this.connectingSessions.set(sessionId,operation);
     const current=()=>generation===this.runtimeGeneration&&this.connectingSessions.get(sessionId)===operation&&Boolean(this.session(sessionId));
@@ -817,9 +827,9 @@ export class WorkspaceController {
         const safeConfig=config?connectionMetadata(config):undefined;
         if(target.connectionId)this.transientConnections.delete(sessionId);
         else if(config)this.transientConnections.set(sessionId,{...fallback??config});
-        this.patchSession(sessionId,s=>({...s,savedConnectionId:target.connectionId,connection:config?{...safeConfig,database:response.database??config.database,schema:response.schema??config.schema} as ConnectionConfig:undefined,
-          database:response.database??config?.database,schema:response.schema??config?.schema,notice:undefined,connectionRecovery:undefined,
-          connectionState:{...targetState,phase:"ready",name:target.name??config?.name,...(!target.connectionId?{scope:{database:response.database??config?.database,schema:response.schema??config?.schema}}:{})},
+        this.patchSession(sessionId,s=>({...s,savedConnectionId:target.connectionId,connection:config?{...safeConfig,database:response.database??config.database,schema:response.schema??config.schema,container:response.container??config.container} as ConnectionConfig:undefined,
+          database:response.database??config?.database,schema:response.schema??config?.schema,container:response.container??config?.container,notice:undefined,connectionRecovery:undefined,
+          connectionState:{...targetState,phase:"ready",name:target.name??config?.name,...(!target.connectionId?{scope:{database:response.database??config?.database,schema:response.schema??config?.schema,...((response.container??config?.container)!==undefined?{container:response.container??config?.container}:{})}}:{})},
           extras:target.connectionId?s.extras:{...s.extras,connection_name:undefined,connection_group:undefined}}));
         return response;
       }catch(error){
@@ -835,12 +845,12 @@ export class WorkspaceController {
     const session=this.session(sessionId);
     if(session?.connectionState?.phase==="error")throw new Error(session.connectionState.error);
     if(session?.savedConnectionId&&!session.connection){
-      const {database,schema}=session;
+      const {database,schema,container}=session;
       // Apply restored focus before authentication, not just in the frontend.
-      await this.connectSaved(sessionId,session.savedConnectionId,String(session.extras.connection_name??""),{database,schema});
+      await this.connectSaved(sessionId,session.savedConnectionId,String(session.extras.connection_name??""),{database,schema,...(container!==undefined?{container}:{})});
     }else if(session && !session.connection && this.transientConnections.has(sessionId)){
       const config=this.transientConnections.get(sessionId)!;
-      await this.connect(sessionId,{...config,database:session.database??config.database,schema:session.schema??config.schema},this.transientCredentialIds.get(sessionId)?.id,this.transientCredentialIds.get(sessionId)?.resolveDatabasePassword);
+      await this.connect(sessionId,{...config,database:session.database??config.database,schema:session.schema??config.schema,container:session.container??config.container},this.transientCredentialIds.get(sessionId)?.id,this.transientCredentialIds.get(sessionId)?.resolveDatabasePassword);
     }
   }
   async disconnect(sessionId: string) {
@@ -851,10 +861,10 @@ export class WorkspaceController {
     this.transientConnections.delete(sessionId);
     this.transientCredentialIds.delete(sessionId);
     this.directConnectionTargets.delete(sessionId);
-    this.patchSession(sessionId, s => ({ ...s, connection: undefined, connectionState:undefined,connectionRecovery:undefined,blocks:s.blocks.map(block=>({...block,connectionRecovery:undefined})),savedConnectionId: undefined, database: undefined, schema: undefined,extras:{...s.extras,connection_name:undefined,connection_group:undefined} }));
+    this.patchSession(sessionId, s => ({ ...s, connection: undefined, connectionState:undefined,connectionRecovery:undefined,blocks:s.blocks.map(block=>({...block,connectionRecovery:undefined})),savedConnectionId: undefined, database: undefined, schema: undefined,container:undefined,extras:{...s.extras,connection_name:undefined,connection_group:undefined} }));
   }
-  setContext(sessionId: string, context: { database?: string; schema?: string }, blockId?: string) {
-    if (blockId) { this.updateBlock(sessionId, blockId, { database_name: context.database, schema: context.schema }); return; }
+  setContext(sessionId: string, context: { database?: string; schema?: string; container?: string }, blockId?: string) {
+    if (blockId) { this.updateBlock(sessionId, blockId, { database_name: context.database, schema: context.schema, container:context.container }); return; }
     this.patchSession(sessionId, s => ({ ...s, ...context,modified:true }));
   }
   async startPeriodic(sessionId: string, seconds: number) {
@@ -1033,7 +1043,7 @@ export class WorkspaceController {
       disable_automatic_transactions: liveBlock.disable_automatic_transactions === true,
       ...(block.language === "sql" ? { variable_name: block.block_name || undefined } : {}),
       connection_id: scope.connectionId,
-      database: scope.database, schema: scope.schema,
+      database: scope.database, schema: scope.schema, ...(scope.container!==undefined?{container:scope.container}:{}),
       sql_parameters: block.sql_parameters_enabled === false ? [] : block.sql_parameters ?? [],
       connection_name: block.connection_id ? undefined : block.connection_name ?? this.session(sessionId)?.extras.connection_name,
       connection_group: block.connection_id ? undefined : block.connection_group ?? this.session(sessionId)?.extras.connection_group,
@@ -1105,7 +1115,7 @@ export class WorkspaceController {
       this.completions.clear();
       this.setState({ ...this.state, runtimeStatus: "unavailable", runtimeInfo: undefined, message,
         sessions: this.state.sessions.map((session) => ({ ...session, busy: false, currentExecutionId: undefined, currentBlockId: undefined,
-          connection: undefined, connectionRecovery:undefined, connectionState:{...session.connectionState,...(session.connectionState?.phase==="ready"?{scope:{database:session.database,schema:session.schema}}:{}),phase:"error",error:message},variables: [], results: [], images: [], richOutputs:[], commandExecutions:[], executionOutput:undefined, periodicSeconds:undefined, runtimeError: undefined, notice: "Runtime encerrado. As variáveis e conexões foram descartadas.",
+          connection: undefined, connectionRecovery:undefined, connectionState:{...session.connectionState,...(session.connectionState?.phase==="ready"?{scope:{database:session.database,schema:session.schema,container:session.container}}:{}),phase:"error",error:message},variables: [], results: [], images: [], richOutputs:[], commandExecutions:[], executionOutput:undefined, periodicSeconds:undefined, runtimeError: undefined, notice: "Runtime encerrado. As variáveis e conexões foram descartadas.",
           dataImport:session.dataImport?{...session.dataImport,phase:"error",error:message}:undefined,
           blocks: session.blocks.map((block) => block.status === "running" || block.status === "cancelling" ? { ...block, results:undefined, transactionState:undefined, connectionRecovery:undefined, executionStartedAt:undefined, status: "failed", error: message } : block.status === "queued" ? { ...block, results:undefined, transactionState:undefined, connectionRecovery:undefined, executionStartedAt:undefined, status: "cancelled" } : {...block,results:undefined,transactionState:undefined,connectionRecovery:undefined,executionStartedAt:undefined}) })) });
       return;

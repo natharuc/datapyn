@@ -1,3 +1,4 @@
+import { databaseCapabilities } from "./databaseCapabilities";
 import { translate as t, useLocale, getLocale } from "./i18n";
 import { featureTranslate as featureText } from "./featureTranslations";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -350,7 +351,7 @@ export function ResultGrid({ sessionId, result, transport, onMessage, copySignal
       <button className="text-button" disabled={!columns.length} onClick={()=>openHeaderPopup(selection.current?.cell[0]??selection.columns.first()??0)} title={t("Formatar ou filtrar uma coluna; clique direito no cabeçalho")}><Settings2 size={13}/>{t("Coluna")}</button>
       <button className="text-button" disabled={copying||!ready} onClick={() => void copy("excel",true)} title={t("Copiar seleção com cabeçalhos (Ctrl+Shift+C)")}><Copy size={13} /> {t("Cabeçalhos")}</button>
       <details className="grid-copy-menu"><summary title={t("Copiar resultados")}>{copying?<LoaderCircle className="spin" size={13}/>:<Copy size={13}/>}{t("Copiar ▾")}</summary><div>
-        <button disabled={copying||!ready} onClick={()=>void copy("excel")}>Excel · Ctrl+C</button><button disabled={copying||!ready} onClick={()=>void copy("plain")}>{t("Texto delimitado")}</button><button disabled={copying||!ready} onClick={()=>void copy("json")}>{t("JSON")}</button><button disabled={copying||!ready} onClick={()=>{setSqlError("");setSqlDialog(true);}}>SQL INSERT…</button><button onClick={()=>setSettingsDialog(true)}>{t("Preferências de cópia…")}</button>
+        <button disabled={copying||!ready} onClick={()=>void copy("excel")}>Excel · Ctrl+C</button><button disabled={copying||!ready} onClick={()=>void copy("plain")}>{t("Texto delimitado")}</button><button disabled={copying||!ready} onClick={()=>void copy("json")}>{t("JSON")}</button>{databaseCapabilities(dbType).table_export && <button disabled={copying||!ready} onClick={()=>{setSqlError("");setSqlDialog(true);}}>SQL INSERT…</button>}<button onClick={()=>setSettingsDialog(true)}>{t("Preferências de cópia…")}</button>
       </div></details>
     </div>
     {error ? <div className="empty-results error-state"><p>{t(error)}</p><button onClick={retry}>{t("Tentar novamente")}</button></div> : <div ref={gridViewport} className="grid-canvas" onKeyDownCapture={event=>{const target=event.target as HTMLElement;if(!(event.ctrlKey||event.metaKey)||event.key.toLowerCase()!=="c"||event.altKey||target.tagName==="INPUT"||target.tagName==="TEXTAREA"||target.isContentEditable)return;event.preventDefault();event.stopPropagation();void copy("excel",event.shiftKey);}}>

@@ -34,14 +34,71 @@ def test_distribution_loads_every_legacy_driver_and_dialect_without_network(monk
     def forbidden(*args, **kwargs):
         pytest.fail("Distribution verification must not open database/network connections")
     monkeypatch.setattr(socket.socket, "connect", forbidden)
+    monkeypatch.setattr(socket, "getaddrinfo", forbidden)
+    import requests
+    from azure.cosmos import CosmosClient
+    monkeypatch.setattr(requests.Session, "request", forbidden)
+    monkeypatch.setattr(CosmosClient, "__init__", forbidden)
     report = distribution.verify_runtime_distribution()
-    assert set(report["databases"]) == set(DatabaseConnector.SUPPORTED_DATABASES) | {"sqlite"}
+    assert set(report["databases"]) == set(DatabaseConnector.SUPPORTED_DATABASES) | {
+        "sqlite", "elasticsearch", "cosmosdb", "mongodb"}
     assert report["databases"]["databricks"]["dbapi"] == "databricks.sql"
     assert report["databases"]["mariadb"]["dbapi"] == "pymysql"
     assert report["databases"]["sqlserver"]["authentication"] == ["sql", *(["windows"] if sys.platform == "win32" else []), "ntlm", "kerberos", "entra_mfa"]
     assert report["databases"]["databricks"]["authentication"] == ["pat", "oauth"]
     assert all(report["packages"].values())
     assert report["tls_ca_bundle"] is True
+
+
+def test_document_sdk_verification_never_loads_fictitious_sqlalchemy_dialects(monkeypatch):
+    from sqlalchemy.dialects import registry
+    original = registry.load
+    def relational_only(name):
+        assert name in set(distribution.DATABASE_DIALECTS.values()) | {"mssql.datapyn_tds"}
+        return original(name)
+    monkeypatch.setattr(registry, "load", relational_only)
+    report = distribution.verify_runtime_distribution()
+    assert report["databases"]["elasticsearch"]["client"] == "requests.Session"
+    assert report["databases"]["cosmosdb"]["api_clients"] == {
+        "nosql": "azure.cosmos.CosmosClient", "mongodb": "pymongo.MongoClient"}
+    assert report["databases"]["mongodb"]["client"] == "pymongo.MongoClient"
+    assert report["databases"]["mongodb"]["dns_srv"] is True
+    assert report["databases"]["mongodb"]["bson_types"] is True
+    for name in ("elasticsearch", "cosmosdb", "mongodb"):
+        assert "dialect" not in report["databases"][name]
+        assert "dbapi" not in report["databases"][name]
+
+
+@pytest.mark.parametrize("name", ["azure.cosmos", "pymongo", "dns.resolver"])
+def test_missing_document_sdk_fails_packaging(name, monkeypatch):
+    original = distribution.importlib.import_module
+    def unavailable(module):
+        if module == name:
+            raise ImportError("SDK missing from artifact")
+        return original(module)
+    monkeypatch.setattr(distribution.importlib, "import_module", unavailable)
+    with pytest.raises(RuntimeError, match=f"{name} import: SDK missing from artifact"):
+        distribution.verify_runtime_distribution()
+
+
+def test_bson_native_codec_is_exercised_by_distribution_check(monkeypatch):
+    from bson import BSON
+    def broken(*args, **kwargs):
+        raise RuntimeError("Bundled BSON codec unavailable")
+    monkeypatch.setattr(BSON, "encode", broken)
+    with pytest.raises(RuntimeError, match="Document database clients: Bundled BSON codec unavailable"):
+        distribution.verify_runtime_distribution()
+
+
+def test_document_sdk_lock_includes_wheels_for_all_published_architectures():
+    import tomllib
+    packages = {item["name"]: item for item in tomllib.loads(
+        (Path(__file__).resolve().parents[1] / "uv.lock").read_text(encoding="utf-8"))["package"]}
+    urls = [item["url"] for item in packages["pymongo"]["wheels"]]
+    for platform in ("win_amd64", "manylinux2014_x86_64", "macosx_11_0_arm64"):
+        assert any("cp312-cp312-" in url and platform in url for url in urls), platform
+    for name in ("azure-cosmos", "dnspython"):
+        assert any(item["url"].endswith("-py3-none-any.whl") for item in packages[name]["wheels"])
 
 
 def test_missing_distribution_metadata_fails_before_packaging(monkeypatch):

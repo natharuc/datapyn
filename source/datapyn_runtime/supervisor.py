@@ -389,6 +389,8 @@ class SessionRuntime:
                 self.emit({"event": "language.context_updated", "payload": {
                     "session_id": self.session_id, "connection_id": merged.get("connection_id"),
                     "database": merged.get("database", ""), "schema": merged.get("schema_name", ""),
+                    **({"container": merged["container"]} if "container" in merged else {}),
+                    **({"capabilities": merged["capabilities"]} if "capabilities" in merged else {}),
                     "version": self.language_version, "variables": self.language_variables,
                     **({"automatic_transactions": context["automatic_transactions"]}
                        if isinstance(context.get("automatic_transactions"), bool) else {}),
@@ -918,13 +920,16 @@ class Supervisor:
             return self.telemetry.client_info(params)
         if method == "system.info":
             from src.database.sqlserver_network_auth import sqlserver_authentication_capabilities
+            from .database_capabilities import capabilities_for
             return {
                 "protocol_version": PROTOCOL_VERSION,
                 "python_version": platform.python_version(),
                 "capabilities": {
                     "languages": ["sql", "python"],
                     "libraries": ["pandas", "numpy", "polars"],
-                    "databases": ["sqlite", "sqlserver", "postgresql", "mysql", "mariadb", "databricks"],
+                    "databases": ["sqlite", "sqlserver", "postgresql", "mysql", "mariadb", "databricks", "elasticsearch", "cosmosdb", "mongodb"],
+                    "database_capabilities": {kind: capabilities_for(kind) for kind in
+                                              ("sqlite", "sqlserver", "postgresql", "mysql", "mariadb", "databricks", "elasticsearch", "cosmosdb", "mongodb")},
                     "isolation": "process_per_session",
                     "cancel": "restart_session",
                     "pagination": True,

@@ -14,6 +14,25 @@ _DOT = re.compile(r'(?<![\w$#])(' + _NAME + r'(?:\s*\.\s*' + _NAME + r')*)\s*\.\
 
 
 class RuntimeSqlAutoCompleteService(SqlAutoCompleteService):
+    def _preferred_dialects(self):
+        if self._schema_db_type in {"mongodb", "cosmosdb", "elasticsearch"}:
+            return [None]
+        return super()._preferred_dialects()
+
+    def _find_schema_entry(self, table_name, schema_name="", catalog_name=""):
+        if self._schema_db_type not in {"mongodb", "cosmosdb", "elasticsearch"}:
+            return super()._find_schema_entry(table_name, schema_name, catalog_name)
+        # The legacy SQL index folds names for lookup. Document namespaces can
+        # contain distinct Events/events collections, so filter by real spelling
+        # before using an entry's columns (including two-part foreign DB names).
+        key = self._normalize_relation_key(".".join(part for part in (catalog_name, schema_name, table_name) if part))
+        candidates = [entry for entry in self._table_lookup.get(key, [])
+                      if entry["name"] == table_name and (not schema_name or entry.get("schema") == schema_name)
+                      and (not catalog_name or entry.get("catalog") == catalog_name)]
+        if not candidates:
+            return None
+        return min(candidates, key=lambda entry: (bool(entry.get("schema")), entry.get("detail", "")))
+
     def _sqlserver_default_schema(self):
         if self._schema_db_type in {"sqlserver", "mssql"}:
             # This legacy hook filters visible table candidates. The editor's
@@ -65,6 +84,15 @@ class RuntimeSqlAutoCompleteService(SqlAutoCompleteService):
         if relation is not None:
             return [(str(column["name"]), "column", str(column.get("display_type") or column.get("type") or relation.get("detail", "")))
                     for column in relation.get("columns", []) if column.get("name")]
+        if self._schema_db_type in {"mongodb", "cosmosdb", "elasticsearch"}:
+            parts = self._split_identifier_parts(prefix)
+            for length in range(len(parts) - 1, 0, -1):
+                relation = analysis.get("scope_lookup", {}).get(self._normalize_relation_key(".".join(parts[:length])))
+                if relation is None:
+                    continue
+                nested = ".".join(parts[length:]) + "."
+                return [(str(column["name"])[len(nested):], "column", str(column.get("type") or column.get("dtype") or ""))
+                        for column in relation.get("columns", []) if str(column.get("name", "")).startswith(nested)]
         return super()._dot_completions(prefix, analysis)
 
     def _append_relation(self, relations, lookup, relation):

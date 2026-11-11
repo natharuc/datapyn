@@ -137,11 +137,11 @@ def sql_cursor_blocked(code, offset, db_type=""):
     return False
 
 
-def _parts(path):
+def _parts(path, *, preserve_case=False):
     path = re.sub(r"\.\s*\.", ".dbo.", path)
-    return tuple(part[1:-1].replace(part[-1] * 2, part[-1]).casefold()
-                 if part[:1] in {'[', '`', '"'} else part.casefold()
-                 for part in _PART.findall(path))
+    parts = tuple(part[1:-1].replace(part[-1] * 2, part[-1])
+                  if part[:1] in {'[', '`', '"'} else part for part in _PART.findall(path))
+    return parts if preserve_case else tuple(part.casefold() for part in parts)
 
 
 def _comma_relations(code, db_type):
@@ -150,7 +150,8 @@ def _comma_relations(code, db_type):
         return set()
     from sqlglot import Dialect
     from sqlglot.tokens import TokenType
-    dialect = {"sqlserver": "tsql", "postgresql": "postgres", "mariadb": "mysql"}.get(db_type, db_type or "tsql")
+    dialect = {"sqlserver": "tsql", "postgresql": "postgres", "mariadb": "mysql",
+               "mongodb": "", "cosmosdb": "", "elasticsearch": ""}.get(db_type, db_type or "tsql")
     # An unfinished quoted field must not hide valid FROM sources to its left.
     masked = list(code)
     for start, end, kind, closed in lexical_spans(code, db_type):
@@ -192,17 +193,18 @@ def _comma_relations(code, db_type):
                     break
                 end = tokens[cursor].end + 1
                 cursor += 1
-            references.add(_parts(cleaned[start:end]))
+            references.add(_parts(cleaned[start:end], preserve_case=db_type in {"mongodb", "cosmosdb", "elasticsearch"}))
     return references
 
 
 def metadata_signature(code, db_type=""):
     cleaned = sql_code_mask(code or "", db_type)
-    references = {_parts(match.group(1)) for match in _RELATION.finditer(cleaned)}
+    preserve_case = db_type in {"mongodb", "cosmosdb", "elasticsearch"}
+    references = {_parts(match.group(1), preserve_case=preserve_case) for match in _RELATION.finditer(cleaned)}
     references.update(_comma_relations(cleaned, db_type))
     # Only the prefix ending at a dot matters. The partial field to its right
     # changes on every key and cannot introduce new database metadata.
-    prefixes = {_parts(match.group(1)) for match in _DOTTED.finditer(cleaned)}
+    prefixes = {_parts(match.group(1), preserve_case=preserve_case) for match in _DOTTED.finditer(cleaned)}
     routines = bool(re.search(r"\b(?:EXEC|EXECUTE|CALL)\s", cleaned, re.IGNORECASE))
     return tuple(sorted(references)), tuple(sorted(prefixes)), routines
 

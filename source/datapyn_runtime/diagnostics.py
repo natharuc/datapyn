@@ -17,7 +17,8 @@ PACKAGES = {"pandas": "BSD-3-Clause", "numpy": "BSD-3-Clause", "polars": "MIT", 
             "sqlalchemy": "MIT", "matplotlib": "PSF", "plotly": "MIT", "jedi": "MIT", "ruff": "MIT",
             "sqlparse": "BSD-3-Clause", "sqlglot": "MIT", "openpyxl": "MIT", "fastexcel": "MIT",
             "keyring": "MIT", "pyodbc": "MIT", "psycopg2-binary": "LGPL-3.0-or-later",
-            "pymysql": "MIT", "databricks-sql-connector": "Apache-2.0"}
+            "pymysql": "MIT", "databricks-sql-connector": "Apache-2.0",
+            "azure-cosmos": "MIT", "pymongo": "Apache-2.0", "dnspython": "ISC"}
 INCIDENTS = frozenset({"react_render", "javascript_error", "unhandled_rejection", "runtime_connection"})
 COMPONENTS = frozenset({"app", "editor", "results", "connections", "explorer", "variables", "pynia", "packages", "notifications", "workspace"})
 

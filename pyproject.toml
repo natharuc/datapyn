@@ -25,6 +25,9 @@ dependencies = [
     # mariadb requires libmariadb-dev on Linux - use PyMySQL instead
     "databricks-sql-connector>=4.2.6",
     "databricks-sqlalchemy>=1.0.0",
+    # Document databases; PyMongo includes DNS SRV support through dnspython.
+    "azure-cosmos>=4.17.1,<5",
+    "pymongo>=4.19.0,<5",
     # Data Processing
     "pandas>=2.2.0,<3",
     "polars>=1.41.0",
@@ -89,7 +92,7 @@ override-dependencies = [
     "thrift>=0.24.0",
     # Databricks still caps OAuthLib below its fixed release. OAuthLib 4 changes
     # server endpoints; the OAuth client APIs used by Databricks are preserved.
-    "oauthlib>=4.0.0,<5",
+    "oauthlib>=4.0.1,<5",
 ]
 
 

@@ -1,10 +1,10 @@
 import { runtime, type RuntimeTransport } from "./runtime";
-export interface ExplorerContext { database?: string; schema?: string }
+export interface ExplorerContext { database?: string; schema?: string; container?:string }
 export interface ExplorerNode extends ExplorerContext { id: string; name: string; kind: string; has_children: boolean; qualified_name?: string; data_type?: string; nullable?: boolean; [key: string]: unknown }
 export interface ExplorerResult { nodes: ExplorerNode[]; context?: ExplorerContext }
 export interface ExplorerDetails { columns?: Array<Record<string, unknown>>; indexes?: Array<Record<string, unknown>>; keys?: Array<Record<string, unknown>>; definition?: string; [key: string]: unknown }
 export interface ExplorerScope extends ExplorerContext { session_id: string; block_id?: string; scope_inherited?: boolean; connection_id?: string; automatic_transactions?: boolean }
-const explorerScopeKey=(scope:ExplorerScope)=>JSON.stringify([scope.session_id,scope.block_id ?? "",Boolean(scope.scope_inherited),scope.connection_id ?? "",scope.database ?? "",scope.schema ?? "",scope.automatic_transactions !== false]);
+const explorerScopeKey=(scope:ExplorerScope)=>JSON.stringify([scope.session_id,scope.block_id ?? "",Boolean(scope.scope_inherited),scope.connection_id ?? "",scope.database ?? "",scope.schema ?? "",scope.automatic_transactions !== false,scope.container ?? ""]);
 
 export class ExplorerController {
   private generation = 0;
@@ -63,6 +63,10 @@ export function quoteIdentifier(name: string, dbType: string = "sqlserver"): str
   return identifierParts(name).map((part) => dbType === "sqlserver" ? `[${part.replaceAll("]", "]]" )}]` : ["mysql", "mariadb", "databricks"].includes(dbType) ? `\`${part.replaceAll("`", "``")}\`` : `"${part.replaceAll('"', '""')}"`).join(".");
 }
 export function quoteIdentifierPart(name: string, dbType: string = "sqlserver"): string { return quoteIdentifier(`"${name.replaceAll('"', '""')}"`, dbType); }
+export function documentFieldReference(name:string,dialect:string):string {
+  if(dialect === "cosmosdb")return "c"+name.split(".").map(part=>/^[A-Za-z_][A-Za-z0-9_]*$/.test(part)?`.${part}`:`[${JSON.stringify(part)}]`).join("");
+  return dialect === "mongodb" ? name.split(".").map(part=>quoteIdentifierPart(part,dialect)).join(".") : quoteIdentifierPart(name,dialect);
+}
 export function explorerRows(roots: ExplorerNode[], children: Record<string, ExplorerNode[]>, expanded: Set<string>, query: string): Array<{ node: ExplorerNode; depth: number }> {
   const search = query.trim().toLocaleLowerCase(), rows: Array<{ node: ExplorerNode; depth: number }> = [], visited = new Set<string>();
   function matches(node: ExplorerNode, seen = new Set<string>()): boolean {

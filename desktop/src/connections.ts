@@ -80,7 +80,7 @@ export function connectionSearchText(connection: SavedConnection, groups: Connec
   const group = groups.find((item) => item.id === connection.group_id);
   const config = connection.config;
   return [connection.name, group?.name, config.host, config.database, config.db_type, config.username, config.port,
-    config.http_path, connection.color, config.sqlserver_auth_mode, config.use_windows_auth ? "windows auth" : ""].filter(Boolean).join(" ").toLocaleLowerCase();
+    config.http_path, config.endpoint, config.mongodb_uri, config.container, config.cosmos_api, config.auth_mode, connection.color, config.sqlserver_auth_mode, config.use_windows_auth ? "windows auth" : ""].filter(Boolean).join(" ").toLocaleLowerCase();
 }
 
 /** Flattens only visible nodes. Group cycles from old files cannot hang the interface. */

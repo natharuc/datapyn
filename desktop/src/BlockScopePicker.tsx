@@ -7,6 +7,7 @@ import { observeElementDocument } from "./documentWindows";
 import { contextMenuPosition } from "./contextMenuModel";
 import { blockScopeOptions, filterScopeOptions, hasSchemaScope, scopeListWindow, scopeOptionIndex,
   type BlockScope, type ScopeField, type ScopeOptions } from "./blockScopeModel";
+import { databaseCapabilities, type DatabaseCapabilities } from "./databaseCapabilities";
 import type { ExplorerContext } from "./explorer";
 import "./blockScopePicker.css";
 
@@ -19,6 +20,8 @@ export interface BlockScopePickerProps {
   dbType?: string;
   database?: string;
   schema?: string;
+  container?: string;
+  capabilities?: DatabaseCapabilities;
   connected?: boolean;
   disabled?: boolean;
   refresh?: number;
@@ -35,17 +38,17 @@ interface ScopePopover {
 
 /** Database and schema remain visible; metadata is fetched only when the picker opens. */
 export function BlockScopePicker({ sessionId, blockId, scopeInherited, automaticTransactions, connectionId, dbType, database, schema,
-  connected = true, disabled = false, refresh = 0, showSchema = hasSchemaScope(dbType), onChange, onError }: BlockScopePickerProps) {
+  container, capabilities, connected = true, disabled = false, refresh = 0, showSchema = hasSchemaScope(dbType), onChange, onError }: BlockScopePickerProps) {
   useLocale();
-  const container = useRef<HTMLDivElement>(null);
+  const root = useRef<HTMLDivElement>(null);
   const selectedTrigger = useRef<HTMLButtonElement>();
   const [popover, setPopover] = useState<ScopePopover>();
   const [selecting, setSelecting] = useState(false);
   const scope = useMemo<BlockScope>(() => ({ session_id: sessionId, block_id: blockId, ...(blockId || scopeInherited!==undefined?{scope_inherited:Boolean(scopeInherited)}:{}), ...(automaticTransactions!==undefined?{automatic_transactions:automaticTransactions}:{}),connection_id: connectionId,
-    db_type: dbType, database, schema, revision: refresh }), [sessionId, blockId, scopeInherited, automaticTransactions, connectionId, dbType, database, schema, refresh]);
-  useEffect(() => { setPopover(undefined); }, [sessionId, connectionId, database, schema, automaticTransactions, disabled, connected]);
+    db_type: dbType, database, schema, ...(container!==undefined?{container}:{}), revision: refresh }), [sessionId, blockId, scopeInherited, automaticTransactions, connectionId, dbType, database, schema, container, refresh]);
+  useEffect(() => { setPopover(undefined); }, [sessionId, connectionId, database, schema, container, automaticTransactions, disabled, connected]);
   useEffect(() => {
-    const element = container.current;
+    const element = root.current;
     return element ? observeElementDocument(element, () => setPopover(undefined)) : undefined;
   }, []);
   useLayoutEffect(() => {
@@ -58,12 +61,13 @@ export function BlockScopePicker({ sessionId, blockId, scopeInherited, automatic
     }
   }, [selecting]);
   const databaseLabel = dbType === "databricks" ? t("Catálogo") : t("Banco");
+  const levels=(capabilities ?? databaseCapabilities(dbType)).context_levels;
   const schemaLabel = schema === "" ? t("Nenhum") : schema ?? t("Padrão");
   async function select(value: string, field: ScopeField) {
     selectedTrigger.current = popover?.button;
     setPopover(undefined); setSelecting(true);
     try {
-      await onChange(field === "database" ? { database: value } : { database, schema: value }, field);
+      await onChange(field === "database" ? { database: value } : field === "container" ? {database,container:value} : { database, schema: value }, field);
     } catch (failure) { onError?.(errorText(failure)); }
     finally { setSelecting(false); }
   }
@@ -72,8 +76,8 @@ export function BlockScopePicker({ sessionId, blockId, scopeInherited, automatic
     const button = event.currentTarget;
     setPopover(prior => prior?.field === field ? undefined : { field, owner: button.ownerDocument, button });
   }
-  return <div className="block-scope-picker" ref={container}>
-    {dbType === "sqlite" ? <span className="block-scope-current" title={`${databaseLabel}: ${database || ":memory:"}`}>
+  return <div className="block-scope-picker" ref={root}>
+    {!levels.includes("database") ? null : dbType === "sqlite" ? <span className="block-scope-current" title={`${databaseLabel}: ${database || ":memory:"}`}>
       <span className="block-scope-label">{databaseLabel}</span><span className="block-scope-value">{database?.split(/[\\/]/).at(-1) || ":memory:"}</span>
     </span> : <button type="button" className="block-scope-trigger" disabled={disabled || !connected || selecting}
       aria-label={t("Selecionar {label}", { label: databaseLabel })} aria-haspopup="listbox" aria-expanded={popover?.field === "database"}
@@ -85,9 +89,10 @@ export function BlockScopePicker({ sessionId, blockId, scopeInherited, automatic
       title={`${t("Schema")}: ${schemaLabel}`} onClick={event => trigger("schema", event)}>
       <span className="block-scope-label">{t("Schema")}</span><span className="block-scope-value">{schemaLabel}</span><ChevronDown size={11} />
     </button>}
+    {levels.includes("container") && <button type="button" className="block-scope-trigger" disabled={disabled || !connected || selecting} aria-label={t("Selecionar container")} aria-haspopup="listbox" aria-expanded={popover?.field === "container"} title={`Container: ${container || t("Padrão")}`} onClick={event=>trigger("container",event)}><span className="block-scope-label">Container</span><span className="block-scope-value">{container || t("Padrão")}</span><ChevronDown size={11}/></button>}
     {popover && <ScopeSearchPopover key={`${popover.field}:${sessionId}:${connectionId}`} host={popover}
-      scope={scope} label={popover.field === "database" ? databaseLabel : t("Schema")}
-      current={popover.field === "database" ? database : schema} onSelect={value => void select(value, popover.field)}
+      scope={scope} label={popover.field === "database" ? databaseLabel : popover.field === "container" ? "Container" : t("Schema")}
+      current={popover.field === "database" ? database : popover.field === "container" ? container : schema} onSelect={value => void select(value, popover.field)}
       onClose={() => setPopover(undefined)} />}
   </div>;
 }

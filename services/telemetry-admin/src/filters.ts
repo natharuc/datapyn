@@ -1,6 +1,6 @@
 export class FilterError extends Error {}
 export const PLATFORMS = ["windows", "macos", "linux", "other"];
-export const DATABASES = ["sqlserver", "postgresql", "mysql", "mariadb", "databricks", "sqlite", "none"];
+export const DATABASES = ["sqlserver", "postgresql", "mysql", "mariadb", "databricks", "sqlite", "elasticsearch", "cosmosdb", "mongodb", "none"];
 const periods = new Map([["24h", 1], ["7d", 7], ["30d", 30], ["90d", 90]]);
 export type Filters = {start: string; end: string; version: string; platform: string; database: string; interval: "HOUR" | "DAY"};
 

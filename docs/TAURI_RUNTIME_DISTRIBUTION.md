@@ -25,8 +25,10 @@ e simplesmente nomear o arquivo como compatível com 22.04 não preserva essa ba
 
 ## Bancos e autenticação
 
-O Tauri reutiliza `source/src/database/database_connector.py`, o mesmo conector
-de produção do PyQt6. Não há um driver alternativo específico para a interface.
+Os bancos relacionais reutilizam `source/src/database/database_connector.py`,
+o conector de produção preservado do PyQt6. Os bancos documentais usam
+adaptadores próprios no runtime Tauri, com capacidades explícitas e SDKs/HTTP;
+eles não simulam uma Engine SQLAlchemy.
 
 | Plataforma de dados | Driver distribuído | Autenticação/recursos preservados | Requisito externo |
 | --- | --- | --- | --- |
@@ -37,6 +39,18 @@ de produção do PyQt6. Não há um driver alternativo específico para a interf
 | PostgreSQL | SQLAlchemy + `psycopg2-binary` | Usuário/senha, banco e schema, search path, cancelamento | Rede, permissões e política de autenticação do servidor |
 | Databricks SQL Warehouse | `databricks-sql-connector` + `databricks-sqlalchemy` | PAT e OAuth no navegador, catálogo/schema, persistência de token, parâmetros | Warehouse/endereço/http path, navegador e acesso à conta/workspace |
 | SQLite | SQLite nativo + SQLAlchemy | Arquivo local ou memória | Permissão no arquivo |
+| Elasticsearch | REST SQL + `requests` | Usuário/senha ou API key; índices/aliases, mappings, cursor SQL | Endpoint com SQL disponível, rede, permissões e certificados |
+| Azure Cosmos DB for NoSQL | `azure-cosmos` | Chave de conta ou Microsoft Entra; database/container, consultas SQL nativas | Conta da API correta, permissões, rede, certificados e capacidade/RUs |
+| MongoDB Atlas/Community | `pymongo` + `dnspython` | URI comum/SRV, usuário/senha, authSource e TLS; SELECT básico compilado para pipeline no servidor | Servidor compatível, rede, permissões e certificados |
+| Azure Cosmos DB for MongoDB | `pymongo` + `dnspython` | Perfil Mongo explícito, database/collection, SELECT básico | Conta com API Mongo e operadores compatíveis; capacidade/RUs |
+
+Os novos adaptadores são de consulta. Não oferecem escrita, transação manual,
+tabela temporária, DDL ou túnel SSH. Um DataFrame originado neles pode ser
+exportado para arquivo ou enviado a um destino relacional compatível.
+Consulte [Bancos documentais](DOCUMENT_DATABASES.md) para o escopo SQL e a
+distinção entre Cosmos NoSQL e Cosmos Mongo. Não é necessário instalar um
+proxy SQL, driver ODBC/JDBC adicional ou MongoDB SQL Interface para o SELECT
+básico do DataPyn.
 
 `pymssql` e `mysql.connector` também são distribuídos para compatibilidade com
 blocos Python que importavam esses módulos. Login SQL, Windows integrada e Entra usam `pyodbc`; `pymssql` não substitui
@@ -129,13 +143,19 @@ sem modificar o Python ou a instalação PyQt6.
 ## Verificação do artefato
 
 `source/datapyn_runtime/distribution.py` define um contrato único de módulos,
-metadados, dialetos e ferramentas. A especificação PyInstaller copia os metadados
+metadados, dialetos, clientes SDK e ferramentas. A especificação PyInstaller copia os metadados
 das distribuições e dependências, além de seus módulos: isso preserva os entry
 points usados pelo SQLAlchemy/Databricks e as consultas de versão feitas por
 bibliotecas de autenticação. Qt permanece excluído.
 
 Antes de empacotar, `build_runtime.py` verifica os drivers, os DBAPIs e a criação
-de engines/pools sem abrir conexão. `--smoke` verifica o executável congelado,
+de engines/pools relacionais sem abrir conexão. Para os SDKs documentais,
+verifica interfaces públicas de consulta Cosmos, inicialização Mongo com
+`connect=False`, BSON (ObjectId, Decimal128, datas e bytes), parser DNS e sessão
+HTTP. O teste não instancia `CosmosClient`, pois o construtor acessa a conta,
+e não usa URI SRV na inicialização offline, pois a descoberta exige DNS.
+Não são criados dialects/DBAPIs fictícios para esses SDKs.
+`--smoke` verifica o executável congelado,
 sem `PYTHONPATH`, Python externo ou módulos do checkout, através de:
 
 - `smoke_runtime.py`: SQL/Python, cancelamento e recuperação.

@@ -1,3 +1,4 @@
+import { databaseCapabilities } from "./databaseCapabilities";
 import { featureTranslate as t } from "./featureTranslations";
 import { useLocale } from "./i18n";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
@@ -61,6 +62,9 @@ export function DataModal({ title, children, onClose }: {title: string; children
 export function DataActions({sessionId, result, connectionType, disabled, view, onImported, onChart, onMessage, initialExportSettings, onExportSettingsChange,
   defaultOpenFolder=true, onOpenFolderChange, availableConnections=[], currentConnectionId, currentDatabase, currentSchema, transactionScope, onInsertSql, hideImport=false, hideChart=false, hideResultActions=false, onTableExported, onImportData, importState, onCancelImport}: DataActionsProps) {
   useLocale();
+  const tableConnections = availableConnections.filter(item=>databaseCapabilities(item.db_type).table_export);
+  const currentTableSupported=databaseCapabilities(connectionType).table_export;
+  const defaultSqlDialect=currentTableSupported ? connectionType! : connectionType ? "postgresql" : "sqlserver";
   const formId = useId();
   const [dialog, setDialog] = useState<"import" | "export" | "table" | "sql" | "summary">();
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
@@ -69,7 +73,7 @@ export function DataActions({sessionId, result, connectionType, disabled, view, 
   const [delimiter, setDelimiter] = useState(initialOptions.delimiter), [encoding, setEncoding] = useState(initialOptions.encoding), [decimal, setDecimal] = useState(initialOptions.decimal);
   const [includeHeader, setIncludeHeader] = useState(initialOptions.include_header), [openFolder, setOpenFolder] = useState(initialOptions.open_folder), [overwrite, setOverwrite] = useState(false);
   const [format, setFormat] = useState<ExportFormat>("csv"), [destination, setDestination] = useState<ExportDestination>("file");
-  const [formatOptions, setFormatOptions] = useState<FormatExportSettings>({...DEFAULT_FORMAT_EXPORT_SETTINGS, sqlDialect: connectionType || "sqlserver"});
+  const [formatOptions, setFormatOptions] = useState<FormatExportSettings>({...DEFAULT_FORMAT_EXPORT_SETTINGS, sqlDialect: defaultSqlDialect});
   const [table, setTable] = useState(result?.variable_name || "data"), [schema, setSchema] = useState(currentSchema || "");
   const [destinationConnection, setDestinationConnection] = useState(currentConnectionId || ""), [database, setDatabase] = useState(currentDatabase || ""), [temporary, setTemporary] = useState(false);
   const [ifExists, setIfExists] = useState("fail"), [chunksize, setChunksize] = useState(1000);
@@ -89,7 +93,7 @@ export function DataActions({sessionId, result, connectionType, disabled, view, 
   }, [sessionId,initialExportSettings?.delimiter,initialExportSettings?.decimal,initialExportSettings?.encoding,initialExportSettings?.include_header,initialExportSettings?.open_folder,defaultOpenFolder]);
   useEffect(() => {
     setDestinationConnection(currentConnectionId || ""); setDatabase(currentDatabase || ""); setSchema(currentSchema || "");
-    setFormatOptions(prior => ({...prior, sqlDialect: connectionType || "sqlserver"}));
+    setFormatOptions(prior => ({...prior, sqlDialect: defaultSqlDialect}));
   }, [sessionId,currentConnectionId,currentDatabase,currentSchema,connectionType]);
   useEffect(() => {
     let disposed = false, cleanup: (() => void) | undefined;
@@ -105,15 +109,15 @@ export function DataActions({sessionId, result, connectionType, disabled, view, 
   const close = () => { if (!busyRef.current) setDialog(undefined); };
   function begin(next: typeof dialog) {
     setError(""); setDialog(next); setSelected(false); setSummary(undefined); setSqlPreview(undefined); setProgress(undefined);
-    if (next === "table" && !connectionType && !currentConnectionId && availableConnections.length) {
-      setDestinationConnection(availableConnections[0].id); setDatabase(availableConnections[0].database || ""); setSchema("");
+    if (next === "table" && (!currentTableSupported || !connectionType && !currentConnectionId) && tableConnections.length) {
+      setDestinationConnection(tableConnections[0].id); setDatabase(tableConnections[0].database || ""); setSchema("");
     }
   }
   function setting<K extends keyof FormatExportSettings>(key: K, value: FormatExportSettings[K]) { setFormatOptions(prior => ({...prior, [key]: value})); }
   const csvSettings = (): ExportSettings => ({delimiter,decimal,encoding,include_header:includeHeader,open_folder:openFolder});
   const source = () => exportSource(sessionId,result?.result_id,view,selected);
   const options = (kind: ExportFormat) => exportOptions(kind,csvSettings(),formatOptions,table,schema);
-  const activeConnection = availableConnections.find(item => item.id === destinationConnection);
+  const activeConnection = tableConnections.find(item => item.id === destinationConnection);
   const targetDialect = activeConnection?.db_type || connectionType || "sqlserver";
   const targetName = temporaryTableName(table,temporary,targetDialect);
   const effectiveTemporary = temporary || (["sqlserver","mssql"].includes(targetDialect) && table.startsWith("#"));
@@ -191,6 +195,7 @@ export function DataActions({sessionId, result, connectionType, disabled, view, 
     setSqlPreview(generated);
   }
   async function exportTable(operationId: string) {
+    if(!databaseCapabilities(targetDialect).table_export)throw new Error(t("Escolha uma conexão de destino com suporte a tabelas."));
     const params = structuredClone({...source(),...transactionScope,operation_id:operationId,connection_id:destinationConnection || undefined,connection_schema:destinationConnection===(currentConnectionId||"")?currentSchema:undefined,database:database || undefined,table:targetName,schema:effectiveTemporary ? undefined : schema || undefined,temporary:effectiveTemporary,if_exists:ifExists,chunksize});
     let confirmation_token: string | undefined;
     if (ifExists === "replace") {
@@ -210,13 +215,13 @@ export function DataActions({sessionId, result, connectionType, disabled, view, 
   }
   const sqlForm = dialog === "sql" || dialog === "export" && format === "sql";
   const csvForm = dialog === "import" && /\.(csv|tsv|txt)$/i.test(path) || dialog === "export" && ["csv","tsv","txt"].includes(format);
-  const canSubmit = !busy && !(dialog === "import" && !path) && !((dialog === "table" || sqlForm) && !table.trim()) && !(dialog === "export" && format === "parquet" && destination === "clipboard");
+  const canSubmit = !busy && !(dialog === "import" && !path) && !(dialog === "table" && !databaseCapabilities(targetDialect).table_export) && !((dialog === "table" || sqlForm) && !table.trim()) && !(dialog === "export" && format === "parquet" && destination === "clipboard");
   const percent = exportProgressPercent(progress);
   const submit = (operationId: string) => dialog === "import" ? importFile(operationId) : dialog === "table" ? exportTable(operationId) : dialog === "sql" ? previewSql(operationId) : dialog === "export" ? destination === "clipboard" ? exportClipboard(operationId) : exportFile(operationId) : runtime.request<ResultSummary>("result.summary",source()).then(setSummary);
   return <div className="data-actions">
     {!hideImport&&<button disabled={disabled || busy} onClick={() => {begin("import");setPath("");}}><FileUp size={13}/>{t("Importar dados")}</button>}
     {!hideResultActions && <><button disabled={disabled || busy || !result} onClick={() => begin("export")}><Download size={13}/>{t("Exportar")}</button>
-    <button disabled={disabled || busy || !result || (!connectionType && !availableConnections.length)} onClick={() => begin("table")}><Database size={13}/>{t("Para tabela")}</button>
+    <button disabled={disabled || busy || !result || (!currentTableSupported && !tableConnections.length)} onClick={() => begin("table")}><Database size={13}/>{t("Para tabela")}</button>
     <button disabled={disabled || busy || !result} onClick={() => begin("sql")}><Code2 size={13}/>{t("Gerar SQL")}</button>
     <button disabled={disabled || busy || !result} onClick={() => begin("summary")}><Sigma size={13}/>{t("Resumo")}</button>
     {!hideChart&&<button disabled={disabled || busy || !result} onClick={onChart}><BarChart3 size={13}/>{t("Gráfico")}</button>}</>}
@@ -234,7 +239,7 @@ export function DataActions({sessionId, result, connectionType, disabled, view, 
           {dialog==="export"&&format==="xlsx"&&<><label>{t("Nome da planilha")}<input value={formatOptions.sheetName} maxLength={31} onChange={event=>setting("sheetName",event.target.value)} placeholder="DataPyn"/></label>{destination==="clipboard"&&<small className="data-hint">{t("Para colar no Excel, os dados serão separados por tabulação.")}</small>}</>}
           {dialog==="export"&&format==="json"&&<><div className="data-field-row"><label>{t("Estrutura JSON")}<select value={formatOptions.jsonOrient} onChange={event=>setting("jsonOrient",event.target.value as FormatExportSettings["jsonOrient"])}>{["records","split","index","columns","values","table"].map(item=><option key={item} value={item}>{item}</option>)}</select></label><label>{t("Indentação")}<input type="number" min={0} max={8} value={formatOptions.jsonIndent} onChange={event=>setting("jsonIndent",Number(event.target.value))}/></label></div>{formatOptions.jsonOrient==="records"&&<label className="data-check"><input type="checkbox" checked={formatOptions.jsonLines} onChange={event=>setting("jsonLines",event.target.checked)}/>{t("Um registro JSON por linha")}</label>}</>}
           {dialog==="export"&&format==="parquet"&&<label>{t("Compressão")}<select value={formatOptions.compression} onChange={event=>setting("compression",event.target.value as FormatExportSettings["compression"])}><option value="snappy">Snappy</option><option value="zstd">Zstandard</option><option value="gzip">Gzip</option><option value="none">{t("Sem compressão")}</option></select></label>}
-          {dialog==="table"&&<><label>{t("Conexão de destino")}<select value={destinationConnection} onChange={event=>{const next=availableConnections.find(item=>item.id===event.target.value);setDestinationConnection(event.target.value);setDatabase(next?next.database??"":currentDatabase||"");setSchema(event.target.value===(currentConnectionId||"")?currentSchema||"":"");setTemporary(false);}}>{!currentConnectionId&&connectionType&&<option value="">{t("Conexão da análise")}</option>}{currentConnectionId&&!availableConnections.some(item=>item.id===currentConnectionId)&&<option value={currentConnectionId}>{t("Conexão da análise")}</option>}{availableConnections.map(item=><option key={item.id} value={item.id}>{item.name} · {item.db_type}{item.database?` · ${item.database}`:""}</option>)}</select></label><label>{t("Banco de destino")}<input value={database} onChange={event=>setDatabase(event.target.value)} placeholder={t("Padrão da conexão")}/></label></>}
+          {dialog==="table"&&<><label>{t("Conexão de destino")}<select aria-label={t("Conexão de destino")} value={destinationConnection} onChange={event=>{const next=tableConnections.find(item=>item.id===event.target.value);setDestinationConnection(event.target.value);setDatabase(next?next.database??"":currentDatabase||"");setSchema(event.target.value===(currentConnectionId||"")?currentSchema||"":"");setTemporary(false);}}>{!currentConnectionId&&currentTableSupported&&<option value="">{t("Conexão da análise")}</option>}{currentConnectionId&&currentTableSupported&&!tableConnections.some(item=>item.id===currentConnectionId)&&<option value={currentConnectionId}>{t("Conexão da análise")}</option>}{tableConnections.map(item=><option key={item.id} value={item.id}>{item.name} · {item.db_type}{item.database?` · ${item.database}`:""}</option>)}</select></label><label>{t("Banco de destino")}<input value={database} onChange={event=>setDatabase(event.target.value)} placeholder={t("Padrão da conexão")}/></label></>}
           {(dialog==="table"||sqlForm)&&<><div className="data-field-row"><label>{t("Tabela")}<input value={table} onChange={event=>setTable(event.target.value)} placeholder={dialog==="table"&&targetDialect==="sqlserver"?"tabela ou #temporaria":"tabela"}/></label><label>{t("Schema")}<input disabled={dialog==="table"&&effectiveTemporary} value={schema} onChange={event=>setSchema(event.target.value)} placeholder={t("Padrão da conexão")}/></label></div>
             {dialog==="table"?<><label className="data-check"><input type="checkbox" checked={effectiveTemporary} onChange={event=>{setTemporary(event.target.checked);if(!event.target.checked&&["sqlserver","mssql"].includes(targetDialect))setTable(value=>value.replace(/^#{1,2}/,""));}}/>{t("Tabela temporária")}</label>{effectiveTemporary&&<small className="data-hint">{t(targetDialect==="sqlserver"||targetDialect==="mssql"?"Use #nome para uma tabela local ou ##nome para uma tabela global. A conexão permanece disponível para os próximos blocos.":targetDialect==="databricks"?"Requer Databricks Runtime 18.1 ou SQL warehouse compatível.":"A tabela temporária permanece na conexão de destino durante esta sessão.")}</small>}<div className="data-field-row"><label>{t("Se a tabela existir")}<select value={ifExists} onChange={event=>setIfExists(event.target.value)}><option value="fail">{t("Falhar")}</option><option value="append">{t("Acrescentar")}</option><option value="replace">{t("Substituir")}</option></select></label><label>{t("Linhas por lote")}<input type="number" min={100} max={100000} value={chunksize} onChange={event=>setChunksize(Number(event.target.value))}/></label></div>{ifExists==="replace"&&<p className="data-operation-note">{t("Substituir remove a tabela existente e grava os dados deste resultado.")}</p>}</>:<><div className="data-field-row"><label>{t("Dialeto SQL")}<select value={formatOptions.sqlDialect} onChange={event=>setting("sqlDialect",event.target.value)}>{["sqlserver","postgresql","mysql","mariadb","sqlite","databricks"].map(item=><option key={item} value={item}>{item}</option>)}</select></label><label>{t("Comandos")}<select value={formatOptions.sqlMode} onChange={event=>setting("sqlMode",event.target.value as FormatExportSettings["sqlMode"])}><option value="insert">INSERT</option><option value="create">CREATE TABLE</option><option value="create_insert">CREATE TABLE + INSERT</option></select></label></div>{formatOptions.sqlMode!=="create"&&<label>{t("Linhas por INSERT")}<input type="number" min={1} max={1000} value={formatOptions.sqlBatchSize} onChange={event=>setting("sqlBatchSize",Number(event.target.value))}/></label>}<div className="data-check-row"><label className="data-check"><input type="checkbox" disabled={formatOptions.sqlDialect==="databricks"&&formatOptions.sqlMode!=="insert"} checked={formatOptions.sqlTransaction&&(formatOptions.sqlDialect!=="databricks"||formatOptions.sqlMode==="insert")} onChange={event=>setting("sqlTransaction",event.target.checked)}/>{t("Incluir transação")}</label>{formatOptions.sqlDialect==="sqlserver"&&<label className="data-check"><input type="checkbox" checked={formatOptions.sqlGo} onChange={event=>setting("sqlGo",event.target.checked)}/>{t("Separar comandos com GO")}</label>}</div></>}
           </>}

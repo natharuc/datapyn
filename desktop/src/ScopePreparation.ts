@@ -1,3 +1,4 @@
+import { isDocumentDatabase } from "./databaseCapabilities";
 import { runtime, type RuntimeEvent, type RuntimeTransport } from "./runtime";
 import { sqlStringEscapesBackslash } from "./sqlCompletionScope";
 
@@ -8,6 +9,7 @@ export interface PreparationScope {
   connectionId?: string;
   database?: string;
   schema?: string;
+  container?: string;
   /** Effective execution policy; each mode owns a different physical session. */
   automaticTransactions?: boolean;
   /** Used only to distinguish comments and escaped strings in the metadata key. */
@@ -73,7 +75,7 @@ export function preparationCodeKey(code: string, dbType?: string): string {
     tokens.push({ value: char, symbol: true, depth }); index++;
     if (char === "(") depth++;
   }
-  const normalized = (token: MetadataToken) => token.quoted ? token.value : token.value.toLocaleLowerCase();
+  const normalized = (token: MetadataToken) => token.quoted || isDocumentDatabase(dbType) ? token.value : token.value.toLocaleLowerCase();
   function path(start: number) {
     const parts: string[] = []; let next = start, trailing = false;
     if (!tokens[next] || tokens[next].symbol) return { parts, next, trailing };
@@ -115,7 +117,7 @@ export function preparationCodeKey(code: string, dbType?: string): string {
   return JSON.stringify([[...references].sort(), [...prefixes].sort(), routines]);
 }
 
-const scopeKey = (scope: PreparationScope) => JSON.stringify([scope.connectionId ?? "", scope.database ?? "", scope.schema ?? "", scope.blockId ?? "", scope.automaticTransactions !== false]);
+const scopeKey = (scope: PreparationScope) => JSON.stringify([scope.connectionId ?? "", scope.database ?? "", scope.schema ?? "", scope.blockId ?? "", scope.automaticTransactions !== false,scope.container ?? ""]);
 
 /** Preparation follows focus and scope changes, independently of editor typing. */
 export class ScopePreparation {
@@ -140,7 +142,7 @@ export class ScopePreparation {
     const params = { session_id: normalized.sessionId, ...(normalized.blockId ? {block_id:normalized.blockId} : {}), connection_id: normalized.connectionId,
       ...(normalized.blockId || normalized.scopeInherited!==undefined?{scope_inherited:Boolean(normalized.scopeInherited)}:{}),
       ...(normalized.automaticTransactions!==undefined?{automatic_transactions:normalized.automaticTransactions !== false}:{}),
-      database: normalized.database, schema: normalized.schema, code, ...(force ? { refresh: true } : {}) };
+      database: normalized.database, schema: normalized.schema, ...(normalized.container!==undefined?{container:normalized.container}:{}), code, ...(force ? { refresh: true } : {}) };
     // Start asynchronously so synchronous transport errors participate in the
     // same retry path, and the entry exists before a runtime event can arrive.
     const promise = Promise.resolve().then(() => this.transport.request<PreparationResult>("language.prepare", params))
@@ -207,7 +209,7 @@ export class ScopePreparation {
       const requested = payload.requested_scope;
       this.releaseScope({ sessionId: payload.session_id, blockId:payload.block_id, connectionId: requested ? requested.connection_id ?? undefined : payload.connection_id,
         database: requested ? requested.database ?? undefined : payload.database,
-        schema: requested ? requested.schema ?? undefined : payload.schema, automaticTransactions:payload.automatic_transactions });
+        schema: requested ? requested.schema ?? undefined : payload.schema, container:requested ? requested.container ?? undefined : payload.container, automaticTransactions:payload.automatic_transactions });
     }
   }
 }

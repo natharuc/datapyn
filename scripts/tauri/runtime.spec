@@ -30,6 +30,10 @@ hiddenimports = [
     "databricks.sql",
     "databricks.sqlalchemy",
     "azure.identity",
+    "azure.cosmos",
+    "pymongo",
+    "bson",
+    "dns.resolver",
     "openpyxl",
     "fastexcel",
     "matplotlib.pyplot",
@@ -59,8 +63,11 @@ hiddenimports = [
     "src.services.pynia.tools.definitions",
     "src.services.entity_metadata_service",
 ]
-for package in ("datapyn_runtime", "sqlglot.dialects", "sqlalchemy.dialects", "mysql.connector", "databricks.sqlalchemy", "keyring.backends", "plotly.graph_objs"):
+for package in ("datapyn_runtime", "sqlglot.dialects", "sqlalchemy.dialects", "mysql.connector", "databricks.sqlalchemy", "keyring.backends", "plotly.graph_objs", "bson"):
     hiddenimports += collect_submodules(package)
+# Query kernels use the synchronous Cosmos API; its async optional transport
+# must not pull an unrelated aiohttp dependency into the frozen runtime.
+hiddenimports += collect_submodules("azure.cosmos", filter=lambda name: not name.startswith("azure.cosmos.aio"))
 for package in ("pytds", "sqlalchemy_pytds", "spnego", "OpenSSL", *( ("sspilib",) if sys.platform == "win32" else ("gssapi", "krb5") )):
     hiddenimports += collect_submodules(package)
 

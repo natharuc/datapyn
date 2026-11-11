@@ -1,3 +1,4 @@
+import { isDocumentDatabase } from "./databaseCapabilities";
 import { memo, useEffect, useRef } from "react";
 import * as monaco from "monaco-editor/editor/editor.api.js";
 import "monaco-editor/languages/definitions/sql/register.js";
@@ -76,7 +77,7 @@ for (const language of ["sql", "python"]) monaco.languages.registerCompletionIte
     const record = models.get(id), editor = record?.editor, intent = record?.completionIntent, navigation = record?.completionNavigation;
     if (record) record.completionQuery = { version, line: position.lineNumber, column: position.column, intent, navigation };
     const valid = () => !model.isDisposed() && model.getVersionId() === version && contextVersions.get(id) === contextVersion && models.get(id)?.editor === editor && editor?.hasTextFocus() === true && record?.completionIntent === intent && editor.getPosition()?.equals(position) === true;
-    const remote = model.getValueLength() > 500_000 ? [] : gate.suggest(runtime, `${language}:${version}:${contextVersion}:${position.lineNumber}:${position.column}`,
+    const remote = model.getValueLength() > 500_000 || language === "sql" && isDocumentDatabase(context?.dbType ?? context?.schemaSnapshot?.db_type) ? [] : gate.suggest(runtime, `${language}:${version}:${contextVersion}:${position.lineNumber}:${position.column}`,
       () => ({ ...languageParams(context, { language: language as Language, code: model.getValue(), line: position.lineNumber, column: position.column }), block_id: id }), valid,
       () => { if (valid() && record?.completionNavigation === navigation) triggerLocalSuggestions(id); }, manual ? 0 : 120);
     const contextualRemote = site.stringColumn ? remote.filter(entry => ["field", "column"].includes(entry.kind ?? "")) : site.member ? remote.filter(entry => !["keyword", "snippet", ...(language === "sql" ? ["variable"] : [])].includes(entry.kind ?? "")) : remote;
@@ -105,7 +106,7 @@ for (const language of ["sql", "python"]) monaco.languages.registerInlineComplet
     const insertText=await gate.complete(runtime,`${language}:${version}:${contextVersion}:${position.lineNumber}:${position.column}`,()=>{
       const offset=model.getOffsetAt(position),start=model.getPositionAt(Math.max(0,offset-2_000)),end=model.getPositionAt(Math.min(model.getValueLength(),offset+500));
       const prefix=model.getValueInRange(new monaco.Range(start.lineNumber,start.column,position.lineNumber,position.column)),suffix=model.getValueInRange(new monaco.Range(position.lineNumber,position.column,end.lineNumber,end.column));
-      const body=`Continue ${language} code at <CURSOR>. Output only raw text to insert, without Markdown fences, explanation or repeating the existing code. Preserve indentation.\nContext: ${JSON.stringify({ variables: context.variables.slice(0, 80), tables: context.tables.slice(0, 80), database: context.database, schema: context.schema }).slice(0, 2000)}\n${prefix}<CURSOR>${suffix}`;
+      const body=`Continue ${language} code at <CURSOR>. Output only raw text to insert, without Markdown fences, explanation or repeating the existing code. Preserve indentation.\nContext: ${JSON.stringify({ variables: context.variables.slice(0, 80), tables: context.tables.slice(0, 80), database: context.database, schema: context.schema, container:context.container }).slice(0, 2000)}\n${prefix}<CURSOR>${suffix}`;
       return {session_id:context.sessionId,body,timeout:8,block_id:id};
     },valid,token,completion.triggerKind===monaco.languages.InlineCompletionTriggerKind.Explicit?0:350);
     return valid()&&insertText?{items:[{insertText,range:new monaco.Range(position.lineNumber,position.column,position.lineNumber,position.column)}]}:{items:[]};

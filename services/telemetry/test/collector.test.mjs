@@ -25,11 +25,22 @@ test("accepts a bounded desktop batch and stores only known aggregate dimensions
 });
 
 test("rejects a whole batch containing SQL, paths, tokens or unknown source fields", async () => {
-  for (const name of ["sql", "password", "username", "host", "file", "error", "rows", "installation_id"]) {
+  for (const name of ["sql", "password", "username", "host", "file", "error", "rows", "installation_id",
+    "endpoint", "mongodb_uri", "container", "collection", "api_key", "document", "cosmos_api"]) {
     const {env, points} = fixture();
     const response = await worker.fetch(request({schema_version: 1, events: [event, {...event, [name]: "private-data"}]}), env);
     assert.equal(response.status, 400); assert.deepEqual(points, []);
     assert.equal((await response.text()).includes("private-data"), false);
+  }
+});
+
+test("accepts document provider categories without adding data or connection dimensions", async () => {
+  for (const db_type of ["elasticsearch", "cosmosdb", "mongodb"]) {
+    const {env, points} = fixture();
+    const response = await worker.fetch(request({schema_version: 1, events: [{...event, db_type}]}), env);
+    assert.equal(response.status, 204);
+    assert.deepEqual(points[0].indexes, [db_type]);
+    assert.deepEqual(points[0].blobs, ["connection_recovery", "1.0.13", "windows", db_type, "ready", "none", "none"]);
   }
 });
 

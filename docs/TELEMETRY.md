@@ -31,6 +31,13 @@ conexões, endereços de servidores, credenciais, caminhos de arquivos e
 identificadores de usuário/instalação não fazem parte do payload. O endpoint
 também recusa lotes contendo campos desconhecidos.
 
+As categorias de banco incluem `elasticsearch`, `cosmosdb` e `mongodb`.
+As APIs NoSQL e Mongo do Cosmos compartilham a categoria `cosmosdb`; modalidade,
+endpoint, URI, índice, container, collection, documento e chaves não são
+dimensões adicionais. A publicação do coletor e do painel precisa aceitar essas
+categorias antes da distribuição do desktop que as emite. O contrato é aditivo
+e mantém `schema_version: 1`, consentimento e limites existentes.
+
 ## Envio e falhas
 
 - Nenhum HTTP ou thread de envio é iniciado antes do consentimento.

@@ -287,6 +287,9 @@ def _forget_databricks_temporary_table(connector, name):
 
 
 def export_table(frame, params, connector, progress=None, cancelled=None):
+    from .database_capabilities import capabilities_for
+    if connector is not None and not capabilities_for(getattr(connector, "db_type", ""))["table_export"]:
+        raise ValueError("This connection supports read-only queries. Choose a relational destination to export a table.")
     from sqlalchemy import Column, MetaData, Table
     from pandas.io.sql import SQLDatabase, SQLTable
     if connector is None or getattr(connector, "engine", None) is None:

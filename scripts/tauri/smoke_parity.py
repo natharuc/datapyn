@@ -237,7 +237,7 @@ def smoke(executable=None, timeout=90, report=None):
                 "offset": 9_999_999, "limit": 1, "column_offset": 1, "column_limit": 1, "include_columns": False})
             assert native_page["rows"] == [[9]] and native_page["total_rows"] == 10_000_000
             assert client.request("pynia.catalog")["agents"]
-            client.execute("parity", "drivers", "python", "import pyodbc, pymssql, psycopg2, pymysql, mysql.connector, databricks.sql, azure.identity, jedi, jinja2, openpyxl, fastexcel\nassert pyodbc.version")
+            client.execute("parity", "drivers", "python", "import pyodbc, pymssql, psycopg2, pymysql, mysql.connector, databricks.sql, azure.identity, azure.cosmos, pymongo, bson, dns.resolver, jedi, jinja2, openpyxl, fastexcel\nassert pyodbc.version")
             precision_probe = client.execute("parity", "combined-precision", "python", "precision_probe = pd.DataFrame(np.full((50,50), 2**52, dtype=np.int64))\nprecision_probe")
             precision_ref = next(item for item in precision_probe["results"] if item["variable_name"] == "precision_probe")
             combined = client.request("result.summary", {"session_id": "parity", "result_id": precision_ref["result_id"]})

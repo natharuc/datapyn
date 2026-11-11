@@ -8,7 +8,7 @@ import math
 import sys
 
 from .sql_export import missing, script_parts
-from .values import scalar
+from .values import document_json, document_value, scalar
 
 MAX_TEXT_BYTES = 16 * 1024 * 1024
 EXCEL_INTEGER_LIMIT = 10**15 - 1
@@ -109,6 +109,11 @@ def _json_write(frame, output, options, control):
         raise ValueError("JSON indent must be between 0 and 8")
     def dump(value):
         json.dump(value, output, ensure_ascii=False, allow_nan=False, indent=None if lines else indent, default=scalar)
+    def cell(value):
+        if (isinstance(value, (dict, list, tuple)) or type(value).__module__.startswith("bson.")
+                or frame.attrs.get("datapyn_document_result")):
+            return document_value(value)
+        return scalar(value)
     include_index = bool(options.get("index", False))
     index_name = str(frame.index.name or "index")
     if include_index and orient in {"records", "table"} and index_name in columns:
@@ -125,7 +130,7 @@ def _json_write(frame, output, options, control):
                     output.write(",")
                 dump(str(key))
                 output.write(":")
-                dump(scalar(value))
+                dump(cell(value))
                 if index % 500 == 0:
                     control.advance(int((position * len(frame) + index) / max(1, len(columns))))
             output.write("}")
@@ -151,7 +156,7 @@ def _json_write(frame, output, options, control):
         if orient == "index":
             dump(str(frame.index[position]))
             output.write(":")
-        value = list(map(scalar, row)) if orient in {"split", "values"} else dict(zip(columns, map(scalar, row)))
+        value = list(map(cell, row)) if orient in {"split", "values"} else dict(zip(columns, map(cell, row)))
         if include_index and orient in {"records", "table"}:
             value = {index_name: scalar(frame.index[position]), **value}
         dump(value)
@@ -179,7 +184,16 @@ def write_text(frame, output, export_format, options, control):
             raise ValueError("Decimal must be a dot or comma")
         for start in range(0, max(1, len(frame)), 10000):
             control.check()
-            frame.iloc[start:start + 10000].to_csv(output, sep=delimiter, index=bool(options.get("index", False)),
+            chunk = frame.iloc[start:start + 10000]
+            # Convert only the bounded exported tile, never the entire frame.
+            # Compound values are JSON, not Python repr with single quotes.
+            object_columns = [index for index, dtype in enumerate(chunk.dtypes) if dtype == object]
+            if object_columns:
+                chunk = chunk.copy()
+                for index in object_columns:
+                    chunk.isetitem(index, chunk.iloc[:, index].map(
+                        lambda value: document_json(value) if isinstance(value, (dict, list, tuple)) else value))
+            chunk.to_csv(output, sep=delimiter, index=bool(options.get("index", False)),
                                                  header=bool(options.get("include_header", True)) and start == 0,
                                                  decimal=decimal)
             control.advance(min(start + 10000, len(frame)))
@@ -246,10 +260,19 @@ def write_file(frame, path, export_format, options, control):
             raise ValueError("Choose a supported Parquet compression")
         writer = None
         try:
-            schema = pa.Schema.from_pandas(frame, preserve_index=bool(options.get("index", False)))
+            encoded = []
+            if frame.attrs.get("datapyn_document_result"):
+                from .document_parquet import parquet_schema
+                schema, encoded = parquet_schema(frame, index=bool(options.get("index", False)))
+            else:
+                schema = pa.Schema.from_pandas(frame, preserve_index=bool(options.get("index", False)))
             for start in range(0, max(1, len(frame)), 100000):
                 control.check()
-                table = pa.Table.from_pandas(frame.iloc[start:start + 100000], schema=schema,
+                chunk = frame.iloc[start:start + 100000]
+                if encoded:
+                    from .document_parquet import parquet_chunk
+                    chunk = parquet_chunk(chunk, encoded)
+                table = pa.Table.from_pandas(chunk, schema=schema,
                                              preserve_index=bool(options.get("index", False)))
                 if writer is None:
                     writer = pq.ParquetWriter(path, table.schema, compression=compression)

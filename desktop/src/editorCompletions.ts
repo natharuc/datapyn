@@ -3,6 +3,7 @@ import type { Language } from "./runtime";
 import { dataframeLibrary, dataframeMemberNames, dataframeMembers } from "./dataframeMembers";
 import { sqlCompletionScope, sqlStringEscapesBackslash } from "./sqlCompletionScope";
 import { plainSqlIdentifier } from "./sqlIdentifierKeywords";
+import { isDocumentDatabase } from "./databaseCapabilities";
 
 const SQL_KEYWORDS = "SELECT FROM WHERE AND OR NOT IN BETWEEN LIKE IS NULL JOIN INNER LEFT RIGHT FULL OUTER CROSS ON AS ORDER BY GROUP HAVING LIMIT OFFSET DISTINCT INSERT INTO VALUES UPDATE SET DELETE CREATE TABLE DROP ALTER COUNT SUM AVG MIN MAX CASE WHEN THEN ELSE END EXISTS UNION ALL TOP WITH OVER PARTITION ROW_NUMBER RANK DENSE_RANK LAG LEAD ASC DESC USE EXEC CALL DECLARE BEGIN COMMIT ROLLBACK COALESCE CAST CONVERT".split(" ");
 const PYTHON_KEYWORDS = "def class if elif else for while return import from as try except finally with lambda yield True False None and or not in is pass break continue async await raise assert del global nonlocal match case".split(" ");
@@ -223,7 +224,7 @@ function fullNames(index: SqlIndex) {
 }
 function resolveTable(name: string | undefined, context: CompletionContext | undefined, getIndex: () => SqlIndex): string | undefined {
   if (!name) return;
-  const tables = context?.schemaSnapshot?.tables ?? {}, query = name.toLowerCase(), strictCase = (context?.dbType ?? context?.schemaSnapshot?.db_type) === "postgresql";
+  const tables = context?.schemaSnapshot?.tables ?? {}, query = name.toLowerCase(), strictCase = ["postgresql","mongodb","cosmosdb","elasticsearch"].includes(context?.dbType ?? context?.schemaSnapshot?.db_type ?? "");
   if (Object.hasOwn(tables, name)) return name;
   const index = getIndex();
   if (index.extras.has(name)) return name;
@@ -356,6 +357,9 @@ function completionIdentifierParts(item:LanguageCompletion):string[]|undefined {
 /** Remote inference must not restore fully qualified names after local results. */
 export function contextualCompletions(items:LanguageCompletion[],site:CompletionSite,context:CompletionContext|undefined,language:Language,local:LanguageCompletion[]=[]):LanguageCompletion[]{
   if(language!=="sql")return items;
+  // Document adapters publish bounded field snapshots. Relational inference
+  // must not add an incompatible dialect or rewrite JSON paths as SQL names.
+  if(isDocumentDatabase(context?.dbType ?? context?.schemaSnapshot?.db_type))return [];
   let index:SqlIndex|undefined;const getIndex=()=>index??=sqlContext(context),dbType=context?.dbType??context?.schemaSnapshot?.db_type,
     qualifier=site.member?normalizedSqlName(site.memberParts,site.member,dbType):undefined;
   return items.flatMap(item=>{
@@ -405,6 +409,42 @@ function tableSuggestions(index: SqlIndex, context: CompletionContext | undefine
   });
 }
 
+function documentCompletions(site:CompletionSite,context:CompletionContext|undefined,source:string,cursor:number):LanguageCompletion[] {
+  const type=context?.capabilities?.sql_dialect ?? context?.dbType ?? context?.schemaSnapshot?.db_type;
+  const cosmos=type==="cosmosdb",tables=context?.schemaSnapshot?.tables ?? {},items:LanguageCompletion[]=[];
+  const index=()=>sqlContext(context);
+  const scope=sqlCompletionScope(source,cursor,type,Boolean(site.quote));
+  if(scope.blocked)return [];
+  const relation=/\bFROM\s+[^\s]*$/i.test(scope.before);
+  const fieldPath=(name:string)=>cosmos ? name.split(".").map(part=>IDENTIFIER.test(part)?`.${part}`:`[${JSON.stringify(part)}]`).join("") : name.split(".").map(part=>quoteSqlPart(part,type)).join(".");
+  if(relation && !site.member){
+    if(cosmos)items.push({label:"c",kind:"table",detail:context?.container ?? context?.schemaSnapshot?.container,insert_text:"c",sortText:"0:c"});
+    else for(const key of matchingTableNames(index(),site.prefix)){const name=tables[key]?.name ?? key;items.push({label:name,kind:"table",insert_text:quoteSqlPart(name,type),sortText:`0:${name}`});}
+    return filterCompletions(items,site.prefix,"sql");
+  }
+  const selected=context?.container ?? context?.schemaSnapshot?.container;
+  const relations=scope.relations;
+  const targetNames=cosmos ? selected ? [resolveTable(selected,context,index)] : [] : relations.map(relation=>resolveTable(relation.parts.map(part=>part.name).join("."),context,index));
+  for(const key of new Set(targetNames)){
+    const table=key && tables[key];if(!key || !table)continue;
+    const binding=relations.find(relation=>cosmos || relation.parts.map(part=>part.name).join(".")===key || relation.parts.at(-1)?.name===table.name);
+    const alias=binding?.alias?.name ?? (cosmos ? binding?.parts[0]?.name ?? "c" : undefined);
+    const member=site.memberParts?.map(part=>part.name) ?? (site.member ? site.member.split(".") : []);
+    const prefix=member.length ? member[0]===alias || member[0]===table.name || member[0]===key ? member.slice(1).join(".") : member.join(".") : "";
+    for(const column of table.columns ?? []){
+      if(prefix && !column.name.startsWith(`${prefix}.`))continue;
+      const name=prefix ? column.name.slice(prefix.length+1) : column.name;
+      if(site.prefix && !name.toLocaleLowerCase().startsWith(site.prefix.toLocaleLowerCase()))continue;
+      const insertion=cosmos ? `${site.member ? "" : `${alias ?? "c"}`}${fieldPath(name)}`.replace(/^\./,"") : fieldPath(name);
+      items.push({label:name,kind:"column",detail:`${table.name ?? key} · ${column.data_type ?? column.type ?? ""}`,insert_text:insertion,literal_insertion:cosmos,...(cosmos && site.member && insertion.startsWith("[") ? {start_column:Math.max(1,site.startColumn-1),filterText:`.${name}`} : {}),sortText:`0:${name}`});
+      if(items.length>=500)break;
+    }
+  }
+  if(!site.member){const keywords=cosmos ? "SELECT VALUE TOP FROM WHERE AND OR NOT IN BETWEEN LIKE IS NULL AS ORDER BY OFFSET LIMIT ASC DESC EXISTS IS_DEFINED IS_NULL IS_NUMBER IS_STRING ARRAY_CONTAINS" : type==="mongodb" ? "SELECT FROM WHERE AND OR NOT IN IS NULL AS ORDER BY LIMIT OFFSET ASC DESC" : "SELECT FROM WHERE AND OR NOT IN BETWEEN LIKE IS NULL AS ORDER BY GROUP HAVING LIMIT OFFSET DISTINCT COUNT SUM AVG MIN MAX ASC DESC";
+    items.push(...keywords.split(" ").map(label=>({label,kind:"keyword",sortText:`2:${label}`})));}
+  return filterCompletions(items,site.prefix,"sql");
+}
+
 export function localCompletions(language: Language, site: CompletionSite, context: CompletionContext | undefined,
   textBefore: string, currentSymbols: LanguageCompletion[] = [], documentSource = textBefore, sourceCursor?: number): LanguageCompletion[] {
   if (site.blocked) return [];
@@ -421,6 +461,9 @@ export function localCompletions(language: Language, site: CompletionSite, conte
     items.push(...(context?.variables ?? []).map(variable => ({ label: variable.name, kind: "variable", detail: variable.type, sortText: `0:${variable.name}` })), ...currentSymbols);
     items.push(...pythonContextSymbols(context));
     items.push(...PYTHON_KEYWORDS.map(label => ({ label, kind: "keyword", sortText: `2:${label}` })), ...PYTHON_BUILTINS.map(label => ({ label, kind: "function", sortText: `2:${label}` })));
+  } else if(isDocumentDatabase(context?.dbType ?? context?.schemaSnapshot?.db_type)) {
+    const prefixStart=documentSource.indexOf(textBefore);
+    items.push(...documentCompletions(site,context,documentSource,sourceCursor ?? (prefixStart<0?textBefore.length:prefixStart+textBefore.length)));
   } else {
     const tables = context?.schemaSnapshot?.tables ?? {}, dbType = context?.dbType ?? context?.schemaSnapshot?.db_type;
     let index: SqlIndex | undefined;
@@ -513,6 +556,7 @@ export function filterCompletions(items: LanguageCompletion[], prefix: string, l
 export function completionInsertion(item: LanguageCompletion, site: CompletionSite, language: Language): string {
   let text = item.insert_text ?? item.insertText ?? item.label;
   if (language === "python" && site.stringColumn && ["field", "column"].includes(item.kind ?? "")) return escapePythonString(item.label, site.quote ?? '"');
+  if (language === "sql" && item.literal_insertion) return text;
   if (language === "sql" && site.quote && !site.stringColumn) {
     const end = site.quote === "[" ? "]" : site.quote;
     // Range owns an existing quote pair, so insert exactly one pair in the user's style.

@@ -6,6 +6,17 @@ const now=Date.parse("2026-10-28T12:00:15Z");
 const filters=parseFilters(new URLSearchParams("period=24h&version=1.0.13&platform=windows&database=sqlserver"),now);
 const group=(event,status,count,durationTotalMs=0,errorCode="none")=>({event,status,count,durationTotalMs,errorCode,version:"1.0.13",platform:"windows",dbType:"sqlserver"});
 
+test("document database filters remain bound provider categories",()=>{
+  for(const database of ["elasticsearch","cosmosdb","mongodb"]){
+    const values=parseFilters(new URLSearchParams({period:"24h",database}),now);
+    assert.equal(values.database,database);
+    const queries=dashboardQueries(values);
+    assert.equal(queries[0].params.blob4,database);
+    assert.ok(!queries[0].query.includes(database));
+  }
+  assert.throws(()=>parseFilters(new URLSearchParams({database:"private-container"}),now));
+});
+
 test("uses four bounded queries, fixed dataset, bound filter values and automatic sampling once",()=>{
   const queries=dashboardQueries(filters);
   assert.equal(queries.length,4);

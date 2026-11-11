@@ -6,13 +6,13 @@ import { cancelSshHostTrust, requestSshHostTrust, SshHostTrustCancelledError, ty
 
 export type Language = "sql" | "python";
 export interface RuntimeErrorInfo {
-  category: "permission" | "authentication" | "not_found" | "syntax" | "timeout" | "network" | "cancelled" | "python" | "constraint" | "data" | "file" | "internal";
+  category: "permission" | "authentication" | "not_found" | "syntax" | "timeout" | "throttling" | "network" | "cancelled" | "python" | "constraint" | "data" | "file" | "internal";
   title: string; message: string; technical_details?: string;
 }
 export function isRuntimeErrorInfo(input: unknown): input is RuntimeErrorInfo {
   if (!input || typeof input !== "object" || Array.isArray(input)) return false;
   const value=input as Partial<RuntimeErrorInfo>;
-  return ["permission","authentication","not_found","syntax","timeout","network","cancelled","python","constraint","data","file","internal"].includes(String(value.category))
+  return ["permission","authentication","not_found","syntax","timeout","throttling","network","cancelled","python","constraint","data","file","internal"].includes(String(value.category))
     && typeof value.title==="string" && value.title.length>0 && value.title.length<=256
     && typeof value.message==="string" && value.message.length<=8192
     && (value.technical_details===undefined || typeof value.technical_details==="string" && value.technical_details.length<=32768);
@@ -23,7 +23,7 @@ export interface ResultRef { result_id: string; variable_name: string; columns: 
 export interface SqlCommandResult { statement_index: number; command: string; rows_affected: number | null }
 export interface Variable { name: string; type: string; preview: string }
 export interface LanguageContextUpdate {
-  session_id: string; block_id?: string; connection_id?: string; database?: string; schema?: string; version: number;
+  session_id: string; block_id?: string; connection_id?: string; database?: string; schema?: string; container?: string; version: number;
   scope_inherited?: boolean;
   automatic_transactions?: boolean;
   variables: Record<string, {type: string; module?: string; columns?: string[]}>;
@@ -31,8 +31,9 @@ export interface LanguageContextUpdate {
   metadata_invalidation_scope?: "connection" | "block";
   metadata_state?: "ready" | "error";
   schema_error?: string | null;
-  requested_scope?: {connection_id?:string|null;database?:string|null;schema?:string|null};
-  schema_snapshot?: {db_type?: string; database?: string; current_schema?: string; default_schema?: string; tables?: Array<{key?: string; name: string; schema?: string; catalog?: string; temporary?: boolean}>;
+  requested_scope?: {connection_id?:string|null;database?:string|null;schema?:string|null;container?:string|null};
+  capabilities?: import("./databaseCapabilities").DatabaseCapabilities;
+  schema_snapshot?: {db_type?: string; database?: string; current_schema?: string; container?: string; partial?:boolean; default_schema?: string; tables?: Array<{key?: string; name: string; schema?: string; catalog?: string; temporary?: boolean}>;
     columns?: Record<string, Array<{name: string; type?: string; data_type?: string}>>};
 }
 export interface ResultExportProgress {
@@ -44,12 +45,12 @@ export interface ResultPage { columns: Column[]; rows: Primitive[][]; total_rows
 export interface ColumnValues { values: Primitive[]; kind: "text" | "number" | "bool" | "date"; sampled: boolean; scanned_rows: number; total_rows: number }
 export interface RuntimeInfo { protocol_version: number; python_version: string; capabilities: Record<string, unknown> | string[] }
 export type RichOutput = {artifact_id?:string;type:"image";data:string;mime:string}|{artifact_id?:string;type:"html";data:string}|{artifact_id?:string;type:"json"|"plotly";data:unknown};
-export interface SqlContextScope { db_type?: string; database?: string | null; schema?: string | null }
+export interface SqlContextScope { db_type?: string; database?: string | null; schema?: string | null; container?: string | null }
 export interface ExecutionContextChange {
   previous: SqlContextScope;
   current: SqlContextScope;
   connection_id?: string | null;
-  requested_scope: { connection_id?: string | null; database?: string | null; schema?: string | null };
+  requested_scope: { connection_id?: string | null; database?: string | null; schema?: string | null; container?: string | null };
 }
 export interface TransactionState {
   automatic_transactions: boolean;
@@ -69,7 +70,7 @@ export interface ConnectionRecoveryOutcome {
 export interface ConnectionRecoveryState extends ConnectionRecoveryOutcome {
   session_id: string; block_id?: string; scope_inherited?: boolean;
   automatic_transactions: boolean;
-  requested_scope: { connection_id?: string | null; database?: string | null; schema?: string | null };
+  requested_scope: { connection_id?: string | null; database?: string | null; schema?: string | null; container?: string | null };
   execution_id?: string;
 }
 function isTransactionState(input: unknown): input is TransactionState {
@@ -97,7 +98,7 @@ export function isConnectionRecoveryState(input: unknown): input is ConnectionRe
     && ["recovering","ready","error","blocked"].includes(String(value.phase))
     && typeof value.automatic_transactions==="boolean"
     && Boolean(scope && typeof scope==="object" && !Array.isArray(scope))
-    && [scope?.connection_id,scope?.database,scope?.schema].every(part=>part==null || typeof part==="string")
+    && [scope?.connection_id,scope?.database,scope?.schema,scope?.container].every(part=>part==null || typeof part==="string")
     && (value.block_id===undefined || typeof value.block_id==="string")
     && (value.scope_inherited===undefined || typeof value.scope_inherited==="boolean")
     && (value.execution_id===undefined || typeof value.execution_id==="string");

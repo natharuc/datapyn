@@ -11,12 +11,16 @@ import { parseConnectionString } from "./connectionStrings";
 import { Modal } from "./PanelControls";
 import type { SavedSshTunnel } from "./sshTunnels";
 import { SQLSERVER_AUTH_LABELS, sqlserverAuthenticationCapabilities, sqlserverAuthenticationModes, type SqlServerAuthenticationCapabilities } from "./sqlserverAuth";
+import { databaseCapabilities, isDocumentDatabase, isCosmosNoSql, isMongoConnection } from "./databaseCapabilities";
+import { parseMongoUri } from "./documentConnectionStrings";
+import { DocumentConnectionFields } from "./DocumentConnectionFields";
 import "./connections.css";
 
 const DRIVERS = [
   { id: "sqlserver", name: t("SQL Server"), port: 1433 }, { id: "postgresql", name: t("PostgreSQL"), port: 5432 },
   { id: "mysql", name: t("MySQL"), port: 3306 }, { id: "mariadb", name: t("MariaDB"), port: 3306 },
   { id: "sqlite", name: "SQLite", port: 0 }, { id: "databricks", name: t("Databricks"), port: 443 },
+  { id:"elasticsearch", name:"Elasticsearch", port:9200 }, { id:"cosmosdb", name:"Azure Cosmos DB", port:443 }, { id:"mongodb", name:"MongoDB", port:27017 },
 ] as const;
 
 interface Props {
@@ -51,7 +55,17 @@ export function ConnectionDialog({ initial, onConnect, onClose, mode = "connect"
   function field<K extends keyof ConnectionConfig>(key: K, value: ConnectionConfig[K]) { setConfig((previous) => ({ ...previous, [key]: value })); }
   function connectionConfig(): ConnectionConfig {
     const { ssh: _legacySsh, ...databaseConfig } = config;
-    const connection = { ...databaseConfig, ssh_tunnel_id: !["sqlite", "databricks"].includes(config.db_type) ? config.ssh_tunnel_id ?? null : null, use_windows_auth: config.sqlserver_auth_mode === "windows",...(config.db_type==="databricks"?{databricks_auth_mode:databricksAuth,username:"",password:databricksAuth==="oauth"?"":config.password}: {}) };
+    const connection = { ...databaseConfig, ssh_tunnel_id: databaseCapabilities(config).ssh ? config.ssh_tunnel_id ?? null : null, use_windows_auth: config.sqlserver_auth_mode === "windows",...(config.db_type==="databricks"?{databricks_auth_mode:databricksAuth,username:"",password:databricksAuth==="oauth"?"":config.password}: {}) };
+    if (isMongoConnection(connection)) {
+      const parsed = parseMongoUri(connection.mongodb_uri ?? "", connection.db_type as "mongodb"|"cosmosdb");
+      Object.assign(connection,{mongodb_uri:parsed.mongodb_uri,username:parsed.username || connection.username,password:parsed.password || connection.password,database:connection.database || parsed.database});
+    }
+    if (connection.db_type === "elasticsearch" || isCosmosNoSql(connection)) {
+      const endpoint = new URL(connection.endpoint ?? "");
+      if (!["https:","http:"].includes(endpoint.protocol) || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) throw new Error(t("Use um endpoint sem credenciais ou parâmetros."));
+      if (isCosmosNoSql(connection) && endpoint.protocol !== "https:") throw new Error(t("Azure Cosmos DB requer HTTPS."));
+      connection.auth_mode ??= isCosmosNoSql(connection) ? "key" : "basic";
+    }
     if (connection.ssh_tunnel_id && !tunnels.some(item => item.id === connection.ssh_tunnel_id)) throw new Error(t("O túnel SSH selecionado não está disponível."));
     if (connection.db_type === "sqlserver" && !sqlserverAuthenticationModes(authCapabilities).includes(connection.sqlserver_auth_mode || "sql_password")) throw new Error(t("Escolha uma autenticação disponível neste sistema."));
     return connection;
@@ -69,7 +83,7 @@ export function ConnectionDialog({ initial, onConnect, onClose, mode = "connect"
     try {
       const connection = connectionConfig();
       if (mode === "save" && !connection.name?.trim()) throw new Error(t("Informe o nome da conexão."));
-      if (!connection.database.trim() && connection.db_type !== "databricks") throw new Error(t("Informe o banco ou arquivo SQLite."));
+      if (!connection.database.trim() && !["databricks","elasticsearch"].includes(connection.db_type)) throw new Error(t("Informe o banco ou arquivo SQLite."));
       await onConnect(connection, { group_id: groupId, color, save_password: config.db_type==="databricks"&&databricksAuth==="oauth"?false:savePassword, save_ssh_credentials: Boolean(connection.ssh_tunnel_id), use_saved_database_password: !importedString.current }); onClose();
     } catch (failure) { setError(errorInfoFor(failure,"Falha ao abrir a conexão")); } finally { setBusy(false); }
   }
@@ -99,26 +113,28 @@ export function ConnectionDialog({ initial, onConnect, onClose, mode = "connect"
       if (typeof path === "string") field(key, path);
     } catch (failure) { setError(errorInfoFor(failure,"Falha ao abrir a conexão")); }
   }
-  const server = config.db_type !== "sqlite", withoutPassword = config.db_type === "sqlserver" && ["windows", "entra_mfa"].includes(config.sqlserver_auth_mode ?? "sql_password");
+  const documentDatabase = isDocumentDatabase(config.db_type);
+  const server = config.db_type !== "sqlite" && !documentDatabase, withoutPassword = config.db_type === "sqlserver" && ["windows", "entra_mfa"].includes(config.sqlserver_auth_mode ?? "sql_password");
   const networkAuth = config.db_type === "sqlserver" && ["ntlm", "kerberos"].includes(config.sqlserver_auth_mode ?? "");
   const authModes = sqlserverAuthenticationModes(authCapabilities);
-  const sshSupported = !["sqlite", "databricks"].includes(config.db_type);
-  const passwordOption = mode === "save" && !withoutPassword && server && (config.db_type !== "databricks" || databricksAuth === "token");
+  const sshSupported = databaseCapabilities(config).ssh;
+  const passwordOption = mode === "save" && !withoutPassword && (server || documentDatabase && !(isCosmosNoSql(config) && config.auth_mode === "entra")) && (config.db_type !== "databricks" || databricksAuth === "token");
   return <Modal title={mode === "save" ? initial ? t("Editar conexão") : t("Nova conexão") : t("Conectar ao banco")} className="connection-dialog" onClose={closeDialog}>
       <form ref={formRef} onSubmit={(event) => void submit(event)}>
         <fieldset className="connection-fields" disabled={busy}>
         <details className="connection-string-import"><summary>{t("Colar connection string")}</summary><label className="field">{t("URI ou string .NET/ODBC")}<textarea value={stringInput} onChange={event => setStringInput(event.target.value)} rows={3} spellCheck={false} autoComplete="off" /></label><button type="button" className="secondary-button" disabled={!stringInput.trim()} onClick={importString}>{t("Preencher campos")}</button></details>
-        <label className="field">{t("Tipo do banco")}<select value={config.db_type} onChange={event => {
+        <label className="field">{t("Tipo do banco")}<select aria-label={t("Tipo do banco")} value={config.db_type} onChange={event => {
           const driver = DRIVERS.find(item => item.id === event.target.value);
-          if (driver) setConfig(previous => ({ ...previous, db_type: driver.id, port: driver.port, database: driver.id === "sqlite" ? ":memory:" : "", schema: driver.id === "postgresql" ? "public" : "", host: driver.id === "sqlite" ? "" : previous.host || "localhost", ...(["sqlite", "databricks"].includes(driver.id) ? { ssh_tunnel_id: null } : {}) }));
+          if (driver) {setConfig(previous => ({ name:previous.name,db_type: driver.id, port: driver.port, database: driver.id === "sqlite" ? ":memory:" : "", schema: driver.id === "postgresql" ? "public" : "", host: driver.id === "sqlite" ? "" : "localhost", username:"",password:"",cosmos_api:driver.id === "cosmosdb" ? "nosql" : undefined,auth_mode:driver.id === "elasticsearch" ? "basic" : driver.id === "cosmosdb" ? "key" : undefined,ssh_tunnel_id:null }));setSavePassword(false);}
         }}>{DRIVERS.map(driver => <option key={driver.id} value={driver.id}>{t(driver.name)}</option>)}</select></label>
         <label className="field">{t("Nome")} <input required={mode === "save"} value={config.name ?? ""} onChange={(event) => field("name", event.target.value)} /></label>
         {mode === "save" && <><div className="field-row"><label className="field grow">{t("Grupo")}<select aria-label={t("Grupo")} value={groupId ?? ""} onChange={(event) => setGroupId(event.target.value || null)}><option value="">{t("Sem grupo")}</option>{groupHierarchy(groups).map(({ group, label }) => <option key={group.id} value={group.id}>{label}</option>)}</select></label><label className="field connection-color">{t("Cor")}<input type="color" disabled={!color} value={color||"#80a3ff"} onChange={(event) => setColor(event.target.value)} /></label></div><label className="checkbox-field"><input type="checkbox" checked={!color} onChange={event=>setColor(event.target.checked?"":"#80a3ff")}/>{t("Herdar cor do grupo")}</label></>}
         {server && <div className="field-row"><label className="field grow">{t("Servidor")} <input required value={config.host} onChange={(event) => field("host", event.target.value)} placeholder={config.db_type === "databricks" ? "adb-….azuredatabricks.net" : "localhost"} /></label><label className="field port">{t("Porta")} <input type="number" min={1} max={65535} required value={config.port} onChange={(event) => field("port", Number(event.target.value))} /></label></div>}
-        <label className="field">{config.db_type === "sqlite" ? t("Arquivo SQLite") : config.db_type === "databricks" ? t("Catalog") : t("Banco")}
+        {documentDatabase && <DocumentConnectionFields config={config} hasSecret={hasPassword} chooseCa={()=>void chooseTlsCa("ssl_ca")} onChange={patch=>setConfig(previous=>({...previous,...patch}))} />}
+        {config.db_type !== "elasticsearch" && <label className="field">{config.db_type === "sqlite" ? t("Arquivo SQLite") : config.db_type === "databricks" ? t("Catalog") : t("Banco")}
           <div className="field-input-row"><input title={config.db_type === "sqlite" ? t("Arquivo SQLite ou :memory:") : undefined} value={config.database} onChange={(event) => field("database", event.target.value)} placeholder={config.db_type === "sqlite" ? ":memory:" : t("Nome do banco")} />
             {config.db_type === "sqlite" && <button type="button" className="icon-button" title={t("Escolher arquivo SQLite")} onClick={() => void chooseSQLite()}><FolderOpen size={16} /></button>}</div>
-        </label>
+        </label>}
         {config.db_type === "sqlserver" && <label className="field">{t("Autenticação")} <select value={config.sqlserver_auth_mode || "sql_password"} onChange={(event) => field("sqlserver_auth_mode", event.target.value)}>{!authModes.includes(config.sqlserver_auth_mode || "sql_password") && <option value={config.sqlserver_auth_mode} disabled>{t("Autenticação indisponível neste sistema")}</option>}{authModes.map(auth => <option key={auth} value={auth}>{t(SQLSERVER_AUTH_LABELS[auth])}</option>)}</select></label>}
         {config.db_type==="databricks"&&<label className="field">{t("Autenticação")}<select value={databricksAuth} onChange={event=>{const mode=event.target.value as "oauth"|"token";setDatabricksAuth(mode);if(mode==="oauth"){field("password","");setSavePassword(false);}}}><option value="oauth">{t("OAuth no navegador")}</option><option value="token">Access token · PAT</option></select></label>}
         {server && !withoutPassword && (config.db_type!=="databricks"||databricksAuth==="token") && <div className="field-row"><label className="field grow" style={{display:config.db_type==="databricks"?"none":undefined}}>{config.db_type === "databricks" ? t("Usuário (token)") : t("Usuário")}<input autoComplete="username" value={config.username} onChange={(event) => field("username", event.target.value)} placeholder={config.sqlserver_auth_mode === "ntlm" ? "DOMINIO\\usuario" : config.sqlserver_auth_mode === "kerberos" ? "usuario@REALM" : config.db_type === "databricks" ? "token" : t("Usuário")} /></label><label className="field grow">{config.db_type === "databricks" ? "Access token" : t("Senha")}<input autoComplete="current-password" type="password" value={config.password ?? ""} onChange={(event) => field("password", event.target.value)} /></label></div>}
@@ -132,7 +148,7 @@ export function ConnectionDialog({ initial, onConnect, onClose, mode = "connect"
           <label className="field">{t("Modo TLS")}<select value={config.sslmode ?? "prefer"} onChange={event => field("sslmode", event.target.value as ConnectionConfig["sslmode"])}><option value="disable">disable</option><option value="allow">allow</option><option value="prefer">prefer</option><option value="require">require</option><option value="verify-ca">verify-ca</option><option value="verify-full">verify-full</option></select></label>
           <label className="field">{t("Certificado CA (opcional)")}<div className="field-input-row"><input autoComplete="off" value={config.sslrootcert ?? ""} onChange={event => field("sslrootcert", event.target.value)} /><button type="button" className="icon-button" title={t("Escolher certificado CA")} aria-label={t("Escolher certificado CA")} onClick={() => void chooseTlsCa()}><FolderOpen size={16} /></button></div></label>
         </details>}
-        {passwordOption && <label className="checkbox-field" title={hasPassword && !config.password ? t("(deixe em branco para manter a senha salva)") : undefined}><input type="checkbox" checked={savePassword} onChange={(event) => setSavePassword(event.target.checked)} />{t("Salvar senha")}</label>}
+        {passwordOption && <label className="checkbox-field" title={hasPassword && !config.password ? t("(deixe em branco para manter a senha salva)") : undefined}><input type="checkbox" checked={savePassword} onChange={(event) => setSavePassword(event.target.checked)} />{t(documentDatabase ? "Salvar credencial" : "Salvar senha")}</label>}
         {sshSupported && <section className="connection-ssh-fields">
           <label className="field">{t("Túnel SSH")}<select aria-label={t("Túnel SSH")} value={config.ssh_tunnel_id ?? ""} onChange={event => field("ssh_tunnel_id", event.target.value || null)}><option value="">{t("Sem túnel SSH")}</option>{config.ssh_tunnel_id && !tunnels.some(item => item.id === config.ssh_tunnel_id) && <option value={config.ssh_tunnel_id} disabled>{t("Túnel indisponível")}</option>}{tunnels.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
           {onManageTunnels && <button type="button" className="secondary-button" onClick={onManageTunnels}>{t("Gerenciar túneis SSH")}</button>}

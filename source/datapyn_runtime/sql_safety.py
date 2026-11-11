@@ -18,7 +18,8 @@ MAX_PARSE_DEPTH = 80
 MAX_RISKS = 1000
 MAX_PREVIEW = 500
 
-_DIALECTS = {"sqlserver": "tsql", "mssql": "tsql", "postgresql": "postgres", "mariadb": "mysql"}
+_DIALECTS = {"sqlserver": "tsql", "mssql": "tsql", "postgresql": "postgres", "mariadb": "mysql",
+             "mongodb": "", "cosmosdb": "", "elasticsearch": ""}
 _OPAQUE = {"EXEC", "EXECUTE", "CALL", "DO", "PREPARE", "DEALLOCATE"}
 _WHOLE_OBJECT = {"TRUNCATE", "DROP", "REPLACE", "INSERT OVERWRITE", "CREATE OR REPLACE", "RESTORE", "VACUUM"}
 _DDL_KINDS = {"TABLE", "VIEW", "DATABASE", "SCHEMA", "INDEX", "FUNCTION", "PROCEDURE", "TRIGGER", "ROLE", "USER",

@@ -28,6 +28,7 @@ _DIALECTS = {
     "postgresql": "postgres", "postgres": "postgres", "redshift": "redshift",
     "mysql": "mysql", "mariadb": "mysql", "sqlite": "sqlite", "oracle": "oracle",
     "databricks": "databricks", "spark": "spark", "snowflake": "snowflake", "bigquery": "bigquery",
+    "elasticsearch": "", "mongodb": "", "cosmosdb": "",
 }
 _GO = re.compile(r"(?im)^[ \t]*GO(?:[ \t]+\d+)?[ \t]*(?:--[^\n]*)?\r?$")
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -410,6 +411,9 @@ def _sql(code, document, params, context, expired):
 
     locale = params.get("locale")
     db_type = str(params.get("db_type") or (context.get("schema") or {}).get("db_type") or "tsql").lower()
+    if db_type in {"mongodb", "cosmosdb"}:
+        from .document_diagnostics import validate
+        return validate(code, document, params, context, expired)
     dialect = Dialect.get_or_raise(_DIALECTS.get(db_type, "tsql"))
     # GO is a batch separator only outside strings, identifiers and comments.
     protected = _sql_code_mask(code, db_type)

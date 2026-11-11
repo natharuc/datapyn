@@ -13,6 +13,6 @@ export async function prepareExecutionContextAfterEvent(payload: ExecutionFinish
   // The selected scope owns metadata, even when another execution or a manual
   // selection has overtaken the event before its refresh can be dispatched.
   if(scope.connectionId!==(change.requested_scope.connection_id ?? undefined)
-    || scope.database!==(change.current.database ?? undefined) || scope.schema!==(change.current.schema ?? undefined))return;
+    || scope.database!==(change.current.database ?? undefined) || scope.schema!==(change.current.schema ?? undefined) || scope.container!==(change.current.container ?? undefined))return;
   await preparation.request({sessionId:current.id,blockId:block.id,scopeInherited:inheritsSessionScope(block),automaticTransactions:automaticTransactions && block.disable_automatic_transactions !== true,...scope,dbType:change.current.db_type},block.code,true);
 }

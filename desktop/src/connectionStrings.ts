@@ -1,8 +1,10 @@
 import type { ConnectionConfig } from "./workspace";
+import { isDocumentDatabase, isMongoConnection, isCosmosNoSql } from "./databaseCapabilities";
+import { formatDocumentConnection, parseMongoUri } from "./documentConnectionStrings";
 
 export type ConnectionStringFormat = "uri" | "native" | "python" | "csharp";
 export const PASSWORD_PLACEHOLDER = "<password>";
-const defaults: Record<ConnectionConfig["db_type"], number> = { sqlserver: 1433, postgresql: 5432, mysql: 3306, mariadb: 3306, sqlite: 0, databricks: 443 };
+const defaults: Record<ConnectionConfig["db_type"], number> = { sqlserver: 1433, postgresql: 5432, mysql: 3306, mariadb: 3306, sqlite: 0, databricks: 443, elasticsearch:9200, cosmosdb:443, mongodb:27017 };
 const enc = (value: string) => encodeURIComponent(value).replace(/[!'()*]/g, character => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
 const literal = (value: string) => JSON.stringify(value);
 const adoValue = (value: string) => /[;"'\s]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
@@ -26,6 +28,7 @@ function pgQuery(config: ConnectionConfig): Array<[string, string]> {
 }
 
 export function connectionStringFormats(config: ConnectionConfig): Array<{ id: ConnectionStringFormat; label: string }> {
+  if (isDocumentDatabase(config.db_type)) return [...(isMongoConnection(config) ? [{id:"uri" as const,label:"URI · MongoDB"}] : isCosmosNoSql(config) ? config.auth_mode === "entra" ? [] : [{id:"native" as const,label:"Azure Cosmos DB"}] : [{id:"uri" as const,label:"URL · Elasticsearch"}]),{id:"python",label:"Python"},{id:"csharp",label:"C#"}];
   if (networkAuth(config)) return [{ id: "python", label: "Python · TDS / SPNEGO" }];
   return [...(config.db_type === "databricks" || config.database.includes("?") ? [] : [{ id: "uri" as const, label: "URI · SQLAlchemy" }]),
     { id: "native" as const, label: config.db_type === "databricks" ? "ODBC" : ".NET" },
@@ -66,6 +69,7 @@ function nativeString(config: ConnectionConfig, include: boolean, odbc = false):
 
 /** Credentials are only formatted from caller-provided transient data; no storage, logging or requests. */
 export function formatConnectionString(config: ConnectionConfig, format: ConnectionStringFormat, includePassword = false): string {
+  if (isDocumentDatabase(config.db_type)) return formatDocumentConnection(config, format, includePassword);
   const kind = config.db_type;
   if (networkAuth(config)) {
     if (format !== "python") throw new Error("NTLM/Kerberos com credenciais explícitas requerem o formato Python TDS/SPNEGO.");
@@ -124,6 +128,19 @@ export function parseConnectionPairs(text: string): Map<string, string> {
 
 export function parseConnectionString(input: string, selectedKind: ConnectionConfig["db_type"] = "sqlserver"): ConnectionConfig {
   const text = input.trim(); if (!text || text.length > 32768 || /\0/.test(text)) fail();
+  if (/^mongodb(?:\+srv)?:\/\//i.test(text)) return parseMongoUri(text, selectedKind === "cosmosdb" ? "cosmosdb" : "mongodb");
+  if (/^https?:\/\//i.test(text) && ["elasticsearch","cosmosdb"].includes(selectedKind)) {
+    const url = new URL(text);
+    if (url.username || url.password || url.search || url.hash) throw new Error("Use um endpoint sem credenciais ou parâmetros.");
+    return {...base(selectedKind === "cosmosdb" ? "cosmosdb" : "elasticsearch"),endpoint:url.toString(),auth_mode:selectedKind === "cosmosdb" ? "key" : "basic",...(selectedKind === "cosmosdb" ? {cosmos_api:"nosql" as const} : {})};
+  }
+  if (/AccountEndpoint\s*=/i.test(text)) {
+    const pairs = parseConnectionPairs(text);
+    if ([...pairs.keys()].some(key=>!["accountendpoint","accountkey","database","container"].includes(key))) fail();
+    const endpoint = pairs.get("accountendpoint") ?? "", url = new URL(endpoint);
+    if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) fail();
+    return {...base("cosmosdb"),cosmos_api:"nosql",endpoint,auth_mode:"key",account_key:pairs.get("accountkey") ?? "",database:pairs.get("database") ?? "",container:pairs.get("container") ?? ""};
+  }
   const scheme = /^([a-z][a-z0-9+]*):\/\//i.exec(text)?.[1].toLowerCase();
   if (scheme) {
     if (scheme === "sqlite" || scheme === "sqlite+pysqlite") {

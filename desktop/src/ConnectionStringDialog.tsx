@@ -1,3 +1,4 @@
+import { isDocumentDatabase, isCosmosNoSql } from "./databaseCapabilities";
 import { useRef, useState } from "react";
 import { Copy, LoaderCircle } from "lucide-react";
 import { translate as t, useLocale } from "./i18n";
@@ -11,7 +12,8 @@ export function ConnectionStringDialog({ connection, controller, onClose }: { co
   const formats = connectionStringFormats(connection.config);
   const [format, setFormat] = useState<ConnectionStringFormat>(formats[0].id), [include, setInclude] = useState(false), [busy, setBusy] = useState(false), [message, setMessage] = useState(""), [error, setError] = useState("");
   const preview = formatConnectionString(connection.config, format), textarea = useRef<HTMLTextAreaElement>(null);
-  const passwordAuth = connection.config.db_type !== "sqlite" && connection.config.databricks_auth_mode !== "oauth" && !(connection.config.db_type === "sqlserver" && (connection.config.use_windows_auth || ["windows", "entra_mfa"].includes(connection.config.sqlserver_auth_mode ?? "")));
+  const documentDatabase=isDocumentDatabase(connection.config.db_type);
+  const passwordAuth = !(connection.config.db_type === "elasticsearch" && format === "uri") && !(isCosmosNoSql(connection.config) && connection.config.auth_mode === "entra") && connection.config.db_type !== "sqlite" && connection.config.databricks_auth_mode !== "oauth" && !(connection.config.db_type === "sqlserver" && (connection.config.use_windows_auth || ["windows", "entra_mfa"].includes(connection.config.sqlserver_auth_mode ?? "")));
   async function copy() {
     setBusy(true); setMessage(""); setError("");
     try {
@@ -27,8 +29,8 @@ export function ConnectionStringDialog({ connection, controller, onClose }: { co
   return <Modal title={t("Copiar connection string")} className="connection-string-dialog" onClose={() => { if (!busy) onClose(); }}>
     <div className="connection-string-fields">
       <label className="field">{t("Formato")}<select value={format} disabled={busy} onChange={event => { setFormat(event.target.value as ConnectionStringFormat); setMessage(""); }}>{formats.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
-      <label className="field">{t("Prévia sem senha")}<textarea ref={textarea} value={preview} readOnly spellCheck={false} rows={8} /></label>
-      {connection.has_password && passwordAuth && <label className="checkbox-field"><input type="checkbox" disabled={busy} checked={include} onChange={event => { setInclude(event.target.checked); setMessage(""); }} />{t("Incluir senha salva ao copiar")}</label>}
+      <label className="field">{t(documentDatabase ? "Prévia sem credenciais" : "Prévia sem senha")}<textarea ref={textarea} value={preview} readOnly spellCheck={false} rows={8} /></label>
+      {connection.has_password && passwordAuth && <label className="checkbox-field"><input type="checkbox" disabled={busy} checked={include} onChange={event => { setInclude(event.target.checked); setMessage(""); }} />{t(documentDatabase ? "Incluir credencial salva ao copiar" : "Incluir senha salva ao copiar")}</label>}
       {!connection.has_password && passwordAuth && <p className="connection-string-hint">{t("Substitua <password> pela senha no destino.")}</p>}
       {(connection.config.ssh?.enabled || connection.config.ssh_tunnel_id) && <p className="connection-string-hint">{t("O túnel SSH é gerenciado pelo DataPyn e não está incluído nesta string.")}</p>}
       {connection.config.db_type === "sqlserver" && ["ntlm", "kerberos"].includes(connection.config.sqlserver_auth_mode ?? "") && <p className="connection-string-hint">{t("Credenciais de rede explícitas usam Python TDS/SPNEGO. O exemplo exige uma CA válida e as dependências NTLM/Kerberos no destino.")}</p>}

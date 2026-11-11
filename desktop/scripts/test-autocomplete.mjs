@@ -352,6 +352,33 @@ try {
       assert(await page.locator(".block-scope-popover").evaluate(node=>node.parentElement===document.body));
     });
   }
+  await page.setViewportSize({width:1000,height:700});
+  await page.evaluate(()=>{document.body.style.minWidth="780px";document.getElementById("root").style.width="720px";});
+  const documentContext=dbType=>({sessionId:"test-session",connectionId:"document-connection",database:"analysis",container:dbType==="cosmosdb"?"orders":undefined,dbType,variables:[],tables:["orders"],schemaSnapshot:{db_type:dbType,container:dbType==="cosmosdb"?"orders":undefined,partial:true,tables:{orders:{name:"orders",columns:[{name:"id"},{name:"customer.name"},{name:"customer.full-name"}]}}}});
+  for(const dbType of ["mongodb","elasticsearch"]){
+    await test(`${dbType}: typing completes a plain relation without database prefixes or remote inference`,async()=>{
+      await configure({code:"SELECT * FROM |",context:documentContext(dbType)});
+      const before=await page.evaluate(()=>window.completionTest.calls.filter(call=>call.method==="language.complete").length);
+      await page.keyboard.type("ord",{delay:15});await labels(["orders"]);await page.keyboard.press("Tab");
+      assert.equal(await value(),"SELECT * FROM orders");
+      assert.equal(await page.evaluate(()=>window.completionTest.calls.filter(call=>call.method==="language.complete").length),before);
+    });
+  }
+  await test("MongoDB: nested alias properties replace only the typed field suffix",async()=>{
+    await configure({code:"SELECT * FROM orders o WHERE o.customer.|",context:documentContext("mongodb")});
+    await page.keyboard.type("na",{delay:15});await labels(["name"]);await page.keyboard.press("Tab");
+    assert.equal(await value(),"SELECT * FROM orders o WHERE o.customer.name");
+  });
+  await test("Cosmos NoSQL: the selected container supplies alias fields before FROM",async()=>{
+    await configure({code:"SELECT c.| FROM c",context:documentContext("cosmosdb")});
+    await page.keyboard.type("id",{delay:15});await labels(["id"]);await page.keyboard.press("Tab");
+    assert.equal(await value(),"SELECT c.id FROM c");
+  });
+  await test("Cosmos NoSQL: accepting a bracket property removes the preceding dot",async()=>{
+    await configure({code:"SELECT * FROM c WHERE c.customer.|",context:documentContext("cosmosdb")});
+    await page.keyboard.type("fu",{delay:15});await labels(["full-name"]);await page.keyboard.press("Tab");
+    assert.equal(await value(),'SELECT * FROM c WHERE c.customer["full-name"]');
+  });
   assert.deepEqual(browserErrors,[],"Browser console errors");
 } finally {await browser?.close();await server.close();}
 console.log(`${passed} real Monaco headless scenarios passed; ${failures.length} failed.`);
